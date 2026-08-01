@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import './style.css';
+// スタイルは index.html の <link> で読み込む(ビルドなし配信と両立させるため)
 
 import { U, WORLD } from './env.js';
 import { createBackground, createLights, setupFog } from './environment/background.js';
