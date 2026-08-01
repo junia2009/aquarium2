@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>大水槽 — バーチャル水族館</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🐟</text></svg>" />
+</head>
+<body>
+  <div id="app">
+    <canvas id="stage"></canvas>
+    <div id="vignette"></div>
+
+    <header id="hud-title">
+      <h1>大水槽 <span>GRAND AQUARIUM</span></h1>
+      <p class="hint">ドラッグ: 視点移動 / ホイール: ズーム / クリック: 魚が驚く</p>
+    </header>
+
+    <div id="hud-left">
+      <div class="ctl">
+        <label for="sunSlider">太陽光</label>
+        <input id="sunSlider" type="range" min="30" max="170" value="100" />
+      </div>
+      <div class="ctl-row">
+        <button id="soundBtn" class="chip" type="button">🔇 環境音</button>
+        <button id="freeBtn" class="chip hidden" type="button">✕ 追跡解除</button>
+      </div>
+      <div id="fps"></div>
+    </div>
+
+    <button id="panelToggle" type="button" aria-label="生物図鑑">🐟 図鑑</button>
+    <aside id="panel">
+      <h2>展示生物</h2>
+      <div id="cards"></div>
+      <footer>生物のカードを押すとカメラが追跡します</footer>
+    </aside>
+
+    <div id="infoPop" class="hidden"></div>
+  </div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

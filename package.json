@@ -1,0 +1,19 @@
+{
+  "name": "aquarium2",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "リアル志向のバーチャル水族館 — WebGL大水槽シミュレーション",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "three": "^0.179.0"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.62.1",
+    "vite": "^7.0.0"
+  }
+}
