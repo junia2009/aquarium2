@@ -16,6 +16,7 @@ uniform float uWaveNum;    // 体に乗る波数
 uniform float uHeadAmp;    // 頭部の首振り
 uniform float uFishLen;
 uniform float uFlapFreq;   // 胸びれ
+uniform float uVertAxis;   // 0=左右うねり(魚類) 1=上下うねり(クジラ類)
 attribute vec2 aBodyUV;
 attribute float aPart;
 #ifdef USE_INSTANCING
@@ -51,17 +52,23 @@ void main() {
   // 進行波: 頭は小さく、尾に向かって振幅増大
   float amp = uWaveAmp * (uHeadAmp + pow(min(t, 1.0), 2.0)) * uFishLen;
   float arg = w - t * uWaveNum * 6.2831853;
-  float lateral = sin(arg) * amp;
+  float disp = sin(arg) * amp;
   // 尾びれはさらに遅れて大きく振れる(柔軟な膜の表現)
   if (aPart == 1.0) {
-    lateral += sin(arg + 1.1) * amp * 0.85 * (t - 1.0 + 0.12) * 8.0 * step(1.0, t);
+    disp += sin(arg + 1.1) * amp * 0.85 * (t - 1.0 + 0.12) * 8.0 * step(1.0, t);
   }
-  p.x += lateral;
+  // 魚類は左右、クジラ類は上下に波打つ
+  vec3 waveAxis = mix(vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), uVertAxis);
+  p += waveAxis * disp;
 
-  // 体軸のヨー回転で法線を追従(進行波の傾き)
+  // 体軸回転で法線を追従(進行波の傾き)。左右=ヨー、上下=ピッチ
   float slope = cos(arg) * uWaveAmp * uWaveNum * 4.5 * (uHeadAmp + pow(min(t, 1.0), 2.0));
   float ca = cos(slope), sa = sin(slope);
-  n = vec3(n.x * ca - n.z * sa, n.y, n.x * sa + n.z * ca);
+  if (uVertAxis < 0.5) {
+    n = vec3(n.x * ca - n.z * sa, n.y, n.x * sa + n.z * ca);
+  } else {
+    n = vec3(n.x, n.y * ca - n.z * sa, n.y * sa + n.z * ca);
+  }
 
   // 胸びれの羽ばたき
   if (aPart == 3.0 || aPart == 4.0) {
@@ -90,12 +97,19 @@ void main() {
 `;
 
 // ---- 模様関数(種ごと) ----
-// uPattern: 0=マイワシ 1=カクレクマノミ 2=ナンヨウハギ
+// uPattern: 0=マイワシ 1=カクレクマノミ 2=ナンヨウハギ 3=ジンベエザメ 4=ザトウクジラ
 const PATTERN_GLSL = /* glsl */ `
 uniform float uPattern;
 uniform float uTimeP;
 
-vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, out float glossMul) {
+// v(高さ方向)は断面角のcosなので、同じvは左右両側に対応する。
+// これを利用して「両側の目」を1つの式で描く
+float eyeDot(float u, float v, float eu, float ev, float size) {
+  vec2 d = vec2((u - eu) * 2.2, v - ev);
+  return smoothstep(size, size * 0.55, length(d));
+}
+
+vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, out float glossMul) {
   float u = clamp(buv.x, 0.0, 1.0);
   float v = buv.y;
   glossMul = 1.0;
@@ -134,7 +148,7 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, out float glossMu
     col = mix(col, vec3(0.02), edge * 0.9);
     // ひれの先端は黒縁
     glossMul = 0.6;
-  } else {
+  } else if (uPattern < 2.5) {
     // ---- ナンヨウハギ: 瑠璃色 + 黒い「パレット」模様 + 黄色い尾 ----
     vec3 blue = vec3(0.06, 0.22, 0.75);
     col = blue * (0.8 + tint * 0.35);
@@ -148,6 +162,50 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, out float glossMu
     float black = clamp(band1 - notch, 0.0, 1.0);
     col = mix(col, vec3(0.015, 0.015, 0.03), black * 0.95);
     glossMul = 0.8;
+  } else if (uPattern < 3.5) {
+    // ---- ジンベエザメ: 青灰色の背に市松状の白斑と縞、白い腹 ----
+    vec3 back = vec3(0.14, 0.19, 0.26);
+    vec3 belly = vec3(0.80, 0.84, 0.85);
+    col = mix(belly, back, smoothstep(0.26, 0.44, v));
+    // 白斑: 格子セルごとに少しずらした円。背側のみ
+    vec2 g = vec2(u * 30.0, v * 11.0);
+    vec2 cell = floor(g);
+    vec2 f = fract(g) - 0.5;
+    vec2 jitter = (vec2(hash12(cell), hash12(cell + 7.3)) - 0.5) * 0.45;
+    float spot = smoothstep(0.30, 0.16, length(f + jitter));
+    spot *= step(0.30, hash12(cell * 1.71));         // 出現をまばらに
+    float topMask = smoothstep(0.38, 0.50, v);
+    col = mix(col, vec3(0.88, 0.92, 0.94), spot * topMask * 0.9);
+    // 斑列の間の淡い横縞(市松模様の格子線)
+    float stripe = smoothstep(0.42, 0.5, abs(fract(g.y) - 0.5));
+    col += vec3(0.10, 0.12, 0.13) * stripe * topMask * 0.5;
+    // 口元(先端下側)を暗く
+    col = mix(col, vec3(0.10, 0.12, 0.14), smoothstep(0.05, 0.0, u) * smoothstep(0.55, 0.35, v));
+    // 目(両側)
+    col = mix(col, vec3(0.02), eyeDot(u, v, 0.07, 0.52, 0.035));
+    glossMul = 0.5;
+  } else {
+    // ---- ザトウクジラ: 黒に近い背、白い腹と喉の畝(ヴェントラルグルーブ) ----
+    vec3 back = vec3(0.09, 0.105, 0.135);
+    vec3 belly = vec3(0.78, 0.80, 0.83);
+    float border = 0.34 + sin(u * 14.0 + tint * 6.0) * 0.02;
+    col = mix(belly, back, smoothstep(border - 0.06, border + 0.08, v));
+    // 喉から腹の畝: 体軸に沿う筋(断面角=vに沿って刻む)
+    float groove = pow(abs(sin(v * 62.0)), 6.0)
+                 * smoothstep(0.36, 0.18, v) * smoothstep(0.62, 0.35, u);
+    col = mix(col, vec3(0.55, 0.57, 0.60), groove * 0.5);
+    // 皮膚のまだら(フジツボ痕・傷): セル内の小さな点として描く
+    vec2 mg = vec2(u * 40.0, v * 18.0);
+    float mottle = step(0.90, hash12(floor(mg)))
+                 * smoothstep(0.32, 0.15, length(fract(mg) - 0.5))
+                 * smoothstep(0.4, 0.6, v);
+    col += vec3(0.12) * mottle;
+    // 胸びれとフリューク腹側は白
+    if (part > 2.5) col = mix(col, vec3(0.85, 0.88, 0.90), 0.85);
+    if (abs(part - 1.0) < 0.1) col = mix(col, back * 0.9, smoothstep(0.5, 0.7, v));
+    // 目(両側、口角の少し上)
+    col = mix(col, vec3(0.02), eyeDot(u, v, 0.09, 0.42, 0.03));
+    glossMul = 0.35;
   }
   return col;
 }
@@ -166,7 +224,7 @@ void main() {
   vec3 V = normalize(cameraPosition - vWorldPos);
 
   float glossMul;
-  vec3 albedo = fishAlbedo(vBodyUV, vWorldPos, n, V, vTint, glossMul);
+  vec3 albedo = fishAlbedo(vBodyUV, vWorldPos, n, V, vTint, vPart, glossMul);
 
   // ひれは薄く透ける
   float finAlpha = vPart > 0.5 ? 0.75 : 1.0;
@@ -189,7 +247,7 @@ void main() {
 }
 `;
 
-export function createFishMaterial({ pattern, len, swim }) {
+export function createFishMaterial({ pattern, len, swim, vertAxis = 0 }) {
   return new THREE.ShaderMaterial({
     uniforms: {
       ...baseUniforms(),
@@ -201,6 +259,7 @@ export function createFishMaterial({ pattern, len, swim }) {
       uWaveNum: { value: swim.waveNum ?? 0.8 },
       uHeadAmp: { value: swim.headAmp ?? 0.1 },
       uFlapFreq: { value: swim.flapFreq ?? 5 },
+      uVertAxis: { value: vertAxis },
     },
     vertexShader: FISH_VERTEX,
     fragmentShader: FISH_FRAGMENT,

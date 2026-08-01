@@ -17,6 +17,7 @@ import { EagleRay } from './creatures/ray.js';
 import { SeaTurtle } from './creatures/turtle.js';
 import { JellyfishSwarm } from './creatures/jellyfish.js';
 import { GardenEelColony } from './creatures/gardenEel.js';
+import { WhaleShark, HumpbackWhale } from './creatures/giants.js';
 
 import { setupUI } from './ui.js';
 import { UnderwaterAudio } from './audio.js';
@@ -134,6 +135,8 @@ const clowns = new Wanderer({
 // --- 大型遊泳者たち ---
 const ray = new EagleRay(scene);
 const turtle = new SeaTurtle(scene);
+const whaleShark = new WhaleShark(scene);
+const whale = new HumpbackWhale(scene);
 const jellies = new JellyfishSwarm(scene, 6);
 const eels = new GardenEelColony(scene, {
   center: new THREE.Vector3(4, 0, 13),
@@ -144,7 +147,12 @@ const eels = new GardenEelColony(scene, {
 // ================= UI・カメラ追跡 =================
 const audio = new UnderwaterAudio();
 
+// クジラの息継ぎで鳴き声(環境音ON時のみ)
+whale.onBlow = () => audio.whaleCall();
+
 const followTargets = {
+  whaleshark: () => whaleShark.pos,
+  whale: () => whale.pos,
   sardine: () => sardines.schoolCenter,
   tang: () => tangs.schoolCenter,
   clownfish: () => clowns.center,
@@ -214,16 +222,22 @@ function animate() {
   const predators = [
     { pos: ray.pos, radius: 4.5 },
     { pos: turtle.pos, radius: 4.0 },
+    { pos: whaleShark.pos, radius: 6.5 },
+    { pos: whale.pos, radius: 7.5 },
   ];
   sardines.update(dt, predators);
   tangs.update(dt, predators);
   clowns.update(dt);
   ray.update(dt);
   turtle.update(dt);
+  whaleShark.update(dt);
+  whale.update(dt);
   jellies.update(dt);
   eels.update(dt, [
     { pos: ray.pos, radius: 8 },
     { pos: turtle.pos, radius: 7 },
+    { pos: whaleShark.pos, radius: 11 },
+    { pos: whale.pos, radius: 11 },
     { pos: camera.position, radius: 6 },
   ]);
 

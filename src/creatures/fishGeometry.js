@@ -28,7 +28,8 @@ export function buildFishGeometry(opts) {
     yOffset = [0.0, 0.05, 0.1, 0.1, 0.05, 0.0, -0.02, 0.0],
     rings = 20,
     radial = 14,
-    tail = { len: 0.32, height: 0.55, fork: 0.45 },
+    // lobe: 上葉の伸び(サメ類) / horizontal: 水平尾びれ(クジラ類のフリューク)
+    tail = { len: 0.32, height: 0.55, fork: 0.45, lobe: 0, horizontal: false },
     dorsal = { from: 0.32, to: 0.72, height: 0.5 },
     pectoral = { at: 0.3, len: 0.30, width: 0.14 },
   } = opts;
@@ -94,9 +95,15 @@ export function buildFishGeometry(opts) {
     const v = j / finSegs;             // 0=下端, 1=上端
     const yn = v * 2 - 1;              // -1..1
     const spread = tail.height * H * 2.2;
-    // フォーク: 中央がへこむ
-    const ext = tail.len * L * (1.0 - tail.fork * (1.0 - Math.abs(yn)));
-    positions.push(0, sampleProfile(yOffset, 1) * H + yn * spread, zPed - ext);
+    // フォーク: 中央がへこむ。lobe で上葉(yn>0)を伸ばす
+    let ext = tail.len * L * (1.0 - tail.fork * (1.0 - Math.abs(yn)));
+    if (yn > 0) ext *= 1.0 + (tail.lobe ?? 0) * yn;
+    if (tail.horizontal) {
+      // クジラ類: フリュークは水平に広がる
+      positions.push(yn * spread, sampleProfile(yOffset, 1) * H, zPed - ext);
+    } else {
+      positions.push(0, sampleProfile(yOffset, 1) * H + yn * spread, zPed - ext);
+    }
     bodyUV.push(1.12, v);
     part.push(1);
   }

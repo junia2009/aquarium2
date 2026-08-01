@@ -74,6 +74,38 @@ export class UnderwaterAudio {
     scheduleBubble();
   }
 
+  // クジラの声(サイン波のうなりを合成)。呼吸のタイミングなどで呼ぶ
+  whaleCall() {
+    if (!this.enabled || !this.ctx) return;
+    const ctx = this.ctx;
+    const t0 = ctx.currentTime;
+    const dur = 2.2 + Math.random() * 1.2;
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    // 低い唸りから持ち上がって降りる鳴き交わし
+    const f0 = 140 + Math.random() * 60;
+    osc.frequency.setValueAtTime(f0, t0);
+    osc.frequency.linearRampToValueAtTime(f0 * 2.1, t0 + dur * 0.45);
+    osc.frequency.linearRampToValueAtTime(f0 * 1.4, t0 + dur);
+    const vib = ctx.createOscillator();
+    vib.frequency.value = 5.5;
+    const vibGain = ctx.createGain();
+    vibGain.gain.value = 9;
+    vib.connect(vibGain).connect(osc.frequency);
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 700;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, t0);
+    g.gain.linearRampToValueAtTime(0.045, t0 + 0.5);
+    g.gain.linearRampToValueAtTime(0, t0 + dur);
+    osc.connect(lp).connect(g).connect(ctx.destination);
+    osc.start(t0);
+    vib.start(t0);
+    osc.stop(t0 + dur + 0.1);
+    vib.stop(t0 + dur + 0.1);
+  }
+
   stop() {
     this.enabled = false;
     if (this.bubbleTimer) clearTimeout(this.bubbleTimer);
