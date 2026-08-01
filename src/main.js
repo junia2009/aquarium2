@@ -1,8 +1,8 @@
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { DiveCamera } from './camera.js';
 // スタイルは index.html の <link> で読み込む(ビルドなし配信と両立させるため)
 
-import { U, WORLD } from './env.js';
+import { U } from './env.js';
 import { createBackground, createLights, setupFog } from './environment/background.js';
 import { createWaterSurface } from './environment/surface.js';
 import { createSand, createRocks, sandHeight } from './environment/seabed.js';
@@ -34,16 +34,9 @@ const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerHeight, 0.1, 500);
 camera.position.set(0, 7.5, 24);
 
-const controls = new OrbitControls(camera, canvas);
-controls.target.set(0, 7, 0);
-controls.enableDamping = true;
-controls.dampingFactor = 0.06;
-controls.enablePan = false;
-controls.minDistance = 5;
-controls.maxDistance = 36;
-controls.minPolarAngle = 0.12;
-controls.maxPolarAngle = Math.PI * 0.72;
-controls.rotateSpeed = 0.55;
+// ダイバー視点の自由カメラ(見回す/平行移動/前後進/上下が全て独立)
+const diveCam = new DiveCamera(camera, canvas);
+diveCam.lookAt(new THREE.Vector3(0, 7, 0));
 
 // ================= 環境 =================
 setupFog(scene);
@@ -150,22 +143,25 @@ const audio = new UnderwaterAudio();
 // クジラの息継ぎで鳴き声(環境音ON時のみ)
 whale.onBlow = () => audio.whaleCall();
 
+// 追跡対象と、生物の大きさに応じた追跡距離 [近, 遠]
 const followTargets = {
-  whaleshark: () => whaleShark.pos,
-  whale: () => whale.pos,
-  sardine: () => sardines.schoolCenter,
-  tang: () => tangs.schoolCenter,
-  clownfish: () => clowns.center,
-  ray: () => ray.pos,
-  turtle: () => turtle.pos,
-  jelly: () => jellies.center,
-  eel: () => new THREE.Vector3(4, sandHeight(4, 13) + 2.2, 13),
+  whaleshark: { get: () => whaleShark.pos, dist: [10, 24] },
+  whale: { get: () => whale.pos, dist: [11, 26] },
+  sardine: { get: () => sardines.schoolCenter, dist: [6, 16] },
+  tang: { get: () => tangs.schoolCenter, dist: [4, 10] },
+  clownfish: { get: () => clowns.center, dist: [2.5, 7] },
+  ray: { get: () => ray.pos, dist: [5, 14] },
+  turtle: { get: () => turtle.pos, dist: [5, 13] },
+  jelly: { get: () => jellies.center, dist: [4, 11] },
+  eel: { get: () => new THREE.Vector3(4, sandHeight(4, 13) + 2.2, 13), dist: [4, 11] },
 };
-let followKey = null;
 
 const ui = setupUI({
-  onFollow: (key) => { followKey = key; },
-  onFree: () => { followKey = null; },
+  onFollow: (key) => {
+    const t = followTargets[key];
+    if (t) diveCam.setFollow(t.get, t.dist[0], t.dist[1]);
+  },
+  onFree: () => diveCam.clearFollow(),
   audio,
 });
 
@@ -181,7 +177,7 @@ canvas.addEventListener('pointerup', (e) => {
   const moved = Math.hypot(e.clientX - downPos[0], e.clientY - downPos[1]);
   const held = performance.now() - downTime;
   downPos = null;
-  if (moved > 6 || held > 350) return; // ドラッグは無視
+  if (e.button !== 0 || moved > 6 || held > 350) return; // ドラッグ・右クリックは無視
 
   // クリック方向の水中の一点に「音圧」を発生させる
   const ndc = new THREE.Vector2(
@@ -190,8 +186,7 @@ canvas.addEventListener('pointerup', (e) => {
   );
   const raycaster = new THREE.Raycaster();
   raycaster.setFromCamera(ndc, camera);
-  const dist = Math.min(camera.position.distanceTo(controls.target), 20);
-  const point = raycaster.ray.origin.clone().addScaledVector(raycaster.ray.direction, dist);
+  const point = raycaster.ray.origin.clone().addScaledVector(raycaster.ray.direction, 16);
 
   sardines.scare(point, 10, 70);
   tangs.scare(point, 6, 30);
@@ -207,7 +202,6 @@ window.addEventListener('resize', () => {
 
 // ================= メインループ =================
 const clock = new THREE.Clock();
-const _delta = new THREE.Vector3();
 
 function animate() {
   requestAnimationFrame(animate);
@@ -241,21 +235,8 @@ function animate() {
     { pos: camera.position, radius: 6 },
   ]);
 
-  // --- カメラ追跡 ---
-  if (followKey && followTargets[followKey]) {
-    const target = followTargets[followKey]();
-    _delta.copy(target).sub(controls.target);
-    const s = 1 - Math.exp(-2.2 * dt);
-    controls.target.addScaledVector(_delta, s);
-    camera.position.addScaledVector(_delta, s);
-  }
-
-  controls.update();
-
-  // カメラを水中に保つ
-  const floorLimit = sandHeight(camera.position.x, camera.position.z) + 1.0;
-  if (camera.position.y < floorLimit) camera.position.y = floorLimit;
-  if (camera.position.y > WORLD.surfaceY - 0.8) camera.position.y = WORLD.surfaceY - 0.8;
+  // --- カメラ(境界クランプ・追跡補正は DiveCamera 内) ---
+  diveCam.update(dt);
 
   godRays.update(camera);
 
