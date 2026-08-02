@@ -8,6 +8,7 @@ const copyPwaFiles = {
   closeBundle() {
     cpSync('sw.js', 'dist/sw.js');
     cpSync('manifest.webmanifest', 'dist/manifest.webmanifest');
+    cpSync('404.html', 'dist/404.html');
     cpSync('icons', 'dist/icons', { recursive: true });
   },
 };
