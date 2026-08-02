@@ -74,41 +74,53 @@ export function buildFishGeometry(opts) {
   for (let j = 0; j < radial; j++) {
     indices.push(noseIdx, j, (j + 1) % radial);
   }
-  // 尾柄キャップ
-  const tailBase = rings * radial;
-  const tailIdx = positions.length / 3;
+  // ---- 尾びれ: 胴体から連続して移行させる ----
+  // 尾柄に蓋をして別パーツの扇を刺すと接合部で途切れて見えるので、
+  // 断面を「小さな楕円(尾柄)」から「薄く広い膜(ひれ)」へ徐々に変形させ、
+  // 胴体と尾びれを1枚の面としてつなぐ。
   const zPed = zNose - (L - tail.len * L * 0.15);
-  positions.push(0, sampleProfile(yOffset, 1) * H, zPed);
-  bodyUV.push(1, 0.5);
-  part.push(0);
-  for (let j = 0; j < radial; j++) {
-    indices.push(tailIdx, tailBase + ((j + 1) % radial), tailBase + j);
-  }
+  const pedH = sampleProfile(hProfile, 1) * H;
+  const pedW = sampleProfile(wProfile, 1) * W;
+  const pedY = sampleProfile(yOffset, 1) * H;
+  const spreadMax = tail.height * H * 2.2;
+  const lobe = tail.lobe ?? 0;
+  const horizontal = !!tail.horizontal;
 
-  // ---- 尾びれ(縦の扇形、フォーク付き) ----
-  const finSegs = 8;
-  const tRoot = positions.length / 3;
-  positions.push(0, sampleProfile(yOffset, 1) * H, zPed);
-  bodyUV.push(1.0, 0.5);
-  part.push(1);
-  for (let j = 0; j <= finSegs; j++) {
-    const v = j / finSegs;             // 0=下端, 1=上端
-    const yn = v * 2 - 1;              // -1..1
-    const spread = tail.height * H * 2.2;
-    // フォーク: 中央がへこむ。lobe で上葉(yn>0)を伸ばす
-    let ext = tail.len * L * (1.0 - tail.fork * (1.0 - Math.abs(yn)));
-    if (yn > 0) ext *= 1.0 + (tail.lobe ?? 0) * yn;
-    if (tail.horizontal) {
-      // クジラ類: フリュークは水平に広がる
-      positions.push(yn * spread, sampleProfile(yOffset, 1) * H, zPed - ext);
-    } else {
-      positions.push(0, sampleProfile(yOffset, 1) * H + yn * spread, zPed - ext);
+  // ひれの後退量(u: 広がり方向の座標 -1..1)。中央がへこんでフォークになる
+  const extAt = (u) => {
+    let e = tail.len * L * (1.0 - tail.fork * (1.0 - Math.abs(u)));
+    if (u > 0) e *= 1.0 + lobe * u;   // サメ類は上葉が長い
+    return e;
+  };
+
+  const tailRings = 12;
+  const tailStart = positions.length / 3;
+  for (let i = 1; i <= tailRings; i++) {
+    const s = i / tailRings;                 // 0=尾柄 1=ひれ後端
+    const grow = Math.pow(s, 0.85);          // 広がる軸
+    const flat = Math.pow(1 - s, 1.4);       // 薄くなる軸(後端で厚み0)
+    // クジラ類のフリュークは水平に広がるので、広がる軸と薄くなる軸が入れ替わる
+    const halfW = horizontal ? pedW + (spreadMax - pedW) * grow : pedW * flat;
+    const halfH = horizontal ? pedH * flat : pedH + (spreadMax - pedH) * grow;
+    for (let j = 0; j < radial; j++) {
+      const a = (j / radial) * Math.PI * 2;
+      const cy = Math.cos(a), sx = Math.sin(a);
+      const u = horizontal ? sx : cy;        // 広がり方向の座標
+      positions.push(sx * halfW, pedY + cy * halfH, zPed - s * extAt(u));
+      bodyUV.push(1.0 + s * 0.22, cy * 0.5 + 0.5);
+      part.push(1);
     }
-    bodyUV.push(1.12, v);
-    part.push(1);
   }
-  for (let j = 0; j < finSegs; j++) {
-    indices.push(tRoot, tRoot + 1 + j, tRoot + 2 + j);
+  // 胴体の最終リングから帯でつなぐ(頂点を共有するので継ぎ目が出ない)
+  const bodyLast = rings * radial;
+  for (let i = 0; i < tailRings; i++) {
+    const rowA = i === 0 ? bodyLast : tailStart + (i - 1) * radial;
+    const rowB = tailStart + i * radial;
+    for (let j = 0; j < radial; j++) {
+      const jn = (j + 1) % radial;
+      indices.push(rowA + j, rowB + j, rowA + jn);
+      indices.push(rowA + jn, rowB + j, rowB + jn);
+    }
   }
 
   // ---- 背びれ(体の背に沿った帯) ----

@@ -53,10 +53,9 @@ void main() {
   float amp = uWaveAmp * (uHeadAmp + pow(min(t, 1.0), 2.0)) * uFishLen;
   float arg = w - t * uWaveNum * 6.2831853;
   float disp = sin(arg) * amp;
-  // 尾びれはさらに遅れて大きく振れる(柔軟な膜の表現)
-  if (aPart == 1.0) {
-    disp += sin(arg + 1.1) * amp * 0.85 * (t - 1.0 + 0.12) * 8.0 * step(1.0, t);
-  }
+  // 尾びれは体より遅れて大きく振れる(柔軟な膜の表現)。
+  // 尾柄(t=1)から先で滑らかに増やすので、胴体との境で折れない
+  disp += sin(arg + 1.1) * amp * 0.85 * max(t - 1.0, 0.0) * 9.0;
   // 魚類は左右、クジラ類は上下に波打つ
   vec3 waveAxis = mix(vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), uVertAxis);
   p += waveAxis * disp;
@@ -202,7 +201,11 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, out f
     col += vec3(0.12) * mottle;
     // 胸びれとフリューク腹側は白
     if (part > 2.5) col = mix(col, vec3(0.85, 0.88, 0.90), 0.85);
-    if (abs(part - 1.0) < 0.1) col = mix(col, back * 0.9, smoothstep(0.5, 0.7, v));
+    // フリュークの腹側も背と同じ暗さ。尾柄から滑らかに移行させる
+    if (abs(part - 1.0) < 0.1) {
+      float toFluke = clamp((buv.x - 1.0) / 0.20, 0.0, 1.0);
+      col = mix(col, back * 0.9, smoothstep(0.5, 0.7, v) * toFluke);
+    }
     // 目(両側、口角の少し上)
     col = mix(col, vec3(0.02), eyeDot(u, v, 0.09, 0.42, 0.03));
     glossMul = 0.35;
@@ -232,10 +235,12 @@ void main() {
   vec3 col = underwaterLight(albedo, n, vWorldPos, V, 48.0, 0.35 * glossMul);
   // 体表に落ちる揺らめく光
   col += causticsLight(vWorldPos, n, 0.55) * albedo * 2.0;
-  // 逆光時のひれの透過
+  // 逆光時のひれの透過。尾びれは付け根から徐々に薄くなるので、
+  // 透過も尾柄から滑らかに立ち上げて境目を見せない
   if (vPart > 0.5) {
     float trans = clamp(dot(-n, uSunDir), 0.0, 1.0);
-    col += albedo * trans * 0.4 * uSunI;
+    float ramp = vPart < 1.5 ? clamp((vBodyUV.x - 1.0) / 0.18, 0.0, 1.0) : 1.0;
+    col += albedo * trans * 0.4 * uSunI * ramp;
   }
   // 銀鱗のリム(水中でのぼんやりした輪郭光)
   float fr = pow(1.0 - abs(dot(n, V)), 3.0);
