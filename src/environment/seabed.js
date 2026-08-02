@@ -50,8 +50,13 @@ export function createSand(scene) {
         // 砂の色ムラ(暗い有機物の斑・明るい貝殻片)
         float mottle = fbm(p * 0.13);
         vec3 albedo = mix(vec3(0.62, 0.55, 0.42), vec3(0.42, 0.38, 0.30), mottle);
-        float fleck = step(0.985, hash12(floor(p * 9.0)));
-        albedo += fleck * 0.25;
+        // 貝殻片: セル内の小さな丸い点として散らす(四角く見えないように)
+        vec2 fg = p * 9.0;
+        vec2 fCell = floor(fg);
+        vec2 fOff = vec2(hash12(fCell + 2.7), hash12(fCell + 5.3)) - 0.5;
+        float fleck = step(0.975, hash12(fCell))
+                    * smoothstep(0.16, 0.06, length(fract(fg) - 0.5 - fOff * 0.5));
+        albedo += fleck * 0.28;
 
         vec3 V = normalize(cameraPosition - vWorldPos);
         vec3 col = underwaterLight(albedo, n, vWorldPos, V, 30.0, 0.05);
