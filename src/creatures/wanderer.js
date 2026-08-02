@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { clampToTerrain } from '../collision.js';
 
 // ============ 定住性の魚(クマノミなど)の遊泳 ============
 // 縄張りの中で目標点を選んでは移動を繰り返す。
@@ -59,6 +60,8 @@ export class Wanderer {
       desired.normalize().multiplyScalar(THREE.MathUtils.clamp(d * 2.0, sMin, sMax));
       f.vel.lerp(desired, 1 - Math.exp(-3.2 * dt));
       f.pos.addScaledVector(f.vel, dt);
+      // 砂にめり込ませない(イソギンチャクは住処なので避けない)
+      clampToTerrain(f.pos, 0.35, f.vel);
 
       // 姿勢(進行方向へ滑らかに向く)
       _fwd.copy(f.vel);

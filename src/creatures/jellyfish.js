@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { baseUniforms, WORLD } from '../env.js';
 import { UW_UNIFORMS, UW_NOISE, UW_FOG, UW_FRAG_OUTPUT } from '../glsl.js';
+import { clampToTerrain } from '../collision.js';
 
 // ============ ミズクラゲ ============
 // 傘の収縮による拍動遊泳(jet propulsion)。収縮は速く、弛緩は遅い
@@ -202,7 +203,10 @@ export class JellyfishSwarm {
       this.jellies.push(jelly);
     }
     this.time = 0;
+    this.world = null;
   }
+
+  setWorld(world) { this.world = world; }
 
   update(dt) {
     this.time += dt;
@@ -232,6 +236,11 @@ export class JellyfishSwarm {
       j.vel.y -= 0.25 * dt;
       j.vel.multiplyScalar(Math.exp(-1.1 * dt));
       j.pos.addScaledVector(j.vel, dt);
+
+      // 障害物・海底との衝突
+      const rBody = 0.85 * j.scale;
+      if (this.world) this.world.pushOut(j.pos, rBody, j.vel);
+      clampToTerrain(j.pos, rBody + 1.2, j.vel);
 
       // 領域制限(上下・水平)
       if (j.pos.y > WORLD.surfaceY - 1.5) j.pos.y = WORLD.surfaceY - 1.5;

@@ -6,7 +6,8 @@ import { U } from './env.js';
 import { createBackground, createLights, setupFog } from './environment/background.js';
 import { createWaterSurface } from './environment/surface.js';
 import { createSand, createRocks, sandHeight } from './environment/seabed.js';
-import { createKelp, createAnemone } from './environment/flora.js';
+import { createKelp, createAnemone, KELP_CLUSTERS } from './environment/flora.js';
+import { CollisionWorld } from './collision.js';
 import { createGodRays, createBubbles, createMarineSnow } from './environment/effects.js';
 
 import { FISH_SHAPES } from './creatures/fishGeometry.js';
@@ -44,10 +45,25 @@ createBackground(scene);
 const lights = createLights(scene);
 createWaterSurface(scene);
 createSand(scene);
-createRocks(scene);
+const rocks = createRocks(scene);
 createKelp(scene);
 const anemonePos = new THREE.Vector3(12.5, 0, -12.5);
 createAnemone(scene, anemonePos);
+
+// ================= 衝突ワールド =================
+// 岩とイソギンチャクは実体のある障害物、海藻はしなるので
+// 「避けるが押し戻さない」やわらかい障害物として登録する。
+const world = new CollisionWorld();
+for (const c of rocks.colliders) world.addStatic(c.center, c.rx, c.ry, c.rz);
+for (const k of KELP_CLUSTERS) {
+  const base = sandHeight(k.x, k.z);
+  world.addStatic(new THREE.Vector3(k.x, base + 3.6, k.z), k.r + 0.6, 4.2, k.r + 0.6, { soft: true });
+}
+world.addStatic(
+  new THREE.Vector3(anemonePos.x, sandHeight(anemonePos.x, anemonePos.z) + 0.7, anemonePos.z),
+  1.9, 1.4, 1.9
+);
+diveCam.world = world;
 const godRays = createGodRays(scene);
 createBubbles(scene, [
   { x: -13.5, y: sandHeight(-13.5, -7) + 0.5, z: -7, count: 170, radius: 0.9 },
@@ -76,7 +92,7 @@ const sardines = new School({
   center: new THREE.Vector3(0, 9.5, 0),
   homeRadius: 19,
   seed: 1,
-  params: { maxSpeed: 6.0, minSpeed: 2.4, perception: 2.4 },
+  params: { maxSpeed: 6.0, minSpeed: 2.4, perception: 2.4, bodyRadius: 0.22, avoidRange: 1.2 },
 });
 
 // --- ナンヨウハギの小さな群れ ---
@@ -101,6 +117,7 @@ const tangs = new School({
   params: {
     maxSpeed: 2.6, minSpeed: 0.9, perception: 3.0,
     wCoh: 0.5, wAli: 0.6, maxForce: 8, yMin: 1.8, yMax: 9, burstSpeed: 6,
+    bodyRadius: 0.30, avoidRange: 1.3,
   },
 });
 
@@ -136,6 +153,13 @@ const eels = new GardenEelColony(scene, {
   radius: 6.5,
   count: 14,
 });
+
+// 大型生物同士もぶつからないよう、動く障害物として登録する
+world.addDynamic(whaleShark, 1.5, 1.5, 4.6);
+world.addDynamic(whale, 1.9, 1.9, 5.8);
+world.addDynamic(ray, 2.6, 0.9, 2.2);
+world.addDynamic(turtle, 1.7, 0.9, 1.8);
+for (const c of [whaleShark, whale, ray, turtle, jellies]) c.setWorld(world);
 
 // ================= UI・カメラ追跡 =================
 const audio = new UnderwaterAudio();
@@ -246,8 +270,8 @@ function animate() {
     { pos: whaleShark.pos, radius: 6.5 },
     { pos: whale.pos, radius: 7.5 },
   ];
-  sardines.update(dt, predators);
-  tangs.update(dt, predators);
+  sardines.update(dt, predators, world);
+  tangs.update(dt, predators, world);
   clowns.update(dt);
   ray.update(dt);
   turtle.update(dt);

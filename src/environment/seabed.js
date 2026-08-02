@@ -153,6 +153,7 @@ export function createRocks(scene) {
   addCausticsToStandard(rockMat, 0.8);
 
   // 岩礁の配置(中央左寄りにメイン、右に小さめの根)
+  const colliders = [];
   const spots = [
     { x: -13, z: -8, s: 4.2, seed: 1 },
     { x: -16, z: -4, s: 2.8, seed: 2 },
@@ -181,8 +182,16 @@ export function createRocks(scene) {
     mesh.position.set(s.x, sandHeight(s.x, s.z) + s.s * 0.18, s.z);
     mesh.rotation.y = s.seed * 2.4;
     group.add(mesh);
+
+    // 当たり判定: ノイズ変位ぶんを見込み、y方向は潰れた比率に合わせる
+    colliders.push({
+      center: mesh.position.clone(),
+      rx: s.s * 1.15,
+      ry: s.s * 0.85,
+      rz: s.s * 1.15,
+    });
   }
 
   scene.add(group);
-  return group;
+  return { group, colliders };
 }

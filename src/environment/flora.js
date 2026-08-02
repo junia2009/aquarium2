@@ -3,6 +3,13 @@ import { baseUniforms } from '../env.js';
 import { UW_FRAG_PRELUDE, UW_FRAG_OUTPUT } from '../glsl.js';
 import { sandHeight } from './seabed.js';
 
+// 岩礁のまわりの群生地。当たり判定(やわらかい障害物)にも使う
+export const KELP_CLUSTERS = [
+  { x: -14, z: -7, r: 5, n: 22 },
+  { x: 13, z: -12, r: 4, n: 14 },
+  { x: 3, z: -18, r: 3, n: 10 },
+];
+
 // ============ 海藻(ケルプ) ============
 // インスタンス化した帯状ポリゴン。頂点シェーダで根本を固定し
 // 先端ほど大きく、水流に位相差をつけてなびかせる。
@@ -72,12 +79,7 @@ export function createKelp(scene) {
 
   const phases = new Float32Array(count);
   const dummy = new THREE.Object3D();
-  // 岩礁のまわりに群生させる
-  const clusters = [
-    { x: -14, z: -7, r: 5, n: 22 },
-    { x: 13, z: -12, r: 4, n: 14 },
-    { x: 3, z: -18, r: 3, n: 10 },
-  ];
+  const clusters = KELP_CLUSTERS;
   let i = 0;
   for (const c of clusters) {
     for (let k = 0; k < c.n && i < count; k++, i++) {

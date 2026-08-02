@@ -41,6 +41,7 @@ export class DiveCamera {
     this.pointers = new Map();
     this.pinchDist = 0;
     this.follow = null; // { getter, minD, maxD }
+    this.world = null;  // 衝突ワールド(岩などをすり抜けない)
 
     this._bind();
   }
@@ -187,6 +188,9 @@ export class DiveCamera {
       this.targetYaw += wrapAngle(desYaw - this.targetYaw) * pull;
       this.targetPitch += (desPitch - this.targetPitch) * pull;
     }
+
+    // ---- 岩などをすり抜けない ----
+    if (this.world) this.world.pushOut(this.pos, 0.6, this.glide);
 
     // ---- 世界の境界(砂・水面・遠すぎ防止) ----
     const floorLimit = sandHeight(this.pos.x, this.pos.z) + 0.9;

@@ -1,7 +1,11 @@
 import * as THREE from 'three';
 import { WORLD } from '../env.js';
-import { addCausticsToStandard } from '../environment/seabed.js';
+import { addCausticsToStandard, sandHeight } from '../environment/seabed.js';
 import { wander1 } from '../noise.js';
+import { clampToTerrain } from '../collision.js';
+
+const _av = new THREE.Vector3();
+const _vel = new THREE.Vector3();
 
 // ============ アオウミガメ ============
 // 前肢を翼のように使う「水中飛翔」。数分ごとに呼吸のため水面へ
@@ -560,7 +564,11 @@ export class SeaTurtle {
     this.state = 'cruise';       // cruise | ascend | breathe | descend
     this.stateTimer = 40 + Math.random() * 40; // 次の呼吸まで
     this.flapPower = 1;
+    this.body = 1.5;             // 当たり判定の半径(甲羅+ひれ)
+    this.world = null;
   }
+
+  setWorld(world) { this.world = world; }
 
   update(dt) {
     this.time += dt;
@@ -602,13 +610,32 @@ export class SeaTurtle {
       while (diff < -Math.PI) diff += Math.PI * 2;
       turn += diff * 0.7;
     }
-    this.heading += THREE.MathUtils.clamp(turn, -0.5, 0.5) * dt;
+
+    // ---- 障害物の回避 ----
+    if (this.world) {
+      _vel.set(Math.sin(this.heading) * this.speed, 0, Math.cos(this.heading) * this.speed);
+      this.world.avoidForce(this.pos, _vel, this.body, 2.4, _av, this);
+      const lateral = _av.x * Math.cos(this.heading) - _av.z * Math.sin(this.heading);
+      turn += THREE.MathUtils.clamp(lateral * 1.8, -0.9, 0.9);
+      targetY += _av.y * 2.2;
+    }
+    this.heading += THREE.MathUtils.clamp(turn, -0.9, 0.9) * dt;
+
+    // 進行方向の地形を先読みして海底の上を越える
+    const ahead = this.world
+      ? this.world.terrainAhead(this.pos, Math.sin(this.heading), Math.cos(this.heading), this.body + this.speed * 2.0)
+      : -Infinity;
+    targetY = Math.max(targetY, Math.max(sandHeight(this.pos.x, this.pos.z), ahead) + this.body + 0.4);
 
     const speedTarget = this.state === 'breathe' ? 0.25 : 0.9 + this.flapPower * 0.7;
     this.speed += (speedTarget - this.speed) * (1 - Math.exp(-1.2 * dt));
-    this.pos.y += (targetY - this.pos.y) * (1 - Math.exp(-(this.state === 'cruise' ? 0.35 : 0.8) * dt));
+    this.pos.y += (targetY - this.pos.y) * (1 - Math.exp(-(this.state === 'cruise' ? 0.5 : 0.8) * dt));
     this.pos.x += Math.sin(this.heading) * this.speed * dt;
     this.pos.z += Math.cos(this.heading) * this.speed * dt;
+
+    // ---- めり込みの解消 ----
+    if (this.world) this.world.pushOut(this.pos, this.body, null, this);
+    clampToTerrain(this.pos, this.body * 0.6 + 0.3);
 
     // ---- 姿勢・前肢のストローク ----
     this.group.position.copy(this.pos);

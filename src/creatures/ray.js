@@ -2,6 +2,11 @@ import * as THREE from 'three';
 import { baseUniforms, WORLD } from '../env.js';
 import { UW_FRAG_PRELUDE, UW_FRAG_OUTPUT } from '../glsl.js';
 import { wander1 } from '../noise.js';
+import { clampToTerrain } from '../collision.js';
+import { sandHeight } from '../environment/seabed.js';
+
+const _av = new THREE.Vector3();
+const _vel = new THREE.Vector3();
 
 // ============ マダラトビエイ ============
 // 胸びれ(翼)を羽ばたかせて滑空する rajiform / mobuliform 遊泳。
@@ -184,7 +189,11 @@ export class EagleRay {
     this.seed = 7.7;
     this.time = Math.random() * 100;
     this.bank = 0;
+    this.body = 1.5;   // 当たり判定(翼幅は広いが厚みは薄いので中間を取る)
+    this.world = null;
   }
+
+  setWorld(world) { this.world = world; }
 
   update(dt) {
     this.time += dt;
@@ -201,7 +210,17 @@ export class EagleRay {
       while (diff < -Math.PI) diff += Math.PI * 2;
       turn += diff * 0.9;
     }
-    turn = THREE.MathUtils.clamp(turn, -0.8, 0.8);
+    // 障害物の回避
+    let avoidY = 0;
+    if (this.world) {
+      _vel.set(Math.sin(this.heading) * this.speed, 0, Math.cos(this.heading) * this.speed);
+      this.world.avoidForce(this.pos, _vel, this.body, 2.6, _av, this);
+      const lateral = _av.x * Math.cos(this.heading) - _av.z * Math.sin(this.heading);
+      turn += THREE.MathUtils.clamp(lateral * 1.8, -0.9, 0.9);
+      avoidY = _av.y;
+    }
+
+    turn = THREE.MathUtils.clamp(turn, -0.9, 0.9);
     this.heading += turn * dt;
     this.bank += (THREE.MathUtils.clamp(-turn * 0.9, -0.5, 0.5) - this.bank) * (1 - Math.exp(-2 * dt));
 
@@ -210,12 +229,19 @@ export class EagleRay {
     this.speed = 1.6 + flapCycle * 1.6;
     this.mat.uniforms.uFlap.value = 0.45 + flapCycle * 0.6;
 
-    // 高度もゆっくり変える
-    const targetY = 6.5 + wander1(t * 0.05 + 40, this.seed) * 3.5;
-    this.pos.y += (targetY - this.pos.y) * (1 - Math.exp(-0.5 * dt));
+    // 高度もゆっくり変える。地形を先読みして海底の上を越える
+    let targetY = 6.5 + wander1(t * 0.05 + 40, this.seed) * 3.5 + avoidY * 2.5;
+    const ahead = this.world
+      ? this.world.terrainAhead(this.pos, Math.sin(this.heading), Math.cos(this.heading), this.body + this.speed * 2.0)
+      : -Infinity;
+    targetY = Math.max(targetY, Math.max(sandHeight(this.pos.x, this.pos.z), ahead) + this.body + 0.5);
+    this.pos.y += (targetY - this.pos.y) * (1 - Math.exp(-0.7 * dt));
 
     this.pos.x += Math.sin(this.heading) * this.speed * dt;
     this.pos.z += Math.cos(this.heading) * this.speed * dt;
+
+    if (this.world) this.world.pushOut(this.pos, this.body, null, this);
+    clampToTerrain(this.pos, this.body * 0.5 + 0.3);
 
     this.mesh.position.copy(this.pos);
     this.mesh.rotation.set(0, this.heading, this.bank, 'YXZ');

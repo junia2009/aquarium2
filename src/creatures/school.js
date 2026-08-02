@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { WORLD } from '../env.js';
 import { wander1 } from '../noise.js';
+import { clampToTerrain } from '../collision.js';
 
 // ============ 群泳(ボイド)シミュレーション ============
 // 分離・整列・結集の古典3則 + 遊泳目標のゆらぎ + 捕食者回避 +
@@ -14,6 +15,7 @@ const _fwd = new THREE.Vector3();
 const _right = new THREE.Vector3();
 const _up = new THREE.Vector3();
 const _m = new THREE.Matrix4();
+const _avoid = new THREE.Vector3();
 
 export class School {
   constructor({
@@ -42,6 +44,8 @@ export class School {
       yMin: 2.5,
       yMax: WORLD.surfaceY - 2.5,
       burstSpeed: 12,      // 驚愕時の瞬発速度
+      bodyRadius: 0.28,    // 当たり判定の半径
+      avoidRange: 1.4,     // 障害物を避け始める余裕
       ...params,
     };
 
@@ -77,7 +81,7 @@ export class School {
     return x | (y << 10) | (z << 20);
   }
 
-  update(dt, predators = []) {
+  update(dt, predators = [], world = null) {
     this.time += dt;
     const p = this.p;
     const cs = p.perception;
@@ -169,6 +173,12 @@ export class School {
       if (pos.y < p.yMin) force.y += (p.yMin - pos.y) * 6;
       if (pos.y > p.yMax) force.y -= (pos.y - p.yMax) * 6;
 
+      // ---- 岩・海藻・大型生物の回避 ----
+      if (world) {
+        world.avoidForce(pos, vel, p.bodyRadius, p.avoidRange, _avoid);
+        force.addScaledVector(_avoid, 22);
+      }
+
       // ---- 捕食者・障害物回避 ----
       let panicked = 0;
       for (const pr of predators) {
@@ -209,6 +219,11 @@ export class School {
       else if (speed < p.minSpeed) vel.multiplyScalar(p.minSpeed / Math.max(speed, 1e-4));
 
       pos.addScaledVector(vel, dt);
+
+      // ---- めり込みの解消 ----
+      if (world) world.pushOut(pos, p.bodyRadius, vel);
+      clampToTerrain(pos, p.bodyRadius + 0.15, vel);
+
       centerAccum.add(pos);
     }
 

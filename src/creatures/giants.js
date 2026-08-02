@@ -3,6 +3,12 @@ import { baseUniforms, WORLD } from '../env.js';
 import { buildFishGeometry } from './fishGeometry.js';
 import { createFishMaterial } from './fishMaterial.js';
 import { wander1 } from '../noise.js';
+import { clampToTerrain } from '../collision.js';
+import { sandHeight } from '../environment/seabed.js';
+
+const _av = new THREE.Vector3();
+const _vel = new THREE.Vector3();
+const sandFloor = (p) => sandHeight(p.x, p.z);
 
 // ============ 大型回遊生物 ============
 // ジンベエザメ(魚類): 尾びれは縦、体を左右にゆっくりうねらせる
@@ -11,7 +17,7 @@ import { wander1 } from '../noise.js';
 
 // ---- 汎用のゆったり回遊コントローラ ----
 class GiantCruiser {
-  constructor(mesh, { radius, yRange, speed, seed, bankScale = 0.4 }) {
+  constructor(mesh, { radius, yRange, speed, seed, bankScale = 0.4, body = 1.5, owner = null }) {
     this.mesh = mesh;
     this.radius = radius;
     this.yRange = yRange;
@@ -19,6 +25,9 @@ class GiantCruiser {
     this.speed = speed;
     this.seed = seed;
     this.bankScale = bankScale;
+    this.body = body;       // 当たり判定の半径
+    this.owner = owner;     // 衝突ワールド上の自分自身(除外用)
+    this.world = null;
     this.time = Math.random() * 100;
     this.heading = Math.random() * Math.PI * 2;
     this.bank = 0;
@@ -43,16 +52,40 @@ class GiantCruiser {
       while (diff < -Math.PI) diff += Math.PI * 2;
       turn += diff * 0.55;
     }
-    turn = THREE.MathUtils.clamp(turn, -0.35, 0.35);
+    // ---- 障害物の回避: 横向き成分は旋回、上下成分は目標深度に反映 ----
+    let avoidY = 0;
+    if (this.world) {
+      const fx = Math.sin(this.heading), fz = Math.cos(this.heading);
+      _vel.set(fx * this.speed, 0, fz * this.speed);
+      this.world.avoidForce(this.pos, _vel, this.body, 3.0, _av, this.owner);
+      // 右手方向 = (cos h, 0, -sin h)
+      const lateral = _av.x * Math.cos(this.heading) - _av.z * Math.sin(this.heading);
+      turn += THREE.MathUtils.clamp(lateral * 1.6, -0.8, 0.8);
+      avoidY = _av.y;
+    }
+
+    turn = THREE.MathUtils.clamp(turn, -0.7, 0.7);
     this.heading += turn * dt;
     this.bank += (THREE.MathUtils.clamp(-turn * this.bankScale * 2.2, -0.35, 0.35) - this.bank)
                * (1 - Math.exp(-1.2 * dt));
 
     this.targetY = targetYOverride ??
       THREE.MathUtils.lerp(this.yRange[0], this.yRange[1], wander1(t * 0.03 + 33, this.seed) * 0.5 + 0.5);
-    this.pos.y += (this.targetY - this.pos.y) * (1 - Math.exp(-(targetYOverride ? 0.55 : 0.25) * dt));
+
+    // 進行方向の地形を先読みして、迫る海底の上を越える
+    const lookY = this.world
+      ? this.world.terrainAhead(this.pos, Math.sin(this.heading), Math.cos(this.heading), this.body + this.speed * 2.2)
+      : -Infinity;
+    const floor = Math.max(sandFloor(this.pos), lookY) + this.body + 0.6;
+    this.targetY = Math.max(this.targetY + avoidY * 2.5, floor);
+
+    this.pos.y += (this.targetY - this.pos.y) * (1 - Math.exp(-(targetYOverride ? 0.55 : 0.35) * dt));
     this.pos.x += Math.sin(this.heading) * this.speed * dt;
     this.pos.z += Math.cos(this.heading) * this.speed * dt;
+
+    // ---- めり込みの解消 ----
+    if (this.world) this.world.pushOut(this.pos, this.body, null, this.owner);
+    clampToTerrain(this.pos, this.body + 0.35);
 
     this.mesh.position.copy(this.pos);
     const pitch = THREE.MathUtils.clamp((this.targetY - this.pos.y) * -0.12, -0.3, 0.3);
@@ -91,10 +124,14 @@ export class WhaleShark {
       speed: 1.7,
       seed: 12.3,
       bankScale: 0.5,
+      body: 1.5,
+      owner: this,
     });
   }
 
   get pos() { return this.cruiser.pos; }
+
+  setWorld(world) { this.cruiser.world = world; }
 
   update(dt) {
     this.cruiser.steer(dt);
@@ -208,6 +245,8 @@ export class HumpbackWhale {
       speed: 1.5,
       seed: 44.7,
       bankScale: 0.15, // クジラはあまりバンクしない
+      body: 1.9,
+      owner: this,
     });
 
     // 息継ぎサイクル
@@ -220,6 +259,8 @@ export class HumpbackWhale {
 
   get pos() { return this.cruiser.pos; }
   get breathing() { return this.state === 'blow'; }
+
+  setWorld(world) { this.cruiser.world = world; }
 
   update(dt) {
     this.stateTimer -= dt;
