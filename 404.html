@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>大水槽へ戻ります…</title>
+  <style>
+    body {
+      margin: 0; height: 100vh; display: flex; align-items: center; justify-content: center;
+      background: #04121f; color: #8fb4c7;
+      font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", system-ui, sans-serif;
+      font-size: 14px; letter-spacing: 0.1em;
+    }
+  </style>
+  <script>
+    // デプロイ入れ替え中などで404を踏んでもアプリへ戻す。
+    // プロジェクトページ(/リポジトリ名/...)なら先頭セグメントへ、それ以外はルートへ
+    var seg = location.pathname.split('/')[1];
+    var target = seg ? '/' + seg + '/' : '/';
+    setTimeout(function () { location.replace(target); }, 600);
+  </script>
+</head>
+<body>🐟 大水槽へ戻ります…</body>
+</html>
