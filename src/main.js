@@ -8,7 +8,7 @@ import { createWaterSurface } from './environment/surface.js';
 import { createSand, createRocks, sandHeight } from './environment/seabed.js';
 import { createKelp, createAnemone, KELP_CLUSTERS } from './environment/flora.js';
 import { CollisionWorld } from './collision.js';
-import { disturbPoint, raySandHit } from './interaction.js';
+import { disturbPoint } from './interaction.js';
 import { createGodRays, createBubbles, createMarineSnow } from './environment/effects.js';
 
 import { FISH_SHAPES } from './creatures/fishGeometry.js';
@@ -215,10 +215,9 @@ canvas.addEventListener('pointerup', (e) => {
   _raycaster.setFromCamera(ndc, camera);
   const ray = _raycaster.ray;
 
+  // 反応するのはイワシの群れのみ。
+  // ナンヨウハギやチンアナゴは、捕食者の接近など自然な刺激にだけ反応させる
   if (disturbPoint(ray, sardines, 4.5, _hitPoint)) sardines.scare(_hitPoint, 11, 80);
-  if (disturbPoint(ray, tangs, 3.0, _hitPoint)) tangs.scare(_hitPoint, 6, 34);
-  // チンアナゴは砂底にいるので、視線が砂に当たった場所で驚かせる
-  if (raySandHit(ray, _hitPoint)) eels.scare(_hitPoint, 9);
 });
 
 // ================= リサイズ =================

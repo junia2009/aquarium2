@@ -273,15 +273,4 @@ export class GardenEelColony {
       e.mat.uniforms.uEmerge.value = e.emerge;
     }
   }
-
-  scare(point, radius = 8) {
-    for (const e of this.eels) {
-      const d = e.mesh.position.distanceTo(point);
-      if (d < radius) {
-        e.target = 0;
-        e.emerge = Math.min(e.emerge, 0.4);
-        e.peekTimer = 2 + Math.random() * 2;
-      }
-    }
-  }
 }

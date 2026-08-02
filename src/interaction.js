@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { sandHeight } from './environment/seabed.js';
 
 // ============ タップ/クリックの当たり判定 ============
 // 画面をタップした「音圧」をどこに発生させるかを決める。
@@ -34,16 +33,4 @@ export function disturbPoint(ray, school, hitRadius, out) {
   if (hit.perp < hitRadius) out.copy(school.pos[hit.idx]);
   else out.copy(ray.origin).addScaledVector(ray.direction, hit.t);
   return out;
-}
-
-/** レイが砂底と交わる点(チンアナゴ用)。交わらなければ null */
-export function raySandHit(ray, out, maxDist = 70, step = 1.5) {
-  let prev = ray.origin.y - sandHeight(ray.origin.x, ray.origin.z);
-  for (let d = step; d <= maxDist; d += step) {
-    out.copy(ray.origin).addScaledVector(ray.direction, d);
-    const h = out.y - sandHeight(out.x, out.z);
-    if (h <= 0 && prev > 0) return out;
-    prev = h;
-  }
-  return null;
 }
