@@ -216,8 +216,9 @@ function makeBlowBubbles() {
 export class HumpbackWhale {
   constructor(scene) {
     const geo = buildFishGeometry({
-      // ヒゲクジラらしい、ずんぐりと肉厚な体躯
-      length: 13.5, height: 2.15, width: 1.72,
+      // ヒゲクジラらしい、ずんぐりと肉厚な体躯。
+      // 実物の成体はジンベエザメより長く、体重では倍ほどある
+      length: 16.5, height: 2.62, width: 2.10,
       // 丸く大きな頭部。胴の太さを長く保ってから尾柄へ絞る
       hProfile: [0.56, 0.90, 1.0, 1.0, 0.94, 0.74, 0.44, 0.16],
       wProfile: [0.68, 0.94, 1.0, 0.99, 0.90, 0.70, 0.40, 0.15],
@@ -232,9 +233,9 @@ export class HumpbackWhale {
     });
     this.mat = createFishMaterial({
       pattern: 4,
-      len: 13.5,
+      len: 16.5,
       // 上下方向のストローク。ゆっくり力強く
-      swim: { freq: 1.05, amp: 0.055, waveNum: 0.42, headAmp: 0.06, flapFreq: 0.7 },
+      swim: { freq: 0.92, amp: 0.055, waveNum: 0.42, headAmp: 0.06, flapFreq: 0.62 },
       vertAxis: 1,
     });
     this.mesh = new THREE.Mesh(geo, this.mat);
@@ -244,10 +245,10 @@ export class HumpbackWhale {
     this.cruiser = new GiantCruiser(this.mesh, {
       radius: 22,
       yRange: [8, 11],
-      speed: 1.5,
+      speed: 1.7,
       seed: 44.7,
       bankScale: 0.15, // クジラはあまりバンクしない
-      body: 2.2,
+      body: 2.7,
       owner: this,
     });
 
@@ -273,16 +274,17 @@ export class HumpbackWhale {
         if (this.stateTimer <= 0) this.state = 'ascend';
         break;
       case 'ascend':
-        targetY = WORLD.surfaceY - 1.9;
+        // 背が水面を突き抜けないよう、体の厚みぶん余裕を持って浮上する
+        targetY = WORLD.surfaceY - 3.1;
         this.cruiser.speed = this.cruiser.baseSpeed * 1.25;
-        if (this.pos.y > WORLD.surfaceY - 2.6) {
+        if (this.pos.y > WORLD.surfaceY - 3.8) {
           this.state = 'blow';
           this.stateTimer = 6 + Math.random() * 3;
           if (this.onBlow) this.onBlow();
         }
         break;
       case 'blow':
-        targetY = WORLD.surfaceY - 1.8;
+        targetY = WORLD.surfaceY - 3.0;
         this.cruiser.speed = this.cruiser.baseSpeed * 0.5;
         if (this.stateTimer <= 0) this.state = 'descend';
         break;
@@ -301,7 +303,7 @@ export class HumpbackWhale {
     // 噴気孔(頭頂、鼻先からやや後ろ)から泡
     const u = this.blow.material.uniforms;
     const fwd = new THREE.Vector3(Math.sin(this.cruiser.heading), 0, Math.cos(this.cruiser.heading));
-    u.uEmitter.value.copy(this.pos).addScaledVector(fwd, 4.5).add(new THREE.Vector3(0, 1.8, 0));
+    u.uEmitter.value.copy(this.pos).addScaledVector(fwd, 5.5).add(new THREE.Vector3(0, 2.2, 0));
     u.uHeight.value = Math.max(WORLD.surfaceY - u.uEmitter.value.y, 0.5);
     const targetActive = this.state === 'blow' ? 1 : 0;
     u.uActive.value += (targetActive - u.uActive.value) * (1 - Math.exp(-3 * dt));

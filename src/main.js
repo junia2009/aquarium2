@@ -157,7 +157,7 @@ const eels = new GardenEelColony(scene, {
 
 // 大型生物同士もぶつからないよう、動く障害物として登録する
 world.addDynamic(whaleShark, 2.0, 2.0, 6.4);
-world.addDynamic(whale, 2.3, 2.3, 6.0);
+world.addDynamic(whale, 2.8, 2.8, 7.3);
 world.addDynamic(ray, 2.6, 0.9, 2.2);
 world.addDynamic(turtle, 1.7, 0.9, 1.8);
 for (const c of [whaleShark, whale, ray, turtle, jellies]) c.setWorld(world);
@@ -171,7 +171,7 @@ whale.onBlow = () => audio.whaleCall();
 // 追跡対象と、生物の大きさに応じた追跡距離 [近, 遠]
 const followTargets = {
   whaleshark: { get: () => whaleShark.pos, dist: [13, 30] },
-  whale: { get: () => whale.pos, dist: [13, 30] },
+  whale: { get: () => whale.pos, dist: [16, 34] },
   sardine: { get: () => sardines.schoolCenter, dist: [6, 16] },
   tang: { get: () => tangs.schoolCenter, dist: [4, 10] },
   clownfish: { get: () => clowns.center, dist: [2.5, 7] },
@@ -271,7 +271,7 @@ function animate() {
     { pos: ray.pos, radius: 4.5 },
     { pos: turtle.pos, radius: 4.0 },
     { pos: whaleShark.pos, radius: 8.5 },
-    { pos: whale.pos, radius: 8.5 },
+    { pos: whale.pos, radius: 9.5 },
   ];
   sardines.update(dt, predators, world);
   tangs.update(dt, predators, world);
@@ -285,7 +285,7 @@ function animate() {
     { pos: ray.pos, radius: 8 },
     { pos: turtle.pos, radius: 7 },
     { pos: whaleShark.pos, radius: 13 },
-    { pos: whale.pos, radius: 13 },
+    { pos: whale.pos, radius: 15 },
     { pos: camera.position, radius: 6 },
   ]);
 
