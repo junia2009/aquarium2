@@ -203,6 +203,33 @@ window.addEventListener('resize', () => {
 // ================= メインループ =================
 const clock = new THREE.Clock();
 
+// ================= PWA: Service Worker =================
+// ネットワーク優先のSW。ここでは登録と「開き直し・復帰のたびの更新チェック」、
+// 新版が有効化されたときの自動リロードを行う。
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', async () => {
+    try {
+      // updateViaCache:'none' で sw.js 自体もHTTPキャッシュを介さず毎回確認
+      const reg = await navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' });
+      const check = () => reg.update().catch(() => {});
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) check(); // タブ復帰のたびに更新確認
+      });
+      // 新しいSWが制御を握ったら一度だけリロードして最新版へ
+      let hadController = !!navigator.serviceWorker.controller;
+      let refreshed = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (!hadController) { hadController = true; return; } // 初回インストールは除外
+        if (refreshed) return;
+        refreshed = true;
+        window.location.reload();
+      });
+    } catch (e) {
+      // SW非対応・登録失敗でもアプリはそのまま動く
+    }
+  });
+}
+
 function animate() {
   requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.05);

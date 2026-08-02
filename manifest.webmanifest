@@ -1,0 +1,17 @@
+{
+  "name": "大水槽 — バーチャル水族館",
+  "short_name": "大水槽",
+  "description": "水と光と生態をコードで作り込んだバーチャル水族館",
+  "lang": "ja",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#04121f",
+  "theme_color": "#04121f",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
