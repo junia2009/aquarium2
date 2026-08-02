@@ -97,7 +97,8 @@ class GiantCruiser {
 export class WhaleShark {
   constructor(scene) {
     const geo = buildFishGeometry({
-      length: 10, height: 1.45, width: 1.25,
+      // 現生最大の魚類。水槽の主役として堂々とした大きさにする
+      length: 15, height: 2.05, width: 1.85,
       // 幅広で平たい頭、がっしりした胴、細い尾柄
       hProfile: [0.42, 0.7, 0.92, 1.0, 0.95, 0.8, 0.5, 0.2],
       wProfile: [0.85, 0.95, 1.0, 0.98, 0.85, 0.62, 0.38, 0.16],
@@ -110,9 +111,9 @@ export class WhaleShark {
     });
     this.mat = createFishMaterial({
       pattern: 3,
-      len: 10,
-      // ゆったりした全身のうねり(大型魚は尾の振りが遅い)
-      swim: { freq: 1.5, amp: 0.05, waveNum: 0.55, headAmp: 0.28, flapFreq: 1.2 },
+      len: 15,
+      // ゆったりした全身のうねり(大型魚ほど尾の振りは遅い)
+      swim: { freq: 1.2, amp: 0.05, waveNum: 0.55, headAmp: 0.28, flapFreq: 1.0 },
     });
     this.mesh = new THREE.Mesh(geo, this.mat);
     this.mesh.frustumCulled = false;
@@ -121,10 +122,10 @@ export class WhaleShark {
     this.cruiser = new GiantCruiser(this.mesh, {
       radius: 19,
       yRange: [5.5, 9.5],
-      speed: 1.7,
+      speed: 1.8,
       seed: 12.3,
       bankScale: 0.5,
-      body: 1.5,
+      body: 2.0,
       owner: this,
     });
   }
@@ -215,10 +216,11 @@ function makeBlowBubbles() {
 export class HumpbackWhale {
   constructor(scene) {
     const geo = buildFishGeometry({
-      length: 12.5, height: 1.9, width: 1.35,
-      // 丸く大きな頭部、後方へ滑らかに細くなる
-      hProfile: [0.5, 0.85, 1.0, 0.98, 0.85, 0.62, 0.35, 0.14],
-      wProfile: [0.6, 0.9, 1.0, 0.95, 0.8, 0.58, 0.32, 0.13],
+      // ヒゲクジラらしい、ずんぐりと肉厚な体躯
+      length: 13.5, height: 2.15, width: 1.72,
+      // 丸く大きな頭部。胴の太さを長く保ってから尾柄へ絞る
+      hProfile: [0.56, 0.90, 1.0, 1.0, 0.94, 0.74, 0.44, 0.16],
+      wProfile: [0.68, 0.94, 1.0, 0.99, 0.90, 0.70, 0.40, 0.15],
       yOffset: [-0.05, 0.05, 0.1, 0.08, 0.02, -0.05, -0.08, 0.0],
       rings: 26, radial: 18,
       // 水平のフリューク(クジラ類の証)
@@ -230,9 +232,9 @@ export class HumpbackWhale {
     });
     this.mat = createFishMaterial({
       pattern: 4,
-      len: 12.5,
+      len: 13.5,
       // 上下方向のストローク。ゆっくり力強く
-      swim: { freq: 1.15, amp: 0.055, waveNum: 0.42, headAmp: 0.06, flapFreq: 0.7 },
+      swim: { freq: 1.05, amp: 0.055, waveNum: 0.42, headAmp: 0.06, flapFreq: 0.7 },
       vertAxis: 1,
     });
     this.mesh = new THREE.Mesh(geo, this.mat);
@@ -245,7 +247,7 @@ export class HumpbackWhale {
       speed: 1.5,
       seed: 44.7,
       bankScale: 0.15, // クジラはあまりバンクしない
-      body: 1.9,
+      body: 2.2,
       owner: this,
     });
 
@@ -299,7 +301,7 @@ export class HumpbackWhale {
     // 噴気孔(頭頂、鼻先からやや後ろ)から泡
     const u = this.blow.material.uniforms;
     const fwd = new THREE.Vector3(Math.sin(this.cruiser.heading), 0, Math.cos(this.cruiser.heading));
-    u.uEmitter.value.copy(this.pos).addScaledVector(fwd, 3.6).add(new THREE.Vector3(0, 1.6, 0));
+    u.uEmitter.value.copy(this.pos).addScaledVector(fwd, 4.5).add(new THREE.Vector3(0, 1.8, 0));
     u.uHeight.value = Math.max(WORLD.surfaceY - u.uEmitter.value.y, 0.5);
     const targetActive = this.state === 'blow' ? 1 : 0;
     u.uActive.value += (targetActive - u.uActive.value) * (1 - Math.exp(-3 * dt));
