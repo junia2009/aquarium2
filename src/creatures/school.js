@@ -66,6 +66,9 @@ export class School {
     this.grid = new Map();
     this.schoolCenter = center.clone();
     this.time = 0;
+    // 警戒度。隣の個体から次々に伝播する(実魚の驚愕が群れを走る現象)
+    this.alarm = new Float32Array(count);
+    this.alarmNext = new Float32Array(count);
   }
 
   // クリック等による驚愕反応
@@ -118,6 +121,7 @@ export class School {
       let aliX = 0, aliY = 0, aliZ = 0;
       let cohX = 0, cohY = 0, cohZ = 0;
       let nCount = 0;
+      let nbrAlarm = 0;
       const cx = Math.floor(pos.x / cs), cy = Math.floor(pos.y / cs), cz = Math.floor(pos.z / cs);
       for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
         const key = ((cx + dx) & 1023) | (((cy + dy) & 1023) << 10) | (((cz + dz) & 1023) << 20);
@@ -137,6 +141,7 @@ export class School {
           const ov = this.vel[j];
           aliX += ov.x; aliY += ov.y; aliZ += ov.z;
           cohX += other.x; cohY += other.y; cohZ += other.z;
+          if (this.alarm[j] > nbrAlarm) nbrAlarm = this.alarm[j];
           nCount++;
           if (nCount > 12) break; // 認知上限(実魚も近傍数匹しか見ない)
         }
@@ -144,9 +149,6 @@ export class School {
       }
 
       if (nCount > 0) {
-        force.x += sepX * p.wSep * 3.0;
-        force.y += sepY * p.wSep * 3.0;
-        force.z += sepZ * p.wSep * 3.0;
         const inv = 1 / nCount;
         // 整列: 平均速度へ
         force.x += (aliX * inv - vel.x) * p.wAli;
@@ -207,14 +209,29 @@ export class School {
         }
       }
 
+      // ---- 警戒の伝播 ----
+      // 直接刺激を受けた個体だけでなく、隣の慌てた仲間を見た個体も反応する。
+      // 1フレームで1ホップずつ伝わるので、驚愕が群れを波のように走る。
+      const relayed = nbrAlarm * 0.90 - dt * 0.9;
+      const alarm = THREE.MathUtils.clamp(Math.max(panicked, relayed), 0, 1);
+      this.alarmNext[i] = alarm;
+
+      // ---- 分離(警戒時は強まり、群れが爆発的に広がる) ----
+      if (nCount > 0) {
+        const sw = p.wSep * 3.0 * (1 + alarm * 4.0);
+        force.x += sepX * sw;
+        force.y += sepY * sw;
+        force.z += sepZ * sw;
+      }
+
       // ---- 積分 ----
       const fLen = force.length();
-      const maxF = p.maxForce * (1 + panicked * 3);
+      const maxF = p.maxForce * (1 + alarm * 3);
       if (fLen > maxF) force.multiplyScalar(maxF / fLen);
       vel.addScaledVector(force, dt);
 
       const speed = vel.length();
-      const maxS = p.maxSpeed + (p.burstSpeed - p.maxSpeed) * panicked;
+      const maxS = p.maxSpeed + (p.burstSpeed - p.maxSpeed) * alarm;
       if (speed > maxS) vel.multiplyScalar(maxS / speed);
       else if (speed < p.minSpeed) vel.multiplyScalar(p.minSpeed / Math.max(speed, 1e-4));
 
@@ -226,6 +243,11 @@ export class School {
 
       centerAccum.add(pos);
     }
+
+    // 警戒度のバッファを入れ替える(全個体が同じ時刻の値を参照するように)
+    const swap = this.alarm;
+    this.alarm = this.alarmNext;
+    this.alarmNext = swap;
 
     this.schoolCenter.copy(centerAccum).multiplyScalar(1 / this.count);
     this.writeMatrices(dt);
