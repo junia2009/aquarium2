@@ -8,49 +8,75 @@ import { wander1 } from '../noise.js';
 // 翼端ほど大きく、位相が遅れて波打つ。背面は黒地に白斑、腹面は白。
 
 function buildRayGeometry() {
-  const span = 3.2;   // 翼幅(半分)
-  const len = 2.6;    // 体長
-  const segU = 24;    // 翼方向
-  const segV = 16;    // 体軸方向
+  // 実物のマダラトビエイの平面形:
+  // 菱形の体盤、前方へ突き出た丸い吻(頭部)、尖った翼端、中央後方から鞭状の尾
+  const span = 3.1;   // 翼幅(半分)
+  const segU = 30;    // 翼方向
+  const segV = 18;    // 体軸方向
+
+  // 前縁: 吻(中央の張り出し)から翼端へ後退
+  const zLead = (u) => {
+    const a = Math.abs(u);
+    return -0.2 + 1.35 * Math.pow(1 - a, 1.2) + 0.5 * Math.exp(-Math.pow(u * 5.5, 2));
+  };
+  // 後縁: 翼端から中央後方へ
+  const zTrail = (u) => {
+    const a = Math.abs(u);
+    return -0.2 - 1.6 * Math.pow(1 - a, 1.35);
+  };
+  // 厚み: 胴の中央が盛り上がり、頭部にも膨らみ
+  const thick = (u, v) => {
+    const a = Math.abs(u);
+    let y = 0.30 * Math.pow(Math.max(1 - a * a, 0), 2.2)
+          * Math.pow(Math.sin(Math.PI * THREE.MathUtils.clamp(v, 0, 1)), 1.2);
+    y += 0.13 * Math.exp(-Math.pow(u * 5.5, 2)) * Math.exp(-(((v - 0.16) / 0.22) ** 2));
+    return y;
+  };
+
   const positions = [];
   const uvs = [];
+  const aSide = []; // 1=背面シート 0=腹面シート
   const indices = [];
 
-  for (let i = 0; i <= segV; i++) {
-    const v = i / segV;          // 0=鼻先, 1=後端
-    for (let j = 0; j <= segU; j++) {
-      const u = (j / segU) * 2 - 1; // -1..1 翼方向
-      // 翼の平面形: 中央が長く、翼端に向かって後退しつつ細くなる
-      const chord = Math.sin(Math.PI * Math.min(Math.max(1.0 - Math.abs(u), 0.001), 1.0) ** 0.7);
-      const zFront = len * 0.5 * chord - Math.abs(u) * 0.9;
-      const zBack = -len * 0.5 * chord * 0.8 - Math.abs(u) * 1.1;
-      const z = zFront + (zBack - zFront) * v;
-      const x = u * span;
-      // 体の厚み: 中央が盛り上がる
-      const y = Math.max(0, chord - 0.25) * 0.28 * Math.sin(Math.PI * (1 - v) * 0.85);
-      positions.push(x, y, z);
-      uvs.push(u * 0.5 + 0.5, v);
+  // 上面・下面の2枚のシートで閉じた体盤を作る(縁で厚み0になり自然に閉じる)
+  for (const side of [1, 0]) {
+    const base = positions.length / 3;
+    for (let i = 0; i <= segV; i++) {
+      const v = i / segV; // 0=前縁, 1=後縁
+      for (let j = 0; j <= segU; j++) {
+        const u = (j / segU) * 2 - 1; // -1..1 翼方向
+        const zl = zLead(u);
+        const zt = zTrail(u);
+        const th = thick(u, v);
+        const y = side === 1 ? th : -0.5 * th - 0.015;
+        positions.push(u * span, y, zl + (zt - zl) * v);
+        uvs.push(u * 0.5 + 0.5, v);
+        aSide.push(side);
+      }
     }
-  }
-  for (let i = 0; i < segV; i++) {
-    for (let j = 0; j < segU; j++) {
-      const a = i * (segU + 1) + j;
-      const b = a + 1;
-      const c = a + segU + 1;
-      const d = c + 1;
-      indices.push(a, c, b, b, c, d);
+    for (let i = 0; i < segV; i++) {
+      for (let j = 0; j < segU; j++) {
+        const a = base + i * (segU + 1) + j;
+        const b = a + 1;
+        const c = a + segU + 1;
+        const d = c + 1;
+        if (side === 1) indices.push(a, c, b, b, c, d);
+        else indices.push(a, b, c, b, d, c); // 下面は巻き順を反転
+      }
     }
   }
 
-  // 尾(細長い鞭)
+  // 尾(体盤後端から連続する細い鞭)
+  const rear = zTrail(0);
   const tailStart = positions.length / 3;
-  const tailSegs = 10;
+  const tailSegs = 12;
   for (let i = 0; i <= tailSegs; i++) {
     const t = i / tailSegs;
-    const w = 0.09 * (1 - t * 0.85);
-    positions.push(-w, 0.02, -len * 0.55 - t * 2.4);
-    positions.push(w, 0.02, -len * 0.55 - t * 2.4);
+    const w = 0.10 * (1 - t * 0.88);
+    positions.push(-w, 0.02, rear - t * 2.5);
+    positions.push(w, 0.02, rear - t * 2.5);
     uvs.push(0.48, 1 + t, 0.52, 1 + t);
+    aSide.push(1, 1);
   }
   for (let i = 0; i < tailSegs; i++) {
     const a = tailStart + i * 2;
@@ -61,6 +87,7 @@ function buildRayGeometry() {
   geo.setIndex(indices);
   geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setAttribute('aSide', new THREE.Float32BufferAttribute(aSide, 1));
   geo.computeVertexNormals();
   return geo;
 }
@@ -77,11 +104,14 @@ export class EagleRay {
       vertexShader: /* glsl */ `
         uniform float uTime;
         uniform float uFlap; // 羽ばたきの強さ(遊泳速度と連動)
+        attribute float aSide;
         varying vec2 vUv;
         varying vec3 vWorldPos;
         varying vec3 vNormal;
+        varying float vSide;
         void main() {
           vUv = uv;
+          vSide = aSide;
           vec3 p = position;
           float u = uv.x * 2.0 - 1.0;         // -1..1 翼方向
           float wingFrac = pow(abs(u), 1.35);  // 翼端ほど可動
@@ -110,19 +140,26 @@ export class EagleRay {
         varying vec2 vUv;
         varying vec3 vWorldPos;
         varying vec3 vNormal;
+        varying float vSide;
         void main() {
           vec3 n = normalize(vNormal);
-          bool top = !gl_FrontFacing; // ジオメトリの巻き順の都合で反転
-          if (!top) n = -n;
+          bool top = vSide > 0.5; // 背面シートか腹面シートか
+          if (!gl_FrontFacing) n = -n;
           vec3 albedo;
           if (top) {
-            // 背面: 濃紺に白い斑点(マダラトビエイの特徴)
-            albedo = vec3(0.17, 0.20, 0.27);
-            vec2 cell = floor(vUv * vec2(26.0, 15.0));
-            vec2 f = fract(vUv * vec2(26.0, 15.0)) - 0.5;
+            // 背面: 黒に近い濃紺。全面に細かい白斑が高密度で均一に散る
+            // (マダラトビエイの斑紋は指紋のように個体固有)
+            albedo = vec3(0.055, 0.065, 0.09);
+            vec2 g = vUv * vec2(46.0, 26.0);
+            vec2 cell = floor(g);
             float rnd = hash12(cell);
-            float spot = step(0.72, rnd) * smoothstep(0.30, 0.18, length(f + (vec2(rnd, fract(rnd * 7.3)) - 0.5) * 0.4));
-            albedo = mix(albedo, vec3(0.9, 0.92, 0.95), spot * step(vUv.y, 1.0));
+            vec2 jitter = (vec2(rnd, hash12(cell + 4.7)) - 0.5) * 0.55;
+            float spot = step(0.42, rnd)
+                       * smoothstep(0.20, 0.11, length(fract(g) - 0.5 - jitter));
+            // 大きさに個体差、体盤の縁に向かって少しまばらに
+            spot *= 0.7 + hash12(cell + 9.1) * 0.3;
+            float edgeFade = smoothstep(1.0, 0.85, abs(vUv.x * 2.0 - 1.0));
+            albedo = mix(albedo, vec3(0.88, 0.91, 0.94), spot * step(vUv.y, 1.0) * (0.5 + 0.5 * edgeFade));
           } else {
             // 腹面: 白
             albedo = vec3(0.60, 0.64, 0.66);
