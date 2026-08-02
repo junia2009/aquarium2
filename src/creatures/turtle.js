@@ -92,24 +92,24 @@ export class SeaTurtle {
     belly.position.y = -0.18;
     this.group.add(belly);
 
-    // 頭 + 首
+    // 頭 + 首(首の根本は甲羅の中まで差し込んで連続させる)
     this.head = new THREE.Group();
-    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.22, 0.5, 10), skin);
-    neck.rotation.x = Math.PI / 2 - 0.25;
-    neck.position.set(0, 0.02, 0.2);
+    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.26, 1.1, 12), skin);
+    neck.rotation.x = Math.PI / 2 - 0.2;
+    neck.position.set(0, 0.10, 0.22);
     this.head.add(neck);
-    const skull = new THREE.Mesh(new THREE.SphereGeometry(0.24, 14, 10), skin);
-    skull.scale.set(0.82, 0.75, 1.15);
-    skull.position.set(0, 0.1, 0.48);
+    const skull = new THREE.Mesh(new THREE.SphereGeometry(0.23, 14, 10), skin);
+    skull.scale.set(0.85, 0.78, 1.2);
+    skull.position.set(0, 0.21, 0.78);
     this.head.add(skull);
     // 目
     const eyeMat = new THREE.MeshStandardMaterial({ color: '#141414', roughness: 0.3 });
     for (const s of [-1, 1]) {
       const eye = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 6), eyeMat);
-      eye.position.set(s * 0.16, 0.16, 0.58);
+      eye.position.set(s * 0.155, 0.28, 0.88);
       this.head.add(eye);
     }
-    this.head.position.set(0, 0.05, 1.5);
+    this.head.position.set(0, 0.02, 1.05);
     this.group.add(this.head);
 
     // 前肢(大きな翼)・後肢
