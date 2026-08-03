@@ -1,10 +1,11 @@
 import * as THREE from 'three';
-import { baseUniforms, WORLD } from '../env.js';
+import { baseUniforms, WORLD, U } from '../env.js';
 import { buildFishGeometry } from './fishGeometry.js';
 import { createFishMaterial } from './fishMaterial.js';
 import { wander1 } from '../noise.js';
 import { clampToTerrain } from '../collision.js';
 import { sandHeight } from '../environment/seabed.js';
+import { UW_NOISE } from '../glsl.js';
 
 // ============ バンドウイルカ ============
 // 哺乳類なので尾びれは水平で、体を上下にうねらせて泳ぐ。
@@ -106,97 +107,219 @@ function buildDolphinGeometry(kind) {
 }
 
 // ============ しぶき ============
-// 水面を出入りした瞬間に、その場から白い飛沫と泡が広がる。
-// 位置と発生時刻をGPUへ渡し、複数のしぶきを一度に扱う。
-const SPLASH_SLOTS = 6;
+// 水面を出入りした瞬間の水柱・飛沫と、そのあと水面に残って広がる泡の輪。
+// 位置・発生時刻・規模をGPUへ渡し、複数のしぶきを一度に扱う。
+//
+// 実際の跳躍では、離水より着水のほうがはるかに派手になる。
+// 離水は体が水を持ち上げるだけだが、着水は落下のエネルギーが一気に
+// 水面へ移るためで、burst() の strength でその差をつけている。
+const SPLASH_SLOTS = 10;
+
+// 水面のうねり。水面シェーダと同じ式で、泡の輪を波に乗せるために使う
+const SWELL_GLSL = /* glsl */ `
+float splashSwell(vec2 p, float t){
+  return sin(p.x * 0.11 + t * 0.7) * 0.35
+       + sin(dot(p, vec2(0.07, 0.09)) + t * 0.5) * 0.45
+       + sin(dot(p, vec2(-0.13, 0.05)) + t * 0.9) * 0.2;
+}
+`;
 
 class SplashField {
   constructor(parent) {
-    const PER = 90;
+    this.origins = [];
+    this.times = [];
+    this.strength = [];
+    for (let i = 0; i < SPLASH_SLOTS; i++) {
+      this.origins.push(new THREE.Vector3(0, -999, 0));
+      this.times.push(-99);
+      this.strength.push(0);
+    }
+    const shared = {
+      ...baseUniforms(),
+      uOrigins: { value: this.origins },
+      uTimes: { value: this.times },
+      uStrength: { value: this.strength },
+      uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
+    };
+
+    // ---------- 飛沫の粒 ----------
+    const PER = 260;
     const count = SPLASH_SLOTS * PER;
     const positions = new Float32Array(count * 3);
     const seeds = new Float32Array(count * 4);
+    const jit = new Float32Array(count * 2);
     for (let i = 0; i < count; i++) {
-      const slot = Math.floor(i / PER);
       const a = Math.random() * Math.PI * 2;
-      const r = Math.pow(Math.random(), 0.6);
-      seeds[i * 4 + 0] = Math.cos(a) * r;      // 横方向
+      // 中心ほど密に。水柱の芯と外へ散る飛沫を一度に表す
+      const r = Math.pow(Math.random(), 0.75);
+      seeds[i * 4 + 0] = Math.cos(a) * r;
       seeds[i * 4 + 1] = Math.sin(a) * r;
-      seeds[i * 4 + 2] = 0.35 + Math.random(); // 初速の個体差
-      seeds[i * 4 + 3] = slot;                 // どのしぶきに属するか
+      seeds[i * 4 + 2] = 0.30 + Math.random();       // 初速の個体差
+      seeds[i * 4 + 3] = Math.floor(i / PER);        // 所属するしぶき
+      // 中心に近い粒ほど高く上がり(水柱)、外の粒は低く飛ぶ(飛沫)
+      jit[i * 2 + 0] = (1.0 - r) * (0.5 + Math.random() * 0.8);
+      jit[i * 2 + 1] = Math.random();                // 粒の大きさ
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geo.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 4));
-
-    this.origins = [];
-    this.times = [];
-    for (let i = 0; i < SPLASH_SLOTS; i++) {
-      this.origins.push(new THREE.Vector3(0, -999, 0));
-      this.times.push(-99);
-    }
+    geo.setAttribute('aJit', new THREE.BufferAttribute(jit, 2));
 
     this.mat = new THREE.ShaderMaterial({
-      uniforms: {
-        ...baseUniforms(),
-        uOrigins: { value: this.origins },
-        uTimes: { value: this.times },
-        uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
-      },
+      uniforms: shared,
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
       vertexShader: /* glsl */ `
         uniform float uTime;
+        uniform float uSurfaceY;
         uniform vec3 uOrigins[${SPLASH_SLOTS}];
         uniform float uTimes[${SPLASH_SLOTS}];
+        uniform float uStrength[${SPLASH_SLOTS}];
         uniform float uPixelRatio;
         attribute vec4 aSeed;
+        attribute vec2 aJit;
         varying float vA;
+        varying float vFoam;
         void main() {
           int slot = int(aSeed.w + 0.5);
-          vec3 o = uOrigins[slot];
           float age = uTime - uTimes[slot];
-          if (age < 0.0 || age > 1.8) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); vA = 0.0; return; }
-          // 放物線を描いて飛び散り、水中では急速に減速する
+          float st = uStrength[slot];
+          float life = 1.5 + 1.1 * aJit.y;
+          if (age < 0.0 || age > life) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); vA = 0.0; return; }
+
           float sp = aSeed.z;
-          vec3 p = o;
-          p.xz += aSeed.xy * sp * 2.6 * age;
-          p.y += sp * 3.2 * age - 0.5 * ${GRAVITY.toFixed(1)} * age * age;
+          vec3 p = uOrigins[slot];
+          // 横へは空気抵抗で減速しながら散る(∫v·e^(-kt)dt = v/k·(1-e^(-kt)))
+          float horiz = sp * (2.7 + 3.4 * st);
+          p.xz += aSeed.xy * horiz / 2.2 * (1.0 - exp(-2.2 * age));
+          // 上へは弾道。芯の粒ほど高く上がって水柱になる
+          float up = (1.4 + 4.2 * aJit.x) * (0.55 + 0.75 * st) * sp;
+          p.y += up * age - 0.5 * ${GRAVITY.toFixed(1)} * age * age;
+
           vec4 mv = viewMatrix * vec4(p, 1.0);
           gl_Position = projectionMatrix * mv;
-          gl_PointSize = (0.5 + sp * 0.7) * 34.0 * uPixelRatio / max(-mv.z, 0.1);
-          vA = (1.0 - age / 1.8) * (1.0 - smoothstep(0.0, 0.25, age) * 0.35);
+          // 水塊は大きく、細かい飛沫は小さく
+          float rad = (0.10 + aJit.y * 0.22) * (0.7 + 0.6 * st);
+          gl_PointSize = rad * 1200.0 * uPixelRatio / max(-mv.z, 0.5);
+
+          vA = pow(1.0 - age / life, 1.3);
+          // 落ちて水面より下へ入った粒は消える
+          vA *= smoothstep(-0.9, 0.1, p.y - uSurfaceY);
+          vA *= 0.55 + 0.75 * st;
+          // 立ち上がりの一瞬は白く濃い水塊、あとは薄い霧
+          vFoam = 1.0 - smoothstep(0.0, 0.45, age);
         }
       `,
       fragmentShader: /* glsl */ `
         varying float vA;
+        varying float vFoam;
         void main() {
           vec2 c = gl_PointCoord - 0.5;
           float d = length(c);
           if (d > 0.5) discard;
-          float a = smoothstep(0.5, 0.12, d) * vA * 0.6;
-          gl_FragColor = vec4(vec3(0.85, 0.94, 1.0) * a, a);
+          // 芯が濃く縁がぼける粒。白い水塊のときはより締まった形に
+          float core = smoothstep(0.5, mix(0.22, 0.05, vFoam), d);
+          float a = core * vA * (0.24 + 0.44 * vFoam);
+          vec3 col = mix(vec3(0.80, 0.90, 1.0), vec3(1.0, 1.0, 1.0), vFoam);
+          gl_FragColor = vec4(col * a, a);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
         }
       `,
     });
-
     this.points = new THREE.Points(geo, this.mat);
     this.points.frustumCulled = false;
     this.points.renderOrder = 62;
     parent.add(this.points);
+
+    // ---------- 水面に残る泡の輪 ----------
+    // 粒だけだと一瞬で終わってしまう。実際は着水のあと数秒、
+    // 白い泡が輪になって広がりながら消えていく。上空から見ると特に目立つ。
+    const base = new THREE.PlaneGeometry(1, 1);
+    base.rotateX(-Math.PI / 2);
+    const ring = new THREE.InstancedBufferGeometry();
+    ring.index = base.index;
+    ring.setAttribute('position', base.attributes.position);
+    ring.setAttribute('uv', base.attributes.uv);
+    ring.instanceCount = SPLASH_SLOTS;
+    ring.setAttribute(
+      'aSlot',
+      new THREE.InstancedBufferAttribute(Float32Array.from({ length: SPLASH_SLOTS }, (_, i) => i), 1)
+    );
+
+    this.foamMat = new THREE.ShaderMaterial({
+      uniforms: shared,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      vertexShader: UW_NOISE + SWELL_GLSL + /* glsl */ `
+        uniform float uTime;
+        uniform float uSurfaceY;
+        uniform vec3 uOrigins[${SPLASH_SLOTS}];
+        uniform float uTimes[${SPLASH_SLOTS}];
+        uniform float uStrength[${SPLASH_SLOTS}];
+        attribute float aSlot;
+        varying vec2 vUv;
+        varying float vAge;
+        varying float vSt;
+        void main() {
+          int s = int(aSlot + 0.5);
+          float age = uTime - uTimes[s];
+          vSt = uStrength[s];
+          vAge = age;
+          vUv = uv;
+          if (age < 0.0 || age > 3.2) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+          // 広がる速度は最初が速く、だんだん鈍る
+          float R = (1.1 + 4.2 * vSt) * (0.45 + 1.9 * (1.0 - exp(-1.5 * age)));
+          vec3 o = uOrigins[s];
+          vec3 p = vec3(o.x + position.x * R * 2.0, 0.0, o.z + position.z * R * 2.0);
+          // 泡は水面に浮くので、うねりに乗せる
+          p.y = uSurfaceY + splashSwell(p.xz, uTime) + 0.05;
+          gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0);
+        }
+      `,
+      fragmentShader: UW_NOISE + /* glsl */ `
+        varying vec2 vUv;
+        varying float vAge;
+        varying float vSt;
+        void main() {
+          vec2 c = (vUv - 0.5) * 2.0;
+          float d = length(c);
+          if (d > 1.0) discard;
+          // 縁が濃く中が抜けた輪。時間とともに輪が細く外へ寄る
+          float inner = 0.20 + vAge * 0.30;
+          float band = smoothstep(1.0, 0.80, d) * smoothstep(inner, inner + 0.42, d);
+          // ちぎれた泡らしく、まだらに抜く
+          float n = fbm(c * 5.0 + vec2(vAge * 0.5, -vAge * 0.35));
+          float a = band * smoothstep(0.30, 0.72, n) * (1.0 - smoothstep(0.7, 3.2, vAge));
+          a *= 0.30 + 0.85 * vSt;
+          gl_FragColor = vec4(vec3(0.97, 0.99, 1.0) * a, a);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+        }
+      `,
+    });
+    this.foam = new THREE.Mesh(ring, this.foamMat);
+    this.foam.frustumCulled = false;
+    this.foam.renderOrder = 61;
+    parent.add(this.foam);
+
     this.next = 0;
   }
 
-  burst(pos, time) {
+  /**
+   * strength: 0.4=離水 / 1.0=着水。体が大きいほど大きく。
+   * time は必ずシェーダの uTime と同じ時計(U.uTime.value)を渡すこと。
+   * ポッドの経過時間を渡すと、ゾーンを構築した時刻ぶんずれて
+   * 常に寿命切れと判定され、しぶきが一切描かれなくなる。
+   */
+  burst(pos, time, strength = 1.0) {
     const i = this.next % SPLASH_SLOTS;
     this.next++;
     this.origins[i].copy(pos);
     this.times[i] = time;
-    this.mat.uniforms.uOrigins.value = this.origins;
-    this.mat.uniforms.uTimes.value = this.times;
+    this.strength[i] = strength;
   }
 }
 
@@ -213,6 +336,8 @@ export class DolphinPod {
     this.center = center.clone();
     this.radius = radius;
     this.length = length;
+    // しぶきの規模は体の大きさに比例させる(バンドウイルカの3.4mを1.0とする)
+    this.bodyScale = length / 3.4;
     this.time = 0;
     this.world = null;
     this.onBreach = null;   // ジャンプ時のコールバック(鳴き声など)
@@ -298,7 +423,8 @@ export class DolphinPod {
         }
         m.vel.set(Math.sin(m.heading), 0, Math.cos(m.heading)).multiplyScalar(bh.launchFwd);
         m.vel.y = bh.launchUp[0] + Math.random() * bh.launchUp[1];
-        this.splash.burst(m.pos.clone().setY(surf), t);
+        // 離水は体が水を押し上げるだけなので、着水よりは控えめ
+        this.splash.burst(m.pos.clone().setY(surf), U.uTime.value, this.bodyScale * 0.55);
         if (this.onBreach) this.onBreach();
       }
 
@@ -321,7 +447,10 @@ export class DolphinPod {
           m.state = 'cruise';
           m.timer = bh.interval[0] + Math.random() * bh.interval[1];
           m.pos.y = surf;
-          this.splash.burst(m.pos, t);
+          // 着水は落下のエネルギーが一気に水面へ移るので派手になる。
+          // 落下速度が速いほど大きく上がる
+          const impact = Math.min(Math.abs(m.vel.y) / 9.0, 1.4);
+          this.splash.burst(m.pos, U.uTime.value, this.bodyScale * (0.75 + 0.55 * impact));
           m.vel.multiplyScalar(0.45);
           m.heading = Math.atan2(m.vel.x, m.vel.z);
         }
@@ -424,9 +553,11 @@ export class DolphinPod {
       _m.setPosition(m.pos);
       this.mesh.setMatrixAt(i, _m);
 
-      // 水面を横切った瞬間にもしぶき
+      // 水面を横切った瞬間(息継ぎなど)にも小さくしぶきが上がる
       const above = m.pos.y > surf;
-      if (above !== m.wasAbove && m.state !== 'air') this.splash.burst(m.pos.clone().setY(surf), t);
+      if (above !== m.wasAbove && m.state !== 'air') {
+        this.splash.burst(m.pos.clone().setY(surf), U.uTime.value, this.bodyScale * 0.28);
+      }
       m.wasAbove = above;
     }
     this.mesh.instanceMatrix.needsUpdate = true;
