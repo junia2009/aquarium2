@@ -44,8 +44,50 @@ export class UnderwaterAudio {
 
       this.master = ctx.createGain();
       this.master.gain.value = 0;
-      src.connect(lp).connect(this.master).connect(ctx.destination);
+      this.master.connect(ctx.destination);
+
+      // 水中の層
+      this.waterGain = ctx.createGain();
+      this.waterGain.gain.value = 1;
+      src.connect(lp).connect(this.waterGain).connect(this.master);
       src.start();
+
+      // --- 水上の層(水面のさざめきと風) ---
+      // 水中のこもったゴーッとは正反対に、高域まで抜ける明るいノイズ。
+      // 頭が水面から出た瞬間にこちらへ入れ替える。
+      const abuf = ctx.createBuffer(1, ctx.sampleRate * 4, ctx.sampleRate);
+      const ad = abuf.getChannelData(0);
+      let pink = 0;
+      for (let i = 0; i < ad.length; i++) {
+        const w = Math.random() * 2 - 1;
+        pink = pink * 0.72 + w * 0.28;       // ピンクノイズ寄り
+        ad[i] = (pink * 1.6 + w * 0.35) * 0.9;
+      }
+      const asrc = ctx.createBufferSource();
+      asrc.buffer = abuf;
+      asrc.loop = true;
+
+      const abp = ctx.createBiquadFilter();
+      abp.type = 'bandpass';
+      abp.frequency.value = 900;
+      abp.Q.value = 0.5;
+
+      // 波が寄せては返す、ゆっくりした音量の呼吸
+      const swellNode = ctx.createGain();
+      swellNode.gain.value = 0.7;
+      const swell = ctx.createOscillator();
+      swell.frequency.value = 0.13;
+      const swellDepth = ctx.createGain();
+      swellDepth.gain.value = 0.25;
+      swell.connect(swellDepth).connect(swellNode.gain);
+
+      this.airGain = ctx.createGain();
+      this.airGain.gain.value = 0;
+      asrc.connect(abp).connect(swellNode).connect(this.airGain).connect(this.master);
+      asrc.start();
+      swell.start();
+
+      this.above = 0;
     }
     this.ctx.resume();
     this.master.gain.setTargetAtTime(0.16, this.ctx.currentTime, 1.2);
@@ -271,6 +313,21 @@ export class UnderwaterAudio {
       ct += gap;
       gap *= 0.93;   // だんだん詰まっていく
     }
+  }
+
+  /**
+   * 水上と水中で環境音を入れ替える。
+   * t=0 で水中のこもった低音、t=1 で水面のさざめきと風。
+   */
+  setAbove(t) {
+    if (!this.ctx || !this.waterGain) return;
+    t = Math.max(0, Math.min(1, t));
+    if (Math.abs(t - this.above) < 0.01) return;
+    this.above = t;
+    const now = this.ctx.currentTime;
+    // 頭が出入りする一瞬で切り替わるので、時定数は短く
+    this.waterGain.gain.setTargetAtTime(1 - t * 0.92, now, 0.12);
+    this.airGain.gain.setTargetAtTime(t * 0.55, now, 0.12);
   }
 
   stop() {

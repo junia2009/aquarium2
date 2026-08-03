@@ -1,11 +1,12 @@
 import * as THREE from 'three';
 import { baseUniforms, U } from '../env.js';
-import { UW_FRAG_OUTPUT } from '../glsl.js';
+import { UW_UNIFORMS, UW_SKY, UW_FRAG_OUTPUT } from '../glsl.js';
 
 // ============ 遠景ドーム(水中の青のグラデーション) ============
 // フォグの到達しない遠景。上方は水面越しの明るさ、下方は深淵の闇。
 export function createBackground(scene) {
-  const geo = new THREE.SphereGeometry(220, 32, 24);
+  // 空のグラデーションを乗せるので、水中だけの頃より細かく分割する
+  const geo = new THREE.SphereGeometry(220, 64, 40);
   const mat = new THREE.ShaderMaterial({
     uniforms: baseUniforms(),
     side: THREE.BackSide,
@@ -19,12 +20,7 @@ export function createBackground(scene) {
         gl_Position = projectionMatrix * mv;
       }
     `,
-    fragmentShader: /* glsl */ `
-      uniform vec3 uSunDir;
-      uniform vec3 uSunColor;
-      uniform float uSunI;
-      uniform vec3 uFogColor;
-      uniform float uTime;
+    fragmentShader: UW_UNIFORMS + UW_SKY + /* glsl */ `
       varying vec3 vDir;
       void main() {
         float up = clamp(vDir.y * 0.5 + 0.5, 0.0, 1.0);
@@ -37,8 +33,13 @@ export function createBackground(scene) {
         // 太陽方向のぼんやりした明るみ(水中の前方散乱)
         float sunGlow = pow(clamp(dot(normalize(vDir), uSunDir), 0.0, 1.0), 6.0);
         col += uSunColor * sunGlow * 0.35 * uSunI;
+
+        // 水上へ出たら遠景は空になる。
+        // (水中にいる間、ドームの上半分は水面に隠れて見えない)
+        float camAbove = smoothstep(-0.3, 0.9, cameraPosition.y - uSurfaceY);
+        col = mix(col, skyColor(vDir), camAbove);
+
         gl_FragColor = vec4(col, 1.0);
-        ${''}
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
       }

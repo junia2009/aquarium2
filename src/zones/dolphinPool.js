@@ -16,11 +16,15 @@ import { fbm3 } from '../noise.js';
 // イルカがジャンプできる十分な水深(水面16に対し底6前後)を確保する。
 export function poolTerrain(x, z) {
   const r = Math.hypot(x, z);
-  // 中央は平坦、外周で立ち上がる
-  const bowl = 5.4 + Math.pow(Math.max(r - 26, 0) / 16, 2.0) * 9.0;
-  // 砂紋程度の細かい起伏だけ
-  const ripple = fbm3(x * 0.05 + 30, 0, z * 0.05, 2) * 0.9;
-  return bowl + ripple;
+  // 中央は平坦、外周で立ち上がって水面のすぐ上で縁になる。
+  // 頭打ちにしないと砂の板の端(半径110)で数百の高さまで伸びてしまい、
+  // 水中では霧に隠れていても、水上へ出た瞬間に白い壁として空を埋める。
+  const rise = Math.min(Math.pow(Math.max(r - 26, 0) / 16, 2.0) * 9.0, 12.2);
+  // 縁の外側は落ち込ませる。遠景に白い台地が広がらないように
+  const drop = Math.min(Math.pow(Math.max(r - 46, 0) / 10, 1.6) * 14.0, 34.0);
+  // 砂紋程度の細かい起伏だけ(落ち込んだ先ではならす)
+  const ripple = fbm3(x * 0.05 + 30, 0, z * 0.05, 2) * 0.9 * (1 - drop / 34);
+  return 5.4 + rise - drop + ripple;
 }
 
 export const DOLPHIN_POOL = {

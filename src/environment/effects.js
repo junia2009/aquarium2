@@ -43,6 +43,10 @@ export function createGodRays(scene) {
           // ちらつき(表層の波で光が揺れる)
           float flicker = 0.75 + 0.25 * sin(uTime * 1.7 + uSeed * 20.0 + vUv.x * 9.0);
           float a = shafts * edge * vert * flicker * 0.75 * uSunI;
+          // 光芒は水中で散乱光が見える現象。板は水面より上へ少しはみ出して
+          // いるので、その部分を消し、水上視点でも出さない
+          a *= smoothstep(0.0, 0.9, uSurfaceY - vWorldPos.y);
+          a *= 1.0 - smoothstep(-0.2, 1.2, cameraPosition.y - uSurfaceY);
           vec3 col = mix(uSunColor, vec3(0.55, 0.85, 0.95), 0.45);
           gl_FragColor = vec4(col * a, a);
           #include <tonemapping_fragment>
@@ -204,8 +208,9 @@ export function createMarineSnow(scene) {
         gl_Position = projectionMatrix * mv;
         float size = 0.5 + fract(aSeed.x * 13.7) * 1.1;
         gl_PointSize = size * 3.2 * uPixelRatio * clamp(14.0 / max(-mv.z, 1.0), 0.3, 2.4);
-        // 近くの粒ほどわずかに濃く
-        vA = clamp(1.6 - length(mv.xyz) * 0.03, 0.08, 0.5);
+        // 近くの粒ほどわずかに濃く。水上へ出たら水中の浮遊物は見えない
+        vA = clamp(1.6 - length(mv.xyz) * 0.03, 0.08, 0.5)
+           * (1.0 - smoothstep(-0.2, 1.5, cameraPosition.y - ${WORLD.surfaceY.toFixed(1)}));
       }
     `,
     fragmentShader: /* glsl */ `

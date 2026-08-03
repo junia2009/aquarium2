@@ -195,7 +195,8 @@ export class DiveCamera {
     // ---- 世界の境界(砂・水面・遠すぎ防止) ----
     const floorLimit = sandHeight(this.pos.x, this.pos.z) + 0.9;
     if (this.pos.y < floorLimit) this.pos.y = floorLimit;
-    if (this.pos.y > WORLD.surfaceY - 0.6) this.pos.y = WORLD.surfaceY - 0.6;
+    // 水面は抜けられる。上空は見晴らし台くらいの高さで止める
+    if (this.pos.y > WORLD.surfaceY + 26) this.pos.y = WORLD.surfaceY + 26;
     const r = Math.hypot(this.pos.x, this.pos.z);
     const maxR = 42;
     if (r > maxR) {

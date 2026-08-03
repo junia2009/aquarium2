@@ -166,6 +166,8 @@ function animate() {
 
   active.update(dt, camera);
   diveCam.update(dt);
+  // 頭が水面から出ると、こもった水中音から水面のさざめきへ入れ替わる
+  audio.setAbove(THREE.MathUtils.smoothstep(camera.position.y, U.uSurfaceY.value - 0.2, U.uSurfaceY.value + 0.8));
 
   renderer.render(scene, camera);
   ui.tickFPS(dt);
