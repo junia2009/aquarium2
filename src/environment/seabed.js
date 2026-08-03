@@ -6,24 +6,25 @@ import { fbm3, noise3 } from '../noise.js';
 // ============ 砂底 ============
 // 起伏はCPUノイズで変位、砂紋(リップル)はシェーダで法線摂動、
 // コースティクスが最も映える場所なので強めに乗せる。
-export function createSand(scene) {
+export function createSand(scene, { height = null, tint = null } = {}) {
   const size = 220;
   const seg = 160;
   const geo = new THREE.PlaneGeometry(size, size, seg, seg);
   geo.rotateX(-Math.PI / 2);
 
+  const hf = height || reefTerrain;
   const pos = geo.attributes.position;
   for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i), z = pos.getZ(i);
-    // 大きな砂丘 + 中スケールの起伏
-    let y = fbm3(x * 0.02, 0, z * 0.02, 3) * 3.2 - 1.2;
-    y += fbm3(x * 0.08 + 7, 0, z * 0.08, 2) * 0.8;
-    pos.setY(i, y);
+    pos.setY(i, hf(pos.getX(i), pos.getZ(i)));
   }
   geo.computeVertexNormals();
 
   const mat = new THREE.ShaderMaterial({
-    uniforms: baseUniforms(),
+    uniforms: {
+      ...baseUniforms(),
+      uSandLight: { value: tint ? tint.light.clone() : new THREE.Color(0.62, 0.55, 0.42) },
+      uSandDark: { value: tint ? tint.dark.clone() : new THREE.Color(0.42, 0.38, 0.30) },
+    },
     vertexShader: /* glsl */ `
       varying vec3 vWorldPos;
       varying vec3 vNormal;
@@ -37,6 +38,8 @@ export function createSand(scene) {
     fragmentShader: UW_FRAG_PRELUDE + /* glsl */ `
       varying vec3 vWorldPos;
       varying vec3 vNormal;
+      uniform vec3 uSandLight;
+      uniform vec3 uSandDark;
 
       void main() {
         vec2 p = vWorldPos.xz;
@@ -49,7 +52,7 @@ export function createSand(scene) {
 
         // 砂の色ムラ(暗い有機物の斑・明るい貝殻片)
         float mottle = fbm(p * 0.13);
-        vec3 albedo = mix(vec3(0.62, 0.55, 0.42), vec3(0.42, 0.38, 0.30), mottle);
+        vec3 albedo = mix(uSandLight, uSandDark, mottle);
         // 貝殻片: セル内の小さな丸い点として散らす(四角く見えないように)
         vec2 fg = p * 9.0;
         vec2 fCell = floor(fg);
@@ -74,11 +77,25 @@ export function createSand(scene) {
   return mesh;
 }
 
-// 砂の高さを取得(生物の配置用に近似計算)
-export function sandHeight(x, z) {
+// ============ 地形の高さ場 ============
+// ゾーンごとに底の形が違うので、実装を差し替えられるようにしておく。
+// 生物・当たり判定・カメラはすべて sandHeight() を参照する。
+export function reefTerrain(x, z) {
   let y = fbm3(x * 0.02, 0, z * 0.02, 3) * 3.2 - 1.2;
   y += fbm3(x * 0.08 + 7, 0, z * 0.08, 2) * 0.8;
   return y;
+}
+
+let terrainFn = reefTerrain;
+
+/** ゾーンの地形を差し替える */
+export function setTerrain(fn) {
+  terrainFn = fn || reefTerrain;
+}
+
+/** 砂の高さ(生物の配置・当たり判定に使う) */
+export function sandHeight(x, z) {
+  return terrainFn(x, z);
 }
 
 // ============ 岩 ============

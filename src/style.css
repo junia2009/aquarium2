@@ -65,6 +65,23 @@ body {
 .chip.on { border-color: var(--accent); color: var(--accent); }
 #fps { font-size: 10px; color: rgba(140, 180, 200, 0.55); padding-left: 4px; }
 
+/* ---- ゾーン切替 ---- */
+#zoneBar {
+  position: absolute; top: 22px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 8px; z-index: 20;
+  background: var(--glass); border: 1px solid var(--glass-line);
+  backdrop-filter: blur(10px); border-radius: 14px; padding: 5px;
+}
+#zoneBar .zone {
+  background: transparent; border: none; color: var(--dim);
+  border-radius: 10px; padding: 8px 15px; font-size: 13px; cursor: pointer;
+  display: flex; align-items: center; gap: 7px; white-space: nowrap;
+  font-family: inherit; transition: background 0.18s, color 0.18s;
+}
+#zoneBar .zone .zi { font-size: 16px; }
+#zoneBar .zone:hover { color: var(--ink); background: rgba(30, 78, 108, 0.5); }
+#zoneBar .zone.on { background: rgba(40, 104, 140, 0.85); color: #fff; }
+
 /* ---- 図鑑パネル ---- */
 #panelToggle {
   position: absolute; top: 22px; right: 24px; z-index: 20;
@@ -113,4 +130,10 @@ body {
   #panel { width: 86%; }
   #hud-title h1 { font-size: 20px; }
   #hud-title .hint { display: none; }
+  /* 狭い画面ではゾーンタブを下へ逃がす(タイトルと重ならないように) */
+  #zoneBar {
+    top: auto; bottom: 78px; padding: 4px;
+    max-width: calc(100% - 32px); overflow-x: auto;
+  }
+  #zoneBar .zone { padding: 7px 12px; font-size: 12px; }
 }

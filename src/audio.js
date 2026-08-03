@@ -195,6 +195,75 @@ export class UnderwaterAudio {
     osc.onended = () => { try { g.disconnect(); lp.disconnect(); } catch (e) { /* 既に切断済み */ } };
   }
 
+  // ============ イルカの鳴き声 ============
+  // 個体識別に使う「シグネチャーホイッスル」= 素早く上下する口笛のような音と、
+  // エコーロケーションのクリック列を組み合わせる。
+  dolphinCall() {
+    if (!this.enabled || !this.ctx) return;
+    const ctx = this.ctx;
+    const t0 = ctx.currentTime + 0.02;
+    const reverb = this._reverb();
+
+    // --- ホイッスル: 高い音程が素早くうねる ---
+    const dur = 0.5 + Math.random() * 0.5;
+    const N = 64;
+    const f0 = 2200 + Math.random() * 1600;
+    const curve = new Float32Array(N);
+    const wob = 1.5 + Math.random() * 2.0;   // うねりの回数
+    const climb = 0.35 + Math.random() * 0.7;
+    for (let i = 0; i < N; i++) {
+      const t = i / (N - 1);
+      curve[i] = f0 * (1 + climb * t) * (1 + 0.18 * Math.sin(t * Math.PI * 2 * wob));
+    }
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueCurveAtTime(curve, t0, dur);
+    // 倍音を少し足すと「口笛」らしくなる
+    const osc2 = ctx.createOscillator();
+    osc2.type = 'sine';
+    const c2 = new Float32Array(N);
+    for (let i = 0; i < N; i++) c2[i] = Math.min(curve[i] * 2, 18000);
+    osc2.frequency.setValueCurveAtTime(c2, t0, dur);
+    const g2 = ctx.createGain();
+    g2.gain.value = 0.22;
+
+    const wg = ctx.createGain();
+    wg.gain.setValueAtTime(0.0001, t0);
+    wg.gain.exponentialRampToValueAtTime(0.05, t0 + 0.06);
+    wg.gain.setValueAtTime(0.05, t0 + dur * 0.7);
+    wg.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+
+    osc.connect(wg);
+    osc2.connect(g2).connect(wg);
+    wg.connect(ctx.destination);
+    wg.connect(reverb);
+    osc.start(t0); osc2.start(t0);
+    osc.stop(t0 + dur + 0.05); osc2.stop(t0 + dur + 0.05);
+
+    // --- クリック列: 短いパルスが加速しながら並ぶ ---
+    const clicks = 12 + Math.floor(Math.random() * 10);
+    let ct = t0 + dur * 0.35;
+    let gap = 0.045;
+    for (let i = 0; i < clicks; i++) {
+      const n = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * 0.006), ctx.sampleRate);
+      const d = n.getChannelData(0);
+      for (let k = 0; k < d.length; k++) d[k] = (Math.random() * 2 - 1) * (1 - k / d.length);
+      const s = ctx.createBufferSource();
+      s.buffer = n;
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = 5000 + Math.random() * 3000;
+      bp.Q.value = 3;
+      const cg = ctx.createGain();
+      cg.gain.value = 0.020;
+      s.connect(bp).connect(cg).connect(ctx.destination);
+      cg.connect(reverb);
+      s.start(ct);
+      ct += gap;
+      gap *= 0.93;   // だんだん詰まっていく
+    }
+  }
+
   stop() {
     this.enabled = false;
     if (this.bubbleTimer) clearTimeout(this.bubbleTimer);

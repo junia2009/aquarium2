@@ -1,5 +1,5 @@
 // ============ 展示生物の図鑑データ ============
-export const SPECIES = [
+export const GREAT_TANK_SPECIES = [
   {
     key: 'whaleshark',
     icon: '🦈',
@@ -71,5 +71,16 @@ export const SPECIES = [
     sci: 'Heteroconger hassi',
     desc: '砂底の巣穴から上半身だけを出し、流れてくるプランクトンを食べる。犬のチン(狆)に似た顔が名前の由来。臆病で、大きな魚や影が近づくと瞬時に砂へ引っ込む。',
     eco: '💡 エイやカメが上を通過する瞬間に注目。一斉に隠れます',
+  },
+];
+
+export const DOLPHIN_POOL_SPECIES = [
+  {
+    key: 'dolphin',
+    icon: '🐬',
+    name: 'バンドウイルカ',
+    sci: 'Tursiops truncatus',
+    desc: 'ポッドと呼ばれる群れで暮らすハクジラ。哺乳類なので尾びれは水平で、体を上下にうねらせて泳ぐ。口笛のような音(ホイッスル)で個体ごとに固有の「名前」を持ち、仲間を呼び合う。',
+    eco: '💡 ときどき水面を突き破ってジャンプします。水中からは、しぶきを上げて水面の向こうへ消え、また戻ってくるように見えます',
   },
 ];

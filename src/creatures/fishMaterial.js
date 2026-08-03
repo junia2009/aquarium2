@@ -183,7 +183,7 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, out f
     // 目(両側)
     col = mix(col, vec3(0.02), eyeDot(u, v, 0.07, 0.52, 0.035));
     glossMul = 0.5;
-  } else {
+  } else if (uPattern < 4.5) {
     // ---- ザトウクジラ: 黒に近い背、白い腹と喉の畝(ヴェントラルグルーブ) ----
     vec3 back = vec3(0.09, 0.105, 0.135);
     vec3 belly = vec3(0.78, 0.80, 0.83);
@@ -209,6 +209,32 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, out f
     // 目(両側、口角の少し上)
     col = mix(col, vec3(0.02), eyeDot(u, v, 0.09, 0.42, 0.03));
     glossMul = 0.35;
+  } else {
+    // ---- バンドウイルカ: 背は濃灰、体側は中灰、腹は淡い ----
+    // 「ケープ」と呼ばれる背の濃色部が、体側で波打つ境界を作るのが特徴
+    vec3 cape  = vec3(0.085, 0.095, 0.115);
+    vec3 flank = vec3(0.245, 0.265, 0.285);
+    vec3 belly = vec3(0.62, 0.615, 0.585);
+    // 体側の境界: 頭の後ろで高く、背びれの下で下がり、尾へ向かって上がる
+    float capeLine = 0.60 + 0.14 * sin(u * 5.2 - 1.1) - 0.10 * smoothstep(0.0, 0.35, u);
+    col = mix(flank, cape, smoothstep(capeLine - 0.10, capeLine + 0.06, v));
+    float bellyLine = 0.30 - 0.07 * smoothstep(0.25, 0.75, u);
+    col = mix(belly, col, smoothstep(bellyLine - 0.09, bellyLine + 0.10, v));
+    // 目から胸びれへ走る細い暗色線
+    float stripe = smoothstep(0.035, 0.0, abs(v - (0.46 - (u - 0.16) * 0.42)))
+                 * smoothstep(0.15, 0.20, u) * smoothstep(0.36, 0.30, u);
+    col = mix(col, cape * 0.75, stripe * 0.6);
+    // 口の裂け目(吻から頬へ)
+    float mouth = smoothstep(0.022, 0.0, abs(v - 0.36)) * smoothstep(0.005, 0.03, u) * smoothstep(0.19, 0.15, u);
+    col = mix(col, vec3(0.10, 0.10, 0.11), mouth * 0.8);
+    // 噴気孔(頭頂のくぼみ)
+    float blow = smoothstep(0.030, 0.012, length(vec2((u - 0.185) * 2.4, v - 0.99)));
+    col = mix(col, vec3(0.09, 0.09, 0.10), blow * 0.85);
+    // ひれは背と同じ濃さ
+    if (part > 0.5) col = mix(col, cape, 0.75);
+    // 目
+    col = mix(col, vec3(0.03, 0.03, 0.035), eyeDot(u, v, 0.175, 0.50, 0.030));
+    glossMul = 1.5;   // 濡れた皮膚のつや
   }
   return col;
 }
