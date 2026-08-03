@@ -198,22 +198,31 @@ export class UnderwaterAudio {
   // ============ イルカの鳴き声 ============
   // 個体識別に使う「シグネチャーホイッスル」= 素早く上下する口笛のような音と、
   // エコーロケーションのクリック列を組み合わせる。
-  dolphinCall() {
+  // 種によって声の高さ・長さ・うねり方が違う。
+  dolphinCall(kind = 'bottlenose') {
     if (!this.enabled || !this.ctx) return;
     const ctx = this.ctx;
     const t0 = ctx.currentTime + 0.02;
     const reverb = this._reverb();
 
-    // --- ホイッスル: 高い音程が素早くうねる ---
-    const dur = 0.5 + Math.random() * 0.5;
+    // シロイルカは「海のカナリア」と呼ばれるほど声色が豊かで、低めによく響く。
+    // カマイルカは小柄なぶん高く短い。
+    const V = {
+      bottlenose: { base: 2200, span: 1600, dur: [0.5, 0.5], wob: [1.5, 2.0], climb: [0.35, 0.7] },
+      beluga: { base: 900, span: 900, dur: [1.1, 1.0], wob: [3.0, 4.0], climb: [-0.3, 1.1] },
+      whiteSided: { base: 3400, span: 2200, dur: [0.28, 0.3], wob: [2.0, 2.5], climb: [0.5, 0.9] },
+    }[kind] || { base: 2200, span: 1600, dur: [0.5, 0.5], wob: [1.5, 2.0], climb: [0.35, 0.7] };
+
+    // --- ホイッスル: 音程がうねりながら駆け上がる ---
+    const dur = V.dur[0] + Math.random() * V.dur[1];
     const N = 64;
-    const f0 = 2200 + Math.random() * 1600;
+    const f0 = V.base + Math.random() * V.span;
     const curve = new Float32Array(N);
-    const wob = 1.5 + Math.random() * 2.0;   // うねりの回数
-    const climb = 0.35 + Math.random() * 0.7;
+    const wob = V.wob[0] + Math.random() * V.wob[1];   // うねりの回数
+    const climb = V.climb[0] + Math.random() * V.climb[1];
     for (let i = 0; i < N; i++) {
       const t = i / (N - 1);
-      curve[i] = f0 * (1 + climb * t) * (1 + 0.18 * Math.sin(t * Math.PI * 2 * wob));
+      curve[i] = Math.max(f0 * (1 + climb * t) * (1 + 0.18 * Math.sin(t * Math.PI * 2 * wob)), 60);
     }
     const osc = ctx.createOscillator();
     osc.type = 'sine';

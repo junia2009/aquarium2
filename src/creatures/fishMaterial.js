@@ -209,7 +209,7 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, out f
     // 目(両側、口角の少し上)
     col = mix(col, vec3(0.02), eyeDot(u, v, 0.09, 0.42, 0.03));
     glossMul = 0.35;
-  } else {
+  } else if (uPattern < 5.5) {
     // ---- バンドウイルカ: 背は濃灰、体側は中灰、腹は淡い ----
     // 「ケープ」と呼ばれる背の濃色部が、体側で波打つ境界を作るのが特徴
     vec3 cape  = vec3(0.085, 0.095, 0.115);
@@ -235,6 +235,53 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, out f
     // 目
     col = mix(col, vec3(0.03, 0.03, 0.035), eyeDot(u, v, 0.175, 0.50, 0.030));
     glossMul = 1.5;   // 濡れた皮膚のつや
+  } else if (uPattern < 6.5) {
+    // ---- シロイルカ: 全身ほぼ白。陰影だけで形を見せる ----
+    vec3 white = vec3(0.70, 0.705, 0.715);
+    col = white;
+    // 腹側はごくわずかに明るく、背は少しだけくすむ
+    col *= 0.94 + 0.10 * (1.0 - smoothstep(0.45, 0.95, v));
+    // 背びれの代わりの低い隆起(背中の稜線がうっすら影になる)
+    float ridge = smoothstep(0.030, 0.0, abs(v - 0.985))
+                * smoothstep(0.36, 0.46, u) * smoothstep(0.80, 0.68, u);
+    col = mix(col, white * 0.86, ridge * 0.7);
+    // 皮膚の質感(かすかな斑)
+    col *= 0.97 + 0.06 * fbm(vec2(u * 22.0, v * 9.0));
+    // 口の裂け目と、口角のわずかな影(ほほえんで見えるライン)
+    float mouth = smoothstep(0.020, 0.0, abs(v - 0.34))
+                * smoothstep(0.01, 0.05, u) * smoothstep(0.24, 0.17, u);
+    col = mix(col, vec3(0.40, 0.40, 0.41), mouth * 0.75);
+    // 噴気孔
+    float blow = smoothstep(0.030, 0.012, length(vec2((u - 0.235) * 2.4, v - 0.99)));
+    col = mix(col, vec3(0.42, 0.43, 0.44), blow * 0.7);
+    // 小さな黒い目
+    col = mix(col, vec3(0.06, 0.06, 0.07), eyeDot(u, v, 0.225, 0.52, 0.024));
+    glossMul = 1.7;
+  } else {
+    // ---- カマイルカ: 黒い背・白い腹に、体側を走る淡灰色の帯 ----
+    vec3 back  = vec3(0.055, 0.060, 0.075);
+    vec3 belly = vec3(0.72, 0.715, 0.70);
+    vec3 sash  = vec3(0.40, 0.425, 0.445);   // サスペンダー模様
+    // 背と腹の境界。頭寄りで高く、尾に向かって下がる
+    float line = 0.46 - 0.10 * smoothstep(0.2, 0.9, u);
+    col = mix(belly, back, smoothstep(line - 0.10, line + 0.08, v));
+    // 体側の淡い帯: 目の上あたりから始まり、尾柄で背へ駆け上がる
+    float sashCenter = 0.60 + 0.30 * smoothstep(0.45, 0.95, u);
+    float sashW = 0.10 + 0.06 * smoothstep(0.3, 0.9, u);
+    float band = smoothstep(sashW, sashW * 0.35, abs(v - sashCenter))
+               * smoothstep(0.16, 0.28, u);
+    col = mix(col, sash, band * 0.85);
+    // 尾柄の後半はさらに淡くなる
+    col = mix(col, sash * 1.25, band * smoothstep(0.62, 0.92, u) * 0.6);
+    // 吻は黒い
+    col = mix(col, back, smoothstep(0.16, 0.04, u) * 0.8);
+    // 背びれは前縁が黒く後縁が淡い二色
+    if (abs(part - 2.0) < 0.1) {
+      col = mix(back, sash * 1.15, smoothstep(0.46, 0.60, buv.x));
+    }
+    // 目
+    col = mix(col, vec3(0.02, 0.02, 0.03), eyeDot(u, v, 0.185, 0.50, 0.028));
+    glossMul = 1.6;
   }
   return col;
 }

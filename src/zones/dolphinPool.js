@@ -4,7 +4,7 @@ import { createWaterSurface } from '../environment/surface.js';
 import { createSand } from '../environment/seabed.js';
 import { createGodRays, createBubbles, createMarineSnow } from '../environment/effects.js';
 import { CollisionWorld } from '../collision.js';
-import { DolphinPod } from '../creatures/dolphin.js';
+import { DolphinPod, DOLPHIN_KINDS } from '../creatures/dolphin.js';
 import { DOLPHIN_POOL_SPECIES } from '../species.js';
 import { fbm3 } from '../noise.js';
 
@@ -61,23 +61,47 @@ export const DOLPHIN_POOL = {
     ]);
     createMarineSnow(root);
 
-    // --- イルカのポッド ---
-    const pod = new DolphinPod(root, {
-      count: 5,
-      center: new THREE.Vector3(0, 10.8, 0),
-      radius: 15,
-      length: 3.4,
-    });
-    pod.setWorld(world);
-    pod.onBreach = () => audio.dolphinCall();
+    // --- 3種のポッド ---
+    // 種ごとに遊泳域をずらして、同じ水槽の別の場所で暮らしているように見せる
+    const pods = {
+      bottlenose: new DolphinPod(root, {
+        kind: DOLPHIN_KINDS.bottlenose,
+        count: 4,
+        center: new THREE.Vector3(-3, 10.8, 2),
+        radius: 15,
+      }),
+      beluga: new DolphinPod(root, {
+        kind: DOLPHIN_KINDS.beluga,
+        count: 3,
+        center: new THREE.Vector3(9, 9.2, -9),   // ゆったり深めを泳ぐ
+        radius: 13,
+      }),
+      whiteSided: new DolphinPod(root, {
+        kind: DOLPHIN_KINDS.whiteSided,
+        count: 6,
+        center: new THREE.Vector3(-6, 12.0, -7),  // 俊敏に浅いところを走る
+        radius: 16,
+      }),
+    };
+
+    // 全個体を共有して、種をまたいでぶつからないようにする
+    const everyone = [];
+    for (const p of Object.values(pods)) everyone.push(...p.members);
+    for (const p of Object.values(pods)) {
+      p.setWorld(world);
+      p.setNeighbors(everyone);
+      p.onBreach = () => audio.dolphinCall(p.kind.key);
+    }
 
     return {
       world,
       followTargets: {
-        dolphin: { get: () => pod.podCenter, dist: [9, 24] },
+        bottlenose: { get: () => pods.bottlenose.podCenter, dist: [9, 24] },
+        beluga: { get: () => pods.beluga.podCenter, dist: [11, 27] },
+        whiteSided: { get: () => pods.whiteSided.podCenter, dist: [8, 21] },
       },
       update(dt, camera) {
-        pod.update(dt);
+        for (const p of Object.values(pods)) p.update(dt);
         godRays.update(camera);
       },
       onTap() { /* イルカは驚かせない */ },
