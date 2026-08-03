@@ -94,24 +94,69 @@ class GiantCruiser {
 }
 
 // ============ ジンベエザメ ============
+// 実物の特徴で外形を決めるもの:
+//   ・頭部が著しく上下に平たく、幅が広い。吻は尖らず角ばって断ち切られている
+//   ・口は先端(終端位置)にあり、頭幅いっぱいに横へ広い
+//   ・体側に3本の顕著な縦の隆起が走り、最下の1本は尾柄で強い隆起(キール)になる
+//   ・胸びれは大きな鎌形で、先端が尖って後ろへ反る
+//   ・第一背びれは体の後方6割あたり。第二背びれ・臀びれ・腹びれは小さい
+//   ・尾びれは上葉が長い三日月形
+//
+// 断面: 頭部は超楕円(角ばった平たい箱)、後方へ向かうにつれ普通の楕円へ。
+// そこへ3本の隆起をガウス分布で足す。
+function whaleSharkSection(x, y, t) {
+  // --- 平たく角ばった頭 ---
+  // 指数nが大きいほど断面は矩形に近づく。頭で最大、胴の後半で楕円へ戻す
+  const boxy = 1 - THREE.MathUtils.smoothstep(t, 0.06, 0.52);
+  const n = 2 + boxy * 1.5;
+  const k = Math.pow(Math.pow(Math.abs(x), n) + Math.pow(Math.abs(y), n), -1 / n);
+  let sx = x * k, sy = y * k;
+
+  // --- 体側の3本の隆起 ---
+  // 頭のうしろから現れ、尾に近いほど際立つ。最下の隆起は尾柄のキールへ続く
+  const grow = THREE.MathUtils.smoothstep(t, 0.14, 0.42);
+  const rear = 0.55 + 0.45 * THREE.MathUtils.smoothstep(t, 0.45, 0.95);
+  const bump = (y0, amp, w) => amp * Math.exp(-Math.pow((y - y0) / w, 2));
+  let r = bump(0.78, 0.085, 0.13)    // 背寄りの隆起
+        + bump(0.32, 0.095, 0.14)    // 体側中央の隆起
+        + bump(-0.18, 0.080, 0.13);  // 下側の隆起(尾柄でキールになる)
+  // 尾柄のキールは横へ強く張り出す
+  r += bump(-0.18, 0.16, 0.20) * THREE.MathUtils.smoothstep(t, 0.70, 1.0);
+  const s = 1 + r * grow * rear;
+  return [sx * s, sy * s];
+}
+
 export class WhaleShark {
   constructor(scene) {
     const geo = buildFishGeometry({
       // 現生最大の魚類。水槽の主役として堂々とした大きさにする
-      length: 15, height: 2.05, width: 1.85,
-      // 幅広で平たい頭、がっしりした胴、細い尾柄
-      hProfile: [0.42, 0.7, 0.92, 1.0, 0.95, 0.8, 0.5, 0.2],
-      wProfile: [0.85, 0.95, 1.0, 0.98, 0.85, 0.62, 0.38, 0.16],
-      yOffset: [-0.1, 0.0, 0.08, 0.1, 0.08, 0.02, -0.02, 0.0],
-      rings: 26, radial: 18,
-      // 上葉の長い大きな尾びれ
-      tail: { len: 0.30, height: 0.85, fork: 0.55, lobe: 0.4 },
-      dorsal: { from: 0.42, to: 0.62, height: 0.55 },
-      pectoral: { at: 0.30, len: 0.22, width: 0.07 },
+      length: 14.4, height: 1.65, width: 1.88,
+      // 平たい頭 → がっしりした胴 → 細く絞れた尾柄
+      hProfile: [0.46, 0.60, 0.74, 0.86, 0.95, 1.00, 1.00, 0.98,
+                 0.94, 0.88, 0.80, 0.70, 0.58, 0.45, 0.32, 0.19],
+      // 幅は頭のすぐ後ろが最大で、そこから一様に細くなる
+      wProfile: [0.88, 0.97, 1.00, 1.00, 0.99, 0.97, 0.94, 0.90,
+                 0.84, 0.76, 0.66, 0.54, 0.41, 0.29, 0.19, 0.12],
+      // 頭は体軸より上に乗る(頭の下面はほぼ平ら、腹だけが下へ膨らむ)
+      yOffset: [0.30, 0.25, 0.18, 0.11, 0.05, 0.02, 0.00, 0.00,
+                0.00, 0.00, 0.00, 0.01, 0.01, 0.02, 0.02, 0.02],
+      rings: 40, radial: 30,
+      sectionMod: whaleSharkSection,
+      // 尖らせず、丸く断ち切ったような吻にする
+      nose: { rings: 3, len: 0.030 },
+      // 上葉の長い三日月形の尾びれ
+      tail: { len: 0.18, height: 0.63, fork: 0.50, lobe: 0.42 },
+      dorsal: [
+        { from: 0.525, to: 0.715, height: 0.82 },        // 第一背びれ(大きい)
+        { from: 0.845, to: 0.915, height: 0.26 },        // 第二背びれ(小さい)
+      ],
+      anal: { from: 0.855, to: 0.925, height: 0.17 },
+      pectoral: { at: 0.235, len: 0.33, width: 0.145, shape: 'falcate', chord: 0.60, droop: 0.26 },
+      pelvic: { at: 0.64, len: 0.10, width: 0.045, shape: 'falcate', chord: 0.62, droop: 0.30, low: 0.82 },
     });
     this.mat = createFishMaterial({
       pattern: 3,
-      len: 15,
+      len: 14.4,
       // ゆったりした全身のうねり(大型魚ほど尾の振りは遅い)
       swim: { freq: 1.2, amp: 0.05, waveNum: 0.55, headAmp: 0.28, flapFreq: 1.0 },
     });
@@ -125,7 +170,7 @@ export class WhaleShark {
       speed: 1.8,
       seed: 12.3,
       bankScale: 0.5,
-      body: 2.0,
+      body: 2.2,
       owner: this,
     });
   }

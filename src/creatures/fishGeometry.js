@@ -28,16 +28,30 @@ export function buildFishGeometry(opts) {
     yOffset = [0.0, 0.05, 0.1, 0.1, 0.05, 0.0, -0.02, 0.0],
     rings = 20,
     radial = 14,
+    // 断面の変形。単位円上の点(x,y)と体軸位置tを受け取り、変形後の(x,y)を返す。
+    // 楕円では表せない「平たい頭」「体側の隆起」などを作るために使う。
+    sectionMod = null,
+    // 丸く詰まった鼻先。rings>0 でリングを足して半球状に閉じる
+    nose = null,
     // lobe: 上葉の伸び(サメ類) / horizontal: 水平尾びれ(クジラ類のフリューク)
     tail = { len: 0.32, height: 0.55, fork: 0.45, lobe: 0, horizontal: false },
     dorsal = { from: 0.32, to: 0.72, height: 0.5 },
+    anal = null,      // 臀びれ(背びれと同じ形式で腹側へ)
     pectoral = { at: 0.3, len: 0.30, width: 0.14 },
+    pelvic = null,    // 腹びれ(胸びれと同じ形式)
   } = opts;
 
   const positions = [];
   const bodyUV = [];
   const part = [];
   const indices = [];
+
+  // 単位円上の点に sectionMod を通す
+  const sec = (a, t) => {
+    let x = Math.sin(a), y = Math.cos(a);
+    if (sectionMod) [x, y] = sectionMod(x, y, t);
+    return [x, y];
+  };
 
   // ---- 体(リング) ----
   const zNose = L / 2;
@@ -49,10 +63,9 @@ export function buildFishGeometry(opts) {
     const yc = sampleProfile(yOffset, t) * H;
     for (let j = 0; j < radial; j++) {
       const a = (j / radial) * Math.PI * 2;
-      const y = Math.cos(a); // 1=背, -1=腹
-      const x = Math.sin(a);
+      const [x, y] = sec(a, t);           // y: 1=背, -1=腹
       positions.push(x * ww, yc + y * hh, z);
-      bodyUV.push(t, y * 0.5 + 0.5);
+      bodyUV.push(t, Math.cos(a) * 0.5 + 0.5);
       part.push(0);
     }
   }
@@ -66,13 +79,41 @@ export function buildFishGeometry(opts) {
     }
   }
 
-  // 鼻先キャップ
+  // ---- 鼻先 ----
+  // 既定は1点のキャップ。nose.rings を与えると、先頭リングの断面を
+  // 半球状に縮めながら前へ伸ばして「丸く詰まった鼻先」にする
+  // (ジンベエザメのように吻が尖っていない種のため)。
+  const noseRings = nose?.rings ?? 0;
+  const noseLen = (nose?.len ?? 0.015) * L;
+  const h0 = sampleProfile(hProfile, 0) * H;
+  const w0 = sampleProfile(wProfile, 0) * W;
+  const yc0 = sampleProfile(yOffset, 0) * H;
+  let frontRow = 0;                       // 最前リングの先頭インデックス
+  for (let i = 1; i <= noseRings; i++) {
+    const s = i / (noseRings + 1);
+    const k = Math.sqrt(Math.max(1 - s * s, 0));   // 半球状に縮む
+    const row = positions.length / 3;
+    for (let j = 0; j < radial; j++) {
+      const a = (j / radial) * Math.PI * 2;
+      const [x, y] = sec(a, 0);
+      positions.push(x * w0 * k, yc0 + y * h0 * k, zNose + s * noseLen);
+      bodyUV.push(0, Math.cos(a) * 0.5 + 0.5);
+      part.push(0);
+    }
+    for (let j = 0; j < radial; j++) {
+      const jn = (j + 1) % radial;
+      indices.push(frontRow + j, row + j, frontRow + jn);
+      indices.push(frontRow + jn, row + j, row + jn);
+    }
+    frontRow = row;
+  }
+  // 先端の1点で閉じる
   const noseIdx = positions.length / 3;
-  positions.push(0, sampleProfile(yOffset, 0) * H, zNose + L * 0.015);
+  positions.push(0, yc0, zNose + noseLen);
   bodyUV.push(0, 0.5);
   part.push(0);
   for (let j = 0; j < radial; j++) {
-    indices.push(noseIdx, j, (j + 1) % radial);
+    indices.push(noseIdx, frontRow + j, frontRow + ((j + 1) % radial));
   }
   // ---- 尾びれ: 胴体から連続して移行させる ----
   // 尾柄に蓋をして別パーツの扇を刺すと接合部で途切れて見えるので、
@@ -104,9 +145,17 @@ export function buildFishGeometry(opts) {
     const halfH = horizontal ? pedH * flat : pedH + (spreadMax - pedH) * grow;
     for (let j = 0; j < radial; j++) {
       const a = (j / radial) * Math.PI * 2;
-      const cy = Math.cos(a), sx = Math.sin(a);
-      const u = horizontal ? sx : cy;        // 広がり方向の座標
-      positions.push(sx * halfW, pedY + cy * halfH, zPed - s * extAt(u));
+      const cy = Math.cos(a), sx0 = Math.sin(a);
+      // 尾柄の断面変形(隆起など)は、ひれへ向かって滑らかに消す
+      let mx = sx0, my = cy;
+      if (sectionMod) {
+        const [dx, dy] = sectionMod(sx0, cy, 1);
+        const f = 1 - s;
+        mx = sx0 + (dx - sx0) * f;
+        my = cy + (dy - cy) * f;
+      }
+      const u = horizontal ? sx0 : cy;       // 広がり方向の座標
+      positions.push(mx * halfW, pedY + my * halfH, zPed - s * extAt(u));
       bodyUV.push(1.0 + s * 0.22, cy * 0.5 + 0.5);
       part.push(1);
     }
@@ -123,64 +172,101 @@ export function buildFishGeometry(opts) {
     }
   }
 
-  // ---- 背びれ(体の背に沿った帯) ----
-  if (dorsal) {
-    const dSegs = 6;
+  // ---- 正中のひれ(背びれ・臀びれ) ----
+  // sign = +1 で背側、-1 で腹側に生やす
+  const addMedianFin = (spec, sign) => {
+    const dSegs = spec.segs ?? 6;
     const dStart = positions.length / 3;
     for (let j = 0; j <= dSegs; j++) {
-      const t = dorsal.from + (dorsal.to - dorsal.from) * (j / dSegs);
+      const s = j / dSegs;
+      const t = spec.from + (spec.to - spec.from) * s;
       const z = zNose - t * (L - tail.len * L * 0.15);
-      const topY = sampleProfile(yOffset, t) * H + sampleProfile(hProfile, t) * H;
+      const yc = sampleProfile(yOffset, t) * H;
+      const edgeY = yc + sign * sampleProfile(hProfile, t) * H;
       // 前縁が高く後方へ低くなる
-      const finH = dorsal.height * H * (1.0 - 0.55 * (j / dSegs)) * Math.sin(Math.PI * Math.min((j / dSegs) * 2.5 + 0.15, 1));
-      positions.push(0, topY - 0.01, z);
-      bodyUV.push(t, 1.0);
+      const finH = spec.height * H * (1.0 - 0.55 * s) * Math.sin(Math.PI * Math.min(s * 2.5 + 0.15, 1));
+      positions.push(0, edgeY - sign * 0.01, z);
+      bodyUV.push(t, sign > 0 ? 1.0 : 0.0);
       part.push(2);
-      positions.push(0, topY + finH, z - finH * 0.55);
-      bodyUV.push(t, 1.15);
+      positions.push(0, edgeY + sign * finH, z - finH * (spec.sweep ?? 0.55));
+      bodyUV.push(t, sign > 0 ? 1.15 : -0.15);
       part.push(2);
     }
     for (let j = 0; j < dSegs; j++) {
       const a = dStart + j * 2;
       indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
     }
-  }
+  };
+  if (dorsal) for (const d of (Array.isArray(dorsal) ? dorsal : [dorsal])) addMedianFin(d, 1);
+  if (anal) for (const d of (Array.isArray(anal) ? anal : [anal])) addMedianFin(d, -1);
 
-  // ---- 胸びれ(左右の小さな板) ----
-  if (pectoral) {
+  // ---- 対のひれ(胸びれ・腹びれ) ----
+  const addPairedFin = (spec) => {
     for (const side of [1, -1]) {
       const partId = side > 0 ? 4 : 3;
-      const t = pectoral.at;
+      const t = spec.at;
       const z = zNose - t * L;
       const x0 = sampleProfile(wProfile, t) * W * 0.9 * side;
-      const y0 = sampleProfile(yOffset, t) * H - sampleProfile(hProfile, t) * H * 0.25;
-      const pSegs = 3;
+      const y0 = sampleProfile(yOffset, t) * H - sampleProfile(hProfile, t) * H * (spec.low ?? 0.25);
       const pStart = positions.length / 3;
-      for (let j = 0; j <= pSegs; j++) {
-        const s = j / pSegs; // 0=付け根, 1=先端
-        const sweep = pectoral.len * L;
-        positions.push(
-          x0 + side * s * pectoral.width * L * 1.6,
-          y0 - s * sweep * 0.25,
-          z - s * sweep
-        );
-        bodyUV.push(t + s * 0.1, 0.3);
-        part.push(partId);
-        positions.push(
-          x0 + side * s * pectoral.width * L * 1.1,
-          y0 - s * sweep * 0.05,
-          z - s * sweep * 0.55
-        );
-        bodyUV.push(t + s * 0.06, 0.35);
-        part.push(partId);
-      }
-      for (let j = 0; j < pSegs; j++) {
-        const a = pStart + j * 2;
-        if (side > 0) indices.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
-        else indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+
+      if (spec.shape === 'falcate') {
+        // 鎌形。前縁はほぼ直線に後退し、後縁がえぐれて先端が尖る。
+        // ジンベエザメやマグロ類の翼のような胸びれ。
+        const pSegs = spec.segs ?? 8;
+        const span = spec.width * L;         // 外への張り出し
+        const back = spec.len * L;           // 後退量
+        const chord0 = (spec.chord ?? 0.42) * back;
+        for (let j = 0; j <= pSegs; j++) {
+          const s = j / pSegs;
+          const outX = side * span * Math.sin(s * 1.30);
+          const dropY = -(spec.droop ?? 0.22) * back * s * s;
+          const sweep = back * (0.30 * s + 0.72 * s * s);
+          const chord = chord0 * Math.pow(1 - s, 0.62);
+          // 前縁
+          positions.push(x0 + outX, y0 + dropY, z - sweep);
+          bodyUV.push(t + s * 0.05, 0.34);
+          part.push(partId);
+          // 後縁
+          positions.push(x0 + outX * 0.98, y0 + dropY - chord * 0.10, z - sweep - chord);
+          bodyUV.push(t + s * 0.10, 0.28);
+          part.push(partId);
+        }
+        for (let j = 0; j < pSegs; j++) {
+          const a = pStart + j * 2;
+          if (side > 0) indices.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
+          else indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+        }
+      } else {
+        const pSegs = spec.segs ?? 3;
+        for (let j = 0; j <= pSegs; j++) {
+          const s = j / pSegs; // 0=付け根, 1=先端
+          const sweep = spec.len * L;
+          positions.push(
+            x0 + side * s * spec.width * L * 1.6,
+            y0 - s * sweep * 0.25,
+            z - s * sweep
+          );
+          bodyUV.push(t + s * 0.1, 0.3);
+          part.push(partId);
+          positions.push(
+            x0 + side * s * spec.width * L * 1.1,
+            y0 - s * sweep * 0.05,
+            z - s * sweep * 0.55
+          );
+          bodyUV.push(t + s * 0.06, 0.35);
+          part.push(partId);
+        }
+        for (let j = 0; j < pSegs; j++) {
+          const a = pStart + j * 2;
+          if (side > 0) indices.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
+          else indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+        }
       }
     }
-  }
+  };
+  if (pectoral) addPairedFin(pectoral);
+  if (pelvic) addPairedFin(pelvic);
 
   const geo = new THREE.BufferGeometry();
   geo.setIndex(indices);

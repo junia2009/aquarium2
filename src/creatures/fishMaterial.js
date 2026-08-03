@@ -162,27 +162,85 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, out f
     col = mix(col, vec3(0.015, 0.015, 0.03), black * 0.95);
     glossMul = 0.8;
   } else if (uPattern < 3.5) {
-    // ---- ジンベエザメ: 青灰色の背に市松状の白斑と縞、白い腹 ----
-    vec3 back = vec3(0.14, 0.19, 0.26);
-    vec3 belly = vec3(0.80, 0.84, 0.85);
-    col = mix(belly, back, smoothstep(0.26, 0.44, v));
-    // 白斑: 格子セルごとに少しずらした円。背側のみ
-    vec2 g = vec2(u * 30.0, v * 11.0);
+    // ---- ジンベエザメ ----
+    // 濃い青灰色の背に、淡い縦帯と横線が作る「市松の格子」。
+    // その升目ひとつずつに白斑が入る。頭部だけは格子がなく、
+    // 細かい斑点が密に散る。腹は白く、境界がはっきり分かれる。
+    vec3 back  = vec3(0.105, 0.140, 0.185);
+    vec3 belly = vec3(0.76, 0.785, 0.795);
+    vec3 pale  = vec3(0.74, 0.80, 0.815);   // 斑と格子線の色
+
+    // 腹との境界。頭では高く(頭の下面はほぼ白い)、胴では低い位置に来る
+    float border = 0.205 + 0.08 * smoothstep(0.22, 0.02, u)
+                 + sin(u * 19.0 + tint * 5.0) * 0.010;
+    col = mix(belly, back, smoothstep(border - 0.025, border + 0.055, v));
+
+    // --- 胴: 市松の格子と、升目ごとの白斑 ---
+    // 格子の間隔をゆるく歪ませて、方眼紙のような機械的な並びを崩す
+    float wob = fbm(vec2(u * 3.5, v * 2.2)) * 0.55;
+    vec2 g = vec2(u * 17.0 + wob, v * 9.0 + wob * 0.6);
     vec2 cell = floor(g);
     vec2 f = fract(g) - 0.5;
-    vec2 jitter = (vec2(hash12(cell), hash12(cell + 7.3)) - 0.5) * 0.45;
-    float spot = smoothstep(0.30, 0.16, length(f + jitter));
-    spot *= step(0.30, hash12(cell * 1.71));         // 出現をまばらに
-    float topMask = smoothstep(0.38, 0.50, v);
-    col = mix(col, vec3(0.88, 0.92, 0.94), spot * topMask * 0.9);
-    // 斑列の間の淡い横縞(市松模様の格子線)
-    float stripe = smoothstep(0.42, 0.5, abs(fract(g.y) - 0.5));
-    col += vec3(0.10, 0.12, 0.13) * stripe * topMask * 0.5;
-    // 口元(先端下側)を暗く
-    col = mix(col, vec3(0.10, 0.12, 0.14), smoothstep(0.05, 0.0, u) * smoothstep(0.55, 0.35, v));
-    // 目(両側)
-    col = mix(col, vec3(0.02), eyeDot(u, v, 0.07, 0.52, 0.035));
-    glossMul = 0.5;
+    float grid = max(smoothstep(0.462, 0.500, abs(f.x)) * 0.75,  // 淡い縦帯
+                     smoothstep(0.452, 0.495, abs(f.y)));        // 淡い横線
+    vec2 jt = (vec2(hash12(cell), hash12(cell + 7.3)) - 0.5) * 0.34;
+    float rad = 0.195 + hash12(cell * 3.1) * 0.085;
+    float spot = smoothstep(rad, rad * 0.35, length((f + jt) * vec2(1.0, 1.1)));
+    spot *= step(0.10, hash12(cell * 1.71));       // ときどき抜ける
+
+    // --- 頭部: 格子はなく、細かい斑点が密に散る ---
+    vec2 hg = vec2(u * 58.0, v * 28.0);
+    vec2 hcell = floor(hg);
+    vec2 hjt = (vec2(hash12(hcell + 2.1), hash12(hcell + 9.7)) - 0.5) * 0.5;
+    float hspot = smoothstep(0.21, 0.07, length(fract(hg) - 0.5 + hjt))
+                * step(0.38, hash12(hcell * 5.3));
+
+    float headMix = smoothstep(0.30, 0.08, u);
+    // 頭の前面は面積が広くのっぺりしやすいので、細かいむらを足す
+    col *= 1.0 + (fbm(vec2(u * 40.0, v * 26.0)) - 0.5) * 0.16 * headMix;
+    float marks = mix(max(spot, grid * 0.30), hspot * 0.9, headMix);
+    float topMask = smoothstep(border + 0.02, border + 0.13, v);
+    col = mix(col, pale, clamp(marks, 0.0, 1.0) * topMask * 0.9);
+
+    // --- 5対の大きな鰓裂(頭のうしろ、胸びれの手前) ---
+    float gv = clamp((v - 0.30) / 0.42, 0.0, 1.0);
+    float gu = u - 0.105 - gv * 0.012;           // 上端ほどわずかに後ろへ倒れる
+    float slits = 0.0;
+    for (int gi = 0; gi < 5; gi++) {
+      slits = max(slits, smoothstep(0.0080, 0.0018, abs(gu - float(gi) * 0.0245)));
+    }
+    slits *= smoothstep(0.0, 0.10, gv) * smoothstep(1.0, 0.85, gv);
+    col = mix(col, back * 0.28, slits * 0.85);
+
+    // --- 口: 吻の先端にあり、頭幅いっぱいに横へ広い(終端口) ---
+    // 鼻先のリングはすべて u=0 なので、前面の上下位置は v で切り分ける
+    // 口は前面の下寄りを横一文字に走る。真横の一直線だと板に描いた線に
+    // 見えるので、断面角に応じてわずかに反らせる
+    float front = smoothstep(0.038, 0.0, u);
+    float mline = 0.335 + 0.022 * cos(v * 9.0);
+    float gape = smoothstep(0.040, 0.014, abs(v - mline));
+    col = mix(col, vec3(0.035, 0.045, 0.058), front * gape * 0.9);
+    // 口の下のわずかに明るい唇
+    col = mix(col, vec3(0.66, 0.685, 0.695),
+              front * smoothstep(0.030, 0.010, abs(v - mline + 0.052)) * 0.55);
+
+    // --- 目: 頭の側面の角、低く前寄りに小さく ---
+    col = mix(col, vec3(0.02, 0.025, 0.03), eyeDot(u, v, 0.048, 0.375, 0.022));
+
+    // --- ひれ ---
+    // 尾びれ・背びれ・胸びれとも背と同じ濃さで、上面に斑が乗る。
+    // 体のUVをそのまま使うと腹の白がひれに流れ込んでしまうので、
+    // ひれは独立して塗る。
+    if (part > 0.5) {
+      vec2 fg = vec2(buv.x * 23.0, v * 13.0);
+      vec2 fc = floor(fg);
+      float fs = smoothstep(0.26, 0.10, length(fract(fg) - 0.5))
+               * step(0.46, hash12(fc * 2.7));
+      col = mix(back, pale, fs * 0.6);
+      // 縁はわずかに明るく、薄い膜らしく見せる
+      col = mix(col, pale * 0.7, smoothstep(0.6, 1.0, abs(v - 0.5) * 2.0) * 0.3);
+    }
+    glossMul = 0.34;
   } else if (uPattern < 4.5) {
     // ---- ザトウクジラ: 黒に近い背、白い腹と喉の畝(ヴェントラルグルーブ) ----
     vec3 back = vec3(0.09, 0.105, 0.135);
