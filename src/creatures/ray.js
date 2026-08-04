@@ -19,23 +19,32 @@ function buildRayGeometry() {
   const segU = 30;    // 翼方向
   const segV = 18;    // 体軸方向
 
-  // 前縁: 吻(中央の張り出し)から翼端へ後退
+  // 前縁: 吻(中央の張り出し)から翼端へ後退。
+  // (1-|u|)^n をそのまま使うと u=0 で傾きが折れて、吻が尖った V になる。
+  // |u|^p を挟んで中心をなめらかにし、丸い吻(アヒルのくちばし状)にする。
   const zLead = (u) => {
     const a = Math.abs(u);
-    return -0.2 + 1.35 * Math.pow(1 - a, 1.2) + 0.5 * Math.exp(-Math.pow(u * 5.5, 2));
+    return -0.2
+      + 1.30 * Math.pow(Math.max(1 - Math.pow(a, 1.7), 0), 1.15)
+      + 0.44 * Math.exp(-Math.pow(u * 4.2, 2));
   };
-  // 後縁: 翼端から中央後方へ
+  // 後縁: 翼端から中央後方へ。尾の付け根の両脇に腹びれが張り出す
   const zTrail = (u) => {
     const a = Math.abs(u);
-    return -0.2 - 1.6 * Math.pow(1 - a, 1.35);
+    let z = -0.2 - 1.52 * Math.pow(Math.max(1 - Math.pow(a, 1.8), 0), 1.2);
+    z -= 0.36 * Math.exp(-Math.pow((a - 0.150) / 0.115, 2));   // 腹びれ
+    return z;
   };
-  // 厚み: 胴の中央が盛り上がり、頭部にも膨らみ
+  // 厚み: 胴の中央が盛り上がり、頭部にも膨らみ。
+  // 縁(前縁・後縁・翼端)では必ず 0 にする。ここを 0 にしないと
+  // 上下2枚のシートが合わさらず、吻の先が口を開けたように裂けて見える。
   const thick = (u, v) => {
     const a = Math.abs(u);
-    let y = 0.30 * Math.pow(Math.max(1 - a * a, 0), 2.2)
-          * Math.pow(Math.sin(Math.PI * THREE.MathUtils.clamp(v, 0, 1)), 1.2);
-    y += 0.13 * Math.exp(-Math.pow(u * 5.5, 2)) * Math.exp(-(((v - 0.16) / 0.22) ** 2));
-    return y;
+    const vc = THREE.MathUtils.clamp(v, 0, 1);
+    const rim = Math.pow(Math.sin(Math.PI * vc), 0.5) * (1 - Math.pow(a, 5));
+    let y = 0.30 * Math.pow(Math.max(1 - a * a, 0), 2.2) * Math.sin(Math.PI * vc);
+    y += 0.16 * Math.exp(-Math.pow(u * 5.0, 2)) * Math.exp(-(((v - 0.20) / 0.20) ** 2));
+    return y * rim;
   };
 
   const positions = [];
@@ -166,8 +175,38 @@ export class EagleRay {
             float edgeFade = smoothstep(1.0, 0.85, abs(vUv.x * 2.0 - 1.0));
             albedo = mix(albedo, vec3(0.88, 0.91, 0.94), spot * step(vUv.y, 1.0) * (0.5 + 0.5 * edgeFade));
           } else {
-            // 腹面: 白
-            albedo = vec3(0.60, 0.64, 0.66);
+            // ---- 腹面 ----
+            // 全体は温かみのある乳白色。そこに口・鼻孔・5対の鰓裂が並ぶ。
+            // 実物の腹面は真っ白な一枚板ではなく、この造作が主役になる。
+            albedo = vec3(0.84, 0.835, 0.795);
+            albedo *= 0.96 + 0.07 * fbm(vUv * vec2(17.0, 11.0));
+
+            float uu = vUv.x * 2.0 - 1.0;
+            float au = abs(uu);
+            float vv = vUv.y;
+
+            // 鼻孔(口のすぐ前、左右一対の短い切れ込み)
+            float nose = smoothstep(0.030, 0.012, abs(au - 0.048))
+                       * smoothstep(0.040, 0.016, abs(vv - 0.150));
+            // 口(横一文字。中央がわずかに前へ張り出す)
+            float mline = 0.212 - 0.020 * cos(au * 15.0);
+            float mouth = smoothstep(0.026, 0.010, abs(vv - mline))
+                        * smoothstep(0.140, 0.108, au);
+            // 鰓裂(5対。口の後ろから外へ弧を描いて並ぶ)
+            float gill = 0.0;
+            for (int i = 0; i < 5; i++) {
+              float fi = float(i);
+              gill = max(gill,
+                smoothstep(0.016, 0.006, abs(au - (0.042 + fi * 0.026)))
+              * smoothstep(0.046, 0.024, abs(vv - (0.276 + fi * 0.009))));
+            }
+            float marks = max(max(nose, mouth), gill);
+            albedo = mix(albedo, vec3(0.27, 0.255, 0.245), marks * 0.85);
+            // 造作のまわりのわずかな影(平面に描いた線に見せない)
+            albedo *= 1.0 - marks * 0.10;
+
+            // 翼の縁は薄く、光が透けてわずかに温かい色になる
+            albedo = mix(albedo, vec3(0.86, 0.78, 0.66), smoothstep(0.80, 1.0, au) * 0.5);
           }
           vec3 V = normalize(cameraPosition - vWorldPos);
           vec3 col = underwaterLight(albedo, n, vWorldPos, V, 40.0, 0.25);
