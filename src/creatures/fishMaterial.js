@@ -29,11 +29,14 @@ varying vec3 vNormal;
 varying float vPart;
 varying float vTint;
 varying float vHeight;
+varying vec3 vLocal;
 
 void main() {
   vBodyUV = aBodyUV;
   vPart = aPart;
   vHeight = aHeight;
+  // 変形前のモデル座標(体長で正規化)。UVが潰れる鼻先の模様に使う
+  vLocal = position / max(uFishLen, 1e-3);
   float phase = 0.0;
   float spd = 1.0;
   float tint = 0.5;
@@ -111,7 +114,7 @@ float eyeDot(float u, float v, float eu, float ev, float size) {
   return smoothstep(size, size * 0.55, length(d));
 }
 
-vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, float hgt, out float glossMul) {
+vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, float hgt, vec3 lp, out float glossMul) {
   float u = clamp(buv.x, 0.0, 1.0);
   float v = buv.y;
   glossMul = 1.0;
@@ -174,7 +177,7 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, float
     vec3 pale  = vec3(0.74, 0.80, 0.815);   // 斑と格子線の色
 
     // 腹との境界。頭では高く(頭の下面はほぼ白い)、胴では低い位置に来る
-    float border = 0.205 + 0.08 * smoothstep(0.22, 0.02, u)
+    float border = 0.205 + 0.08 * smoothstep(0.27, 0.06, u)
                  + sin(u * 19.0 + tint * 5.0) * 0.010;
     col = mix(belly, back, smoothstep(border - 0.025, border + 0.055, v));
 
@@ -192,22 +195,29 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, float
     spot *= step(0.10, hash12(cell * 1.71));       // ときどき抜ける
 
     // --- 頭部: 格子はなく、細かい斑点が密に散る ---
-    vec2 hg = vec2(u * 58.0, v * 28.0);
-    vec2 hcell = floor(hg);
-    vec2 hjt = (vec2(hash12(hcell + 2.1), hash12(hcell + 9.7)) - 0.5) * 0.5;
-    float hspot = smoothstep(0.21, 0.07, length(fract(hg) - 0.5 + hjt))
-                * step(0.38, hash12(hcell * 5.3));
+    // UV(u,v)は鼻先で一点に収束して潰れるため、頭の斑だけはモデル座標の
+    // 3Dセルで散らす。こうすると吻の先まで同じ密度・同じ形の斑が乗る。
+    vec3 hp = lp * 155.0;
+    vec3 hcell = floor(hp);
+    vec3 hjt = (vec3(hash13(hcell), hash13(hcell + 3.7), hash13(hcell + 8.1)) - 0.5) * 0.55;
+    float hspot = smoothstep(0.32, 0.12, length(fract(hp) - 0.5 + hjt))
+                * step(0.46, hash13(hcell * 1.31 + 5.0));
 
-    float headMix = smoothstep(0.30, 0.08, u);
+    float headMix = smoothstep(0.42, 0.06, u);
     // 頭の前面は面積が広くのっぺりしやすいので、細かいむらを足す
-    col *= 1.0 + (fbm(vec2(u * 40.0, v * 26.0)) - 0.5) * 0.16 * headMix;
+    col *= 1.0 + (fbm(lp.xz * 34.0 + lp.y * 6.0) - 0.5) * 0.24 * headMix;
     float marks = mix(max(spot, grid * 0.30), hspot * 0.9, headMix);
-    float topMask = smoothstep(border + 0.02, border + 0.13, v);
+    // 頭では断面角ではなく高さで区切る。口より上はすべて斑のある肌
+    float topMask = mix(smoothstep(border + 0.02, border + 0.13, v),
+                        smoothstep(0.055, 0.150, hgt), headMix);
     col = mix(col, pale, clamp(marks, 0.0, 1.0) * topMask * 0.9);
+
+    // 分厚い皮膚のざらつき。均一な面はどうしても成形品に見える
+    col *= 0.95 + 0.10 * fbm(vec2(u * 90.0, v * 46.0));
 
     // --- 5対の大きな鰓裂(頭のうしろ、胸びれの手前) ---
     float gv = clamp((v - 0.30) / 0.42, 0.0, 1.0);
-    float gu = u - 0.105 - gv * 0.012;           // 上端ほどわずかに後ろへ倒れる
+    float gu = u - 0.160 - gv * 0.012;           // 上端ほどわずかに後ろへ倒れる
     float slits = 0.0;
     for (int gi = 0; gi < 5; gi++) {
       slits = max(slits, smoothstep(0.0080, 0.0018, abs(gu - float(gi) * 0.0245)));
@@ -219,15 +229,22 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, float
     // 鼻先のリングはすべて u=0 なので、前面の上下位置は v で切り分ける
     // 口は吻の先端を横一文字に走る。角ばった頭では断面角(v)の等高線が
     // 角丸長方形になってしまうので、実際の高さ(hgt)で引く
-    float front = smoothstep(0.038, 0.0, u);
-    float gape = smoothstep(0.085, 0.030, abs(hgt - 0.10));
-    col = mix(col, vec3(0.035, 0.045, 0.058), front * gape * 0.9);
-    // 口の下のわずかに明るい唇
-    col = mix(col, vec3(0.66, 0.685, 0.695),
-              front * smoothstep(0.060, 0.020, abs(hgt + 0.02)) * 0.5);
+    // 前後位置もモデル座標で取る(u は鼻先で潰れるため)
+    float front = smoothstep(0.355, 0.470, lp.z);
+    float gape = smoothstep(0.062, 0.024, abs(hgt - 0.075));
+    col = mix(col, vec3(0.045, 0.056, 0.070), front * gape * 0.92);
+    // 鼻孔(口の上、左右の端に小さく開く)
+    col = mix(col, vec3(0.06, 0.07, 0.085),
+              smoothstep(0.470, 0.520, lp.z)
+              * smoothstep(0.030, 0.012, abs(hgt - 0.155))
+              * smoothstep(0.055, 0.075, abs(lp.x)) * 0.8);
+    // 上唇の下に落ちるわずかな影。線を1本引くより口らしく見える
+    col *= 1.0 - front * smoothstep(0.080, 0.032, abs(hgt - 0.135)) * 0.20;
+    // 下あごは淡い
+    col = mix(col, belly, front * smoothstep(0.020, -0.045, hgt) * 0.5);
 
     // --- 目: 頭の側面の角、低く前寄りに小さく ---
-    col = mix(col, vec3(0.02, 0.025, 0.03), eyeDot(u, v, 0.048, 0.375, 0.022));
+    col = mix(col, vec3(0.02, 0.025, 0.03), eyeDot(u, v, 0.105, 0.375, 0.022));
 
     // --- ひれ ---
     // 尾びれ・背びれ・胸びれとも背と同じ濃さで、上面に斑が乗る。
@@ -242,7 +259,7 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, float
       // 縁はわずかに明るく、薄い膜らしく見せる
       col = mix(col, pale * 0.7, smoothstep(0.6, 1.0, abs(v - 0.5) * 2.0) * 0.3);
     }
-    glossMul = 0.34;
+    glossMul = 0.20;
   } else if (uPattern < 4.5) {
     // ---- ザトウクジラ: 黒に近い背、白い腹と喉の畝(ヴェントラルグルーブ) ----
     vec3 back = vec3(0.09, 0.105, 0.135);
@@ -354,6 +371,7 @@ varying vec3 vNormal;
 varying float vPart;
 varying float vTint;
 varying float vHeight;
+varying vec3 vLocal;
 
 void main() {
   vec3 n = normalize(vNormal);
@@ -361,7 +379,7 @@ void main() {
   vec3 V = normalize(cameraPosition - vWorldPos);
 
   float glossMul;
-  vec3 albedo = fishAlbedo(vBodyUV, vWorldPos, n, V, vTint, vPart, vHeight, glossMul);
+  vec3 albedo = fishAlbedo(vBodyUV, vWorldPos, n, V, vTint, vPart, vHeight, vLocal, glossMul);
 
   // ひれは薄く透ける
   float finAlpha = vPart > 0.5 ? 0.75 : 1.0;
@@ -376,9 +394,10 @@ void main() {
     float ramp = vPart < 1.5 ? clamp((vBodyUV.x - 1.0) / 0.18, 0.0, 1.0) : 1.0;
     col += albedo * trans * 0.4 * uSunI * ramp;
   }
-  // 銀鱗のリム(水中でのぼんやりした輪郭光)
+  // 銀鱗のリム(水中でのぼんやりした輪郭光)。
+  // 艶のある魚ほど強く。マットな体で強く出すと、成形品の縁のように光る
   float fr = pow(1.0 - abs(dot(n, V)), 3.0);
-  col += uAmbTop * fr * 0.35;
+  col += uAmbTop * fr * (0.07 + 0.20 * glossMul);
 
   col = applyUnderwaterFog(col, vWorldPos);
   gl_FragColor = vec4(col, finAlpha);

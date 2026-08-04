@@ -22,6 +22,11 @@ float hash12(vec2 p){
   p += dot(p, p + 45.32);
   return fract(p.x * p.y);
 }
+float hash13(vec3 p){
+  p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+  p += dot(p, p.yxz + 33.33);
+  return fract((p.x + p.y) * p.z);
+}
 float vnoise(vec2 p){
   vec2 i = floor(p), f = fract(p);
   f = f * f * (3.0 - 2.0 * f);

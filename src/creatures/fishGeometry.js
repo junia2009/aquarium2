@@ -67,17 +67,26 @@ export function buildFishGeometry(opts) {
     return [x, y];
   };
 
+  // ---- 体軸座標の割り当て ----
+  // 鼻先にリングを足す場合、そこにも体軸方向の座標を与える。
+  // 鼻先の頂点をすべて u=0 にしてしまうと、u に依存する模様
+  // (斑点・鰓裂・口)が鼻先だけ潰れて、のっぺりした殻に見える。
+  const noseRings = nose?.rings ?? 0;
+  const noseLen = (nose?.len ?? 0.015) * L;
+  const uFront = noseRings > 0 ? noseLen / L : 0;   // 鼻先が占める u の幅
+
   // ---- 体(リング) ----
   const zNose = L / 2;
   for (let i = 0; i <= rings; i++) {
-    const t = i / rings;
-    const z = zNose - t * (L - tail.len * L * 0.15);
-    const hh = sampleProfile(hProfile, t) * H;
-    const ww = sampleProfile(wProfile, t) * W;
-    const yc = sampleProfile(yOffset, t) * H;
+    const tt = i / rings;
+    const t = uFront + tt * (1 - uFront);
+    const z = zNose - tt * (L - tail.len * L * 0.15);
+    const hh = sampleProfile(hProfile, tt) * H;
+    const ww = sampleProfile(wProfile, tt) * W;
+    const yc = sampleProfile(yOffset, tt) * H;
     for (let j = 0; j < radial; j++) {
       const a = (j / radial) * Math.PI * 2;
-      const [x, y] = sec(a, t);           // y: 1=背, -1=腹
+      const [x, y] = sec(a, tt);          // y: 1=背, -1=腹
       push(x * ww, yc + y * hh, z, t, Math.cos(a) * 0.5 + 0.5, 0);
     }
   }
@@ -95,20 +104,22 @@ export function buildFishGeometry(opts) {
   // 既定は1点のキャップ。nose.rings を与えると、先頭リングの断面を
   // 半球状に縮めながら前へ伸ばして「丸く詰まった鼻先」にする
   // (ジンベエザメのように吻が尖っていない種のため)。
-  const noseRings = nose?.rings ?? 0;
-  const noseLen = (nose?.len ?? 0.015) * L;
   const h0 = sampleProfile(hProfile, 0) * H;
   const w0 = sampleProfile(wProfile, 0) * W;
   const yc0 = sampleProfile(yOffset, 0) * H;
   let frontRow = 0;                       // 最前リングの先頭インデックス
   for (let i = 1; i <= noseRings; i++) {
     const s = i / (noseRings + 1);
-    const k = Math.sqrt(Math.max(1 - s * s, 0));   // 半球状に縮む
+    // flat=2 で半球。大きくするほど「正面が広い平らな面 + 丸い縁」になる。
+    // ジンベエザメの吻はドームではなく、角の取れた幅広の面である。
+    const flat = nose?.flat ?? 2;
+    const k = Math.pow(Math.max(1 - Math.pow(s, flat), 0), 1 / flat);
     const row = positions.length / 3;
     for (let j = 0; j < radial; j++) {
       const a = (j / radial) * Math.PI * 2;
       const [x, y] = sec(a, 0);
-      push(x * w0 * k, yc0 + y * h0 * k, zNose + s * noseLen, 0, Math.cos(a) * 0.5 + 0.5, 0);
+      push(x * w0 * k, yc0 + y * h0 * k, zNose + s * noseLen,
+           uFront * (1 - s), Math.cos(a) * 0.5 + 0.5, 0);
     }
     for (let j = 0; j < radial; j++) {
       const jn = (j + 1) % radial;
