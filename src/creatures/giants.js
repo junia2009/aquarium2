@@ -166,16 +166,19 @@ export class WhaleShark {
 
     this.cruiser = new GiantCruiser(this.mesh, {
       radius: 19,
-      yRange: [5.5, 9.5],
+      // 下層を回遊する。クジラ(中〜上層)と遊泳層を分けて、
+      // 巨体同士がすれ違いざまにめり込むのを防ぐ
+      yRange: [3.4, 5.2],
       speed: 1.8,
       seed: 12.3,
       bankScale: 0.5,
-      body: 2.2,
+      body: 1.9,
       owner: this,
     });
   }
 
   get pos() { return this.cruiser.pos; }
+  get heading() { return this.cruiser.heading; }
 
   setWorld(world) { this.cruiser.world = world; }
 
@@ -289,7 +292,8 @@ export class HumpbackWhale {
 
     this.cruiser = new GiantCruiser(this.mesh, {
       radius: 22,
-      yRange: [8, 11],
+      // 中層から上層。息継ぎのたびにさらに水面近くまで上がる
+      yRange: [9.9, 11.9],
       speed: 1.7,
       seed: 44.7,
       bankScale: 0.15, // クジラはあまりバンクしない
@@ -306,6 +310,7 @@ export class HumpbackWhale {
   }
 
   get pos() { return this.cruiser.pos; }
+  get heading() { return this.cruiser.heading; }
   get breathing() { return this.state === 'blow'; }
 
   setWorld(world) { this.cruiser.world = world; }
@@ -334,9 +339,9 @@ export class HumpbackWhale {
         if (this.stateTimer <= 0) this.state = 'descend';
         break;
       case 'descend':
-        targetY = 9;
+        targetY = 10.2;
         this.cruiser.speed = this.cruiser.baseSpeed;
-        if (this.pos.y < 10.2) {
+        if (this.pos.y < 11.2) {
           this.state = 'cruise';
           this.stateTimer = 50 + Math.random() * 50;
         }

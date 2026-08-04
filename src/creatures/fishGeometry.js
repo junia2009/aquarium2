@@ -5,7 +5,12 @@ import * as THREE from 'three';
 // 尾びれ・背びれ・胸びれを別パートとして結合する。
 // 頂点属性:
 //   aPart  : 0=体, 1=尾びれ, 2=背びれ, 3=胸びれ左, 4=胸びれ右
-//   aBodyUV: x=体軸方向 0(鼻)→1(尾), y=高さ方向 0(腹)→1(背)
+//   aBodyUV: x=体軸方向 0(鼻)→1(尾), y=断面角(0=腹 1=背)
+//   aHeight: 体の中心からの実際の高さ(H で割った値)
+//
+// aBodyUV.y は断面の「角度」なので、断面が円でないときは高さと一致しない。
+// 角ばった頭に横一文字の口を引くような場面では aHeight を使う。
+// (角度で引くと、等高線が角丸長方形になって輪のように見えてしまう)
 
 // 配列を 0..1 のtで線形補間サンプリング
 function sampleProfile(arr, t) {
@@ -43,8 +48,17 @@ export function buildFishGeometry(opts) {
 
   const positions = [];
   const bodyUV = [];
+  const height = [];
   const part = [];
   const indices = [];
+
+  // 頂点を1つ積む(位置・体軸UV・高さ・パーツ)
+  const push = (x, y, z, u, v, p) => {
+    positions.push(x, y, z);
+    bodyUV.push(u, v);
+    height.push(y / H);
+    part.push(p);
+  };
 
   // 単位円上の点に sectionMod を通す
   const sec = (a, t) => {
@@ -64,9 +78,7 @@ export function buildFishGeometry(opts) {
     for (let j = 0; j < radial; j++) {
       const a = (j / radial) * Math.PI * 2;
       const [x, y] = sec(a, t);           // y: 1=背, -1=腹
-      positions.push(x * ww, yc + y * hh, z);
-      bodyUV.push(t, Math.cos(a) * 0.5 + 0.5);
-      part.push(0);
+      push(x * ww, yc + y * hh, z, t, Math.cos(a) * 0.5 + 0.5, 0);
     }
   }
   for (let i = 0; i < rings; i++) {
@@ -96,9 +108,7 @@ export function buildFishGeometry(opts) {
     for (let j = 0; j < radial; j++) {
       const a = (j / radial) * Math.PI * 2;
       const [x, y] = sec(a, 0);
-      positions.push(x * w0 * k, yc0 + y * h0 * k, zNose + s * noseLen);
-      bodyUV.push(0, Math.cos(a) * 0.5 + 0.5);
-      part.push(0);
+      push(x * w0 * k, yc0 + y * h0 * k, zNose + s * noseLen, 0, Math.cos(a) * 0.5 + 0.5, 0);
     }
     for (let j = 0; j < radial; j++) {
       const jn = (j + 1) % radial;
@@ -109,9 +119,7 @@ export function buildFishGeometry(opts) {
   }
   // 先端の1点で閉じる
   const noseIdx = positions.length / 3;
-  positions.push(0, yc0, zNose + noseLen);
-  bodyUV.push(0, 0.5);
-  part.push(0);
+  push(0, yc0, zNose + noseLen, 0, 0.5, 0);
   for (let j = 0; j < radial; j++) {
     indices.push(noseIdx, frontRow + j, frontRow + ((j + 1) % radial));
   }
@@ -155,9 +163,7 @@ export function buildFishGeometry(opts) {
         my = cy + (dy - cy) * f;
       }
       const u = horizontal ? sx0 : cy;       // 広がり方向の座標
-      positions.push(mx * halfW, pedY + my * halfH, zPed - s * extAt(u));
-      bodyUV.push(1.0 + s * 0.22, cy * 0.5 + 0.5);
-      part.push(1);
+      push(mx * halfW, pedY + my * halfH, zPed - s * extAt(u), 1.0 + s * 0.22, cy * 0.5 + 0.5, 1);
     }
   }
   // 胴体の最終リングから帯でつなぐ(頂点を共有するので継ぎ目が出ない)
@@ -185,12 +191,8 @@ export function buildFishGeometry(opts) {
       const edgeY = yc + sign * sampleProfile(hProfile, t) * H;
       // 前縁が高く後方へ低くなる
       const finH = spec.height * H * (1.0 - 0.55 * s) * Math.sin(Math.PI * Math.min(s * 2.5 + 0.15, 1));
-      positions.push(0, edgeY - sign * 0.01, z);
-      bodyUV.push(t, sign > 0 ? 1.0 : 0.0);
-      part.push(2);
-      positions.push(0, edgeY + sign * finH, z - finH * (spec.sweep ?? 0.55));
-      bodyUV.push(t, sign > 0 ? 1.15 : -0.15);
-      part.push(2);
+      push(0, edgeY - sign * 0.01, z, t, sign > 0 ? 1.0 : 0.0, 2);
+      push(0, edgeY + sign * finH, z - finH * (spec.sweep ?? 0.55), t, sign > 0 ? 1.15 : -0.15, 2);
     }
     for (let j = 0; j < dSegs; j++) {
       const a = dStart + j * 2;
@@ -224,13 +226,9 @@ export function buildFishGeometry(opts) {
           const sweep = back * (0.30 * s + 0.72 * s * s);
           const chord = chord0 * Math.pow(1 - s, 0.62);
           // 前縁
-          positions.push(x0 + outX, y0 + dropY, z - sweep);
-          bodyUV.push(t + s * 0.05, 0.34);
-          part.push(partId);
+          push(x0 + outX, y0 + dropY, z - sweep, t + s * 0.05, 0.34, partId);
           // 後縁
-          positions.push(x0 + outX * 0.98, y0 + dropY - chord * 0.10, z - sweep - chord);
-          bodyUV.push(t + s * 0.10, 0.28);
-          part.push(partId);
+          push(x0 + outX * 0.98, y0 + dropY - chord * 0.10, z - sweep - chord, t + s * 0.10, 0.28, partId);
         }
         for (let j = 0; j < pSegs; j++) {
           const a = pStart + j * 2;
@@ -242,20 +240,10 @@ export function buildFishGeometry(opts) {
         for (let j = 0; j <= pSegs; j++) {
           const s = j / pSegs; // 0=付け根, 1=先端
           const sweep = spec.len * L;
-          positions.push(
-            x0 + side * s * spec.width * L * 1.6,
-            y0 - s * sweep * 0.25,
-            z - s * sweep
-          );
-          bodyUV.push(t + s * 0.1, 0.3);
-          part.push(partId);
-          positions.push(
-            x0 + side * s * spec.width * L * 1.1,
-            y0 - s * sweep * 0.05,
-            z - s * sweep * 0.55
-          );
-          bodyUV.push(t + s * 0.06, 0.35);
-          part.push(partId);
+          push(x0 + side * s * spec.width * L * 1.6, y0 - s * sweep * 0.25, z - s * sweep,
+               t + s * 0.1, 0.3, partId);
+          push(x0 + side * s * spec.width * L * 1.1, y0 - s * sweep * 0.05, z - s * sweep * 0.55,
+               t + s * 0.06, 0.35, partId);
         }
         for (let j = 0; j < pSegs; j++) {
           const a = pStart + j * 2;
@@ -272,6 +260,7 @@ export function buildFishGeometry(opts) {
   geo.setIndex(indices);
   geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   geo.setAttribute('aBodyUV', new THREE.Float32BufferAttribute(bodyUV, 2));
+  geo.setAttribute('aHeight', new THREE.Float32BufferAttribute(height, 1));
   geo.setAttribute('aPart', new THREE.Float32BufferAttribute(part, 1));
   geo.computeVertexNormals();
   geo.userData.length = L;

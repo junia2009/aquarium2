@@ -19,6 +19,7 @@ uniform float uFlapFreq;   // 胸びれ
 uniform float uVertAxis;   // 0=左右うねり(魚類) 1=上下うねり(クジラ類)
 attribute vec2 aBodyUV;
 attribute float aPart;
+attribute float aHeight;   // 体の中心からの実際の高さ(H比)
 #ifdef USE_INSTANCING
 attribute vec4 aInfo;      // x:位相 y:速度倍率 z:サイズ w:色ゆらぎ
 #endif
@@ -27,10 +28,12 @@ varying vec3 vWorldPos;
 varying vec3 vNormal;
 varying float vPart;
 varying float vTint;
+varying float vHeight;
 
 void main() {
   vBodyUV = aBodyUV;
   vPart = aPart;
+  vHeight = aHeight;
   float phase = 0.0;
   float spd = 1.0;
   float tint = 0.5;
@@ -108,7 +111,7 @@ float eyeDot(float u, float v, float eu, float ev, float size) {
   return smoothstep(size, size * 0.55, length(d));
 }
 
-vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, out float glossMul) {
+vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, float hgt, out float glossMul) {
   float u = clamp(buv.x, 0.0, 1.0);
   float v = buv.y;
   glossMul = 1.0;
@@ -214,15 +217,14 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, out f
 
     // --- 口: 吻の先端にあり、頭幅いっぱいに横へ広い(終端口) ---
     // 鼻先のリングはすべて u=0 なので、前面の上下位置は v で切り分ける
-    // 口は前面の下寄りを横一文字に走る。真横の一直線だと板に描いた線に
-    // 見えるので、断面角に応じてわずかに反らせる
+    // 口は吻の先端を横一文字に走る。角ばった頭では断面角(v)の等高線が
+    // 角丸長方形になってしまうので、実際の高さ(hgt)で引く
     float front = smoothstep(0.038, 0.0, u);
-    float mline = 0.335 + 0.022 * cos(v * 9.0);
-    float gape = smoothstep(0.040, 0.014, abs(v - mline));
+    float gape = smoothstep(0.085, 0.030, abs(hgt - 0.10));
     col = mix(col, vec3(0.035, 0.045, 0.058), front * gape * 0.9);
     // 口の下のわずかに明るい唇
     col = mix(col, vec3(0.66, 0.685, 0.695),
-              front * smoothstep(0.030, 0.010, abs(v - mline + 0.052)) * 0.55);
+              front * smoothstep(0.060, 0.020, abs(hgt + 0.02)) * 0.5);
 
     // --- 目: 頭の側面の角、低く前寄りに小さく ---
     col = mix(col, vec3(0.02, 0.025, 0.03), eyeDot(u, v, 0.048, 0.375, 0.022));
@@ -351,6 +353,7 @@ varying vec3 vWorldPos;
 varying vec3 vNormal;
 varying float vPart;
 varying float vTint;
+varying float vHeight;
 
 void main() {
   vec3 n = normalize(vNormal);
@@ -358,7 +361,7 @@ void main() {
   vec3 V = normalize(cameraPosition - vWorldPos);
 
   float glossMul;
-  vec3 albedo = fishAlbedo(vBodyUV, vWorldPos, n, V, vTint, vPart, glossMul);
+  vec3 albedo = fishAlbedo(vBodyUV, vWorldPos, n, V, vTint, vPart, vHeight, glossMul);
 
   // ひれは薄く透ける
   float finAlpha = vPart > 0.5 ? 0.75 : 1.0;

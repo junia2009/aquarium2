@@ -24,14 +24,39 @@ export class CollisionWorld {
     return this;
   }
 
-  /** 動く障害物。ref.pos を毎フレーム参照する */
-  addDynamic(ref, rx, ry, rz) {
-    this.bodies.push({ center: null, rx, ry, rz, soft: false, ref });
+  /**
+   * 動く障害物。ref.pos を毎フレーム参照する。
+   * oriented: true にすると ref.heading に合わせて楕円体を回す。
+   * 細長い生物は、軸平行のままだと向きによって当たり判定が体からずれて
+   * しまう(前後がはみ出したり、横がやたら太くなったりする)。
+   */
+  addDynamic(ref, rx, ry, rz, { oriented = false } = {}) {
+    this.bodies.push({ center: null, rx, ry, rz, soft: false, ref, oriented });
     return this;
   }
 
   static _centerOf(b) {
     return b.ref ? b.ref.pos : b.center;
+  }
+
+  /** 世界座標の差分を、その障害物のローカル軸(前方=Z)へ移す */
+  static _toLocal(b, dx, dy, dz, out) {
+    if (b.oriented && b.ref && typeof b.ref.heading === 'number') {
+      const s = Math.sin(b.ref.heading), c = Math.cos(b.ref.heading);
+      out.set(dx * c - dz * s, dy, dx * s + dz * c);
+    } else {
+      out.set(dx, dy, dz);
+    }
+    return out;
+  }
+
+  /** ローカル軸のベクトルを世界座標へ戻す */
+  static _toWorld(b, v) {
+    if (b.oriented && b.ref && typeof b.ref.heading === 'number') {
+      const s = Math.sin(b.ref.heading), c = Math.cos(b.ref.heading);
+      v.set(v.x * c + v.z * s, v.y, -v.x * s + v.z * c);
+    }
+    return v;
   }
 
   /**
@@ -47,22 +72,24 @@ export class CollisionWorld {
       const c = CollisionWorld._centerOf(b);
       if (!c) continue;
       const rx = b.rx + radius, ry = b.ry + radius, rz = b.rz + radius;
-      const ux = (pos.x - c.x) / rx;
-      const uy = (pos.y - c.y) / ry;
-      const uz = (pos.z - c.z) / rz;
+      CollisionWorld._toLocal(b, pos.x - c.x, pos.y - c.y, pos.z - c.z, _d);
+      const ux = _d.x / rx;
+      const uy = _d.y / ry;
+      const uz = _d.z / rz;
       const d2 = ux * ux + uy * uy + uz * uz;
       if (d2 >= 1 || d2 < 1e-9) continue;
 
       const d = Math.sqrt(d2);
       // 正規化空間で表面まで戻す
       const k = (1 - d) / d;
-      pos.x += ux * rx * k;
-      pos.y += uy * ry * k;
-      pos.z += uz * rz * k;
+      _n.set(ux * rx * k, uy * ry * k, uz * rz * k);
+      CollisionWorld._toWorld(b, _n);
+      pos.add(_n);
 
       if (vel) {
         // 楕円体表面の法線(勾配)
         _n.set(ux / rx, uy / ry, uz / rz).normalize();
+        CollisionWorld._toWorld(b, _n);
         const into = vel.dot(_n);
         if (into < 0) vel.addScaledVector(_n, -into);
       }
@@ -85,15 +112,18 @@ export class CollisionWorld {
       const rx = b.rx + radius + range;
       const ry = b.ry + radius + range;
       const rz = b.rz + radius + range;
-      const ux = (pos.x - c.x) / rx;
-      const uy = (pos.y - c.y) / ry;
-      const uz = (pos.z - c.z) / rz;
+      CollisionWorld._toLocal(b, pos.x - c.x, pos.y - c.y, pos.z - c.z, _d);
+      const ux = _d.x / rx;
+      const uy = _d.y / ry;
+      const uz = _d.z / rz;
       const d2 = ux * ux + uy * uy + uz * uz;
       if (d2 >= 1) continue;
 
       const d = Math.max(Math.sqrt(d2), 1e-4);
-      _d.set(pos.x - c.x, pos.y - c.y, pos.z - c.z);
-      if (_d.lengthSq() < 1e-8) _d.set(0, 1, 0);
+      // 逃げる向きは楕円体表面の法線に沿わせる(細長い体の横腹から離れる)
+      _d.set(ux / rx, uy / ry, uz / rz);
+      if (_d.lengthSq() < 1e-12) _d.set(0, 1, 0);
+      CollisionWorld._toWorld(b, _d);
       _d.normalize();
       // 相手に向かって進んでいるほど強く反応する
       const closing = speed > 1e-4 ? Math.max(-vel.dot(_d) / speed, 0) : 0;

@@ -141,9 +141,12 @@ export const GREAT_TANK = {
       center: new THREE.Vector3(4, 0, 13), radius: 6.5, count: 14,
     });
 
-    // 大型生物同士もぶつからないよう、動く障害物として登録する
-    world.addDynamic(whaleShark, 2.0, 2.0, 6.4);
-    world.addDynamic(whale, 2.8, 2.8, 7.3);
+    // 大型生物同士もぶつからないよう、動く障害物として登録する。
+    // 細長い生物は oriented を付けて、当たり判定を体の向きに追従させる
+    // (軸平行のままだと、泳ぐ向きによって前後がはみ出したり横が
+    //  太くなったりして、めり込みとすり抜けの両方が起きる)。
+    world.addDynamic(whaleShark, 1.9, 1.7, 7.4, { oriented: true });
+    world.addDynamic(whale, 2.3, 2.6, 8.4, { oriented: true });
     world.addDynamic(ray, 2.6, 0.9, 2.2);
     world.addDynamic(turtle, 1.7, 0.9, 1.8);
     for (const c of [whaleShark, whale, ray, turtle, jellies]) c.setWorld(world);
