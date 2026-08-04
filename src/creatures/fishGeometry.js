@@ -102,35 +102,53 @@ export function buildFishGeometry(opts) {
 
   // ---- 鼻先 ----
   // 既定は1点のキャップ。nose.rings を与えると、先頭リングの断面を
-  // 半球状に縮めながら前へ伸ばして「丸く詰まった鼻先」にする
-  // (ジンベエザメのように吻が尖っていない種のため)。
+  // すぼめながら前へ伸ばして丸い吻を作る。
+  //
+  // 二つ気をつけることがある。
+  //  1) リングを s(0..1)で等間隔に置くと、指数(flat)が大きいときに
+  //     最後のリングから先端までで一気に閉じ、そこが平らな蓋になって
+  //     ナイフのような縁が立つ。角度で刻んで、閉じ際を細かくする。
+  //  2) すぼまり始めの傾きが 0 だと、胴の先細りとの間に折れ線が出る。
+  //     胴の先端での細り方をそのまま前へ延長した上に丸めを掛ける。
   const h0 = sampleProfile(hProfile, 0) * H;
   const w0 = sampleProfile(wProfile, 0) * W;
   const yc0 = sampleProfile(yOffset, 0) * H;
+  const flat = nose?.flat ?? 2;
+  const e = 2 / flat;
+  // 胴の先端で、前へ1進むごとに細くなる量
+  const dtt = 1 / rings;
+  const dz0 = (L - tail.len * L * 0.15) * dtt;
+  const slopeH = (sampleProfile(hProfile, dtt) * H - h0) / dz0;
+  const slopeW = (sampleProfile(wProfile, dtt) * W - w0) / dz0;
+  const slopeY = (sampleProfile(yOffset, dtt) * H - yc0) / dz0;
+
   let frontRow = 0;                       // 最前リングの先頭インデックス
   for (let i = 1; i <= noseRings; i++) {
-    const s = i / (noseRings + 1);
-    // flat=2 で半球。大きくするほど「正面が広い平らな面 + 丸い縁」になる。
-    // ジンベエザメの吻はドームではなく、角の取れた幅広の面である。
-    const flat = nose?.flat ?? 2;
-    const k = Math.pow(Math.max(1 - Math.pow(s, flat), 0), 1 / flat);
+    const th = (i / (noseRings + 1)) * Math.PI * 0.5;
+    const k = Math.pow(Math.cos(th), e);          // 断面の縮み
+    const zf = Math.pow(Math.sin(th), e) * noseLen; // 前方への張り出し
+    const hh = Math.max(h0 - slopeH * zf, 0) * k;
+    const ww = Math.max(w0 - slopeW * zf, 0) * k;
+    const yc = yc0 - slopeY * zf;
     const row = positions.length / 3;
     for (let j = 0; j < radial; j++) {
       const a = (j / radial) * Math.PI * 2;
       const [x, y] = sec(a, 0);
-      push(x * w0 * k, yc0 + y * h0 * k, zNose + s * noseLen,
-           uFront * (1 - s), Math.cos(a) * 0.5 + 0.5, 0);
+      push(x * ww, yc + y * hh, zNose + zf,
+           uFront * (1 - zf / noseLen), Math.cos(a) * 0.5 + 0.5, 0);
     }
+    // 巻き順は胴体と揃える。逆に張ると、共有する接合リングで
+    // 面法線が打ち消し合い、そこに折れ線が浮き出る
     for (let j = 0; j < radial; j++) {
       const jn = (j + 1) % radial;
-      indices.push(frontRow + j, row + j, frontRow + jn);
-      indices.push(frontRow + jn, row + j, row + jn);
+      indices.push(frontRow + j, frontRow + jn, row + j);
+      indices.push(frontRow + jn, row + jn, row + j);
     }
     frontRow = row;
   }
   // 先端の1点で閉じる
   const noseIdx = positions.length / 3;
-  push(0, yc0, zNose + noseLen, 0, 0.5, 0);
+  push(0, yc0 - slopeY * noseLen, zNose + noseLen, 0, 0.5, 0);
   for (let j = 0; j < radial; j++) {
     indices.push(noseIdx, frontRow + j, frontRow + ((j + 1) % radial));
   }

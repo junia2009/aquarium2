@@ -146,7 +146,7 @@ export class WhaleShark {
       rings: 40, radial: 30,
       sectionMod: whaleSharkSection,
       // 吻の先は長めのドーム状に閉じる。短いと断ち切った板になってしまう
-      nose: { rings: 7, len: 0.050, flat: 3.2 },
+      nose: { rings: 9, len: 0.058, flat: 2.2 },
       // 上葉の長い三日月形の尾びれ
       tail: { len: 0.18, height: 0.63, fork: 0.50, lobe: 0.42 },
       dorsal: [
