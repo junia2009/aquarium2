@@ -25,6 +25,9 @@ const VENTS = [
   { x: 7.5, z: -15.5, h: 4.2, r: 0.95, seed: 27 },
 ];
 
+// いちばん大きい噴出口の注視点(build 時に確定する)
+const VENT_VIEW = new THREE.Vector3();
+
 // オオグチボヤの群落。数カ所にかたまって生え、株ごとの間隔は数十cm。
 // 同じ群落の個体はそろって流れの上手(＝口を開ける向き)を向く。
 function tunicateSpots() {
@@ -79,6 +82,7 @@ export const ABYSS = {
   build(root, audio) {
     createSediment(root);
     const vents = createVentField(root, VENTS);
+    VENT_VIEW.copy(vents.mouths[0]).y -= 1.6;
     // マリンスノーは深海の主役。濃く、粒を大きめにして光錐の中で舞わせる
     createMarineSnow(root, { count: 2600, size: 1.6 });
 
@@ -155,6 +159,9 @@ export const ABYSS = {
         seacucumber: { get: () => cukes.center3, dist: [1.5, 4.0] },
         tunicate: { get: () => tunicates.center3, dist: [1.2, 3.0] },
         angler: { get: () => angler.pos, dist: [1.4, 3.6] },
+        // 煙突は動かないが、図鑑から選んだら見にいけたほうがいい。
+        // いちばん大きい噴出口の少し下(煙の出口が視界の上に来る高さ)を見る
+        vent: { get: () => VENT_VIEW, dist: [7, 16] },
       },
       update(dt, camera) {
         lanterns.update(dt, [], world);

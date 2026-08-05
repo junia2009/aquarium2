@@ -85,6 +85,9 @@ function enterZone(key, { moveCamera = true } = {}) {
   lights.hemi.color.copy(e.ambTop);
   lights.hemi.groundColor.copy(e.ambBottom);
 
+  // 環境音もゾーンのもの。深海は泡が消え、低いうなりだけが残る
+  audio.setZone(key);
+
   diveCam.world = zone.world;
   diveCam.clearFollow();
   if (moveCamera) {

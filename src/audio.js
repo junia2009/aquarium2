@@ -33,12 +33,14 @@ export class UnderwaterAudio {
       lp.type = 'lowpass';
       lp.frequency.value = 240;
       lp.Q.value = 0.6;
+      this.waterLP = lp;
 
       // 水のうねりに合わせたゆらぎ
       const lfo = ctx.createOscillator();
       lfo.frequency.value = 0.11;
       const lfoGain = ctx.createGain();
       lfoGain.gain.value = 90;
+      this.waterLFO = lfoGain;
       lfo.connect(lfoGain).connect(lp.frequency);
       lfo.start();
 
@@ -95,7 +97,8 @@ export class UnderwaterAudio {
 
     // --- 時折の泡音(短いバンドパスノイズ) ---
     const scheduleBubble = () => {
-      if (!this.enabled) return;
+      // 深海に切り替わったら止まる(1000mでは気泡が水圧で潰れる)
+      if (!this.enabled || this.zone === 'abyss') { this.bubbleTimer = null; return; }
       const ctx = this.ctx;
       const dur = 0.08 + Math.random() * 0.12;
       const n = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
@@ -113,7 +116,62 @@ export class UnderwaterAudio {
       s.start();
       this.bubbleTimer = setTimeout(scheduleBubble, 400 + Math.random() * 2500);
     };
-    scheduleBubble();
+    this._scheduleBubble = scheduleBubble;
+
+    // --- 深海の低いうなり ---
+    // 熱水噴出孔と、遠くの地殻がきしむ音。泡は出ない
+    // (水深1000mでは気泡が水圧に押し潰されてしまう)
+    const scheduleRumble = () => {
+      if (!this.enabled || this.zone !== 'abyss') { this.rumbleTimer = null; return; }
+      const ctx = this.ctx;
+      const dur = 2.5 + Math.random() * 4.0;
+      const n = ctx.createBuffer(1, Math.floor(ctx.sampleRate * dur), ctx.sampleRate);
+      const d = n.getChannelData(0);
+      let brown = 0;
+      for (let i = 0; i < d.length; i++) {
+        brown = (brown + 0.02 * (Math.random() * 2 - 1)) / 1.02;
+        // ゆっくり立ち上がってゆっくり消える
+        const t = i / d.length;
+        d[i] = brown * 3.5 * Math.sin(Math.PI * t);
+      }
+      const s2 = ctx.createBufferSource();
+      s2.buffer = n;
+      const lp2 = ctx.createBiquadFilter();
+      lp2.type = 'lowpass';
+      lp2.frequency.value = 55 + Math.random() * 60;
+      lp2.Q.value = 2.5;
+      const g = ctx.createGain();
+      g.gain.value = 0.09 + Math.random() * 0.10;
+      s2.connect(lp2).connect(g).connect(this.master);
+      s2.start();
+      this.rumbleTimer = setTimeout(scheduleRumble, 4000 + Math.random() * 11000);
+    };
+    this._scheduleRumble = scheduleRumble;
+
+    this.zone = this.zone || 'sea';
+    this._applyZone();
+  }
+
+  /**
+   * ゾーンごとの環境音。深海は「泡がなく、高域もない」のが特徴。
+   * 音のほうが先に深海だと分かる、くらいでちょうどいい。
+   */
+  setZone(key) {
+    this.zone = key;
+    if (this.ctx && this.enabled) this._applyZone();
+  }
+
+  _applyZone() {
+    const abyss = this.zone === 'abyss';
+    const now = this.ctx.currentTime;
+    // 深海のざわめきは、浅い海よりさらに低くこもる
+    this.waterLP.frequency.setTargetAtTime(abyss ? 85 : 240, now, 1.5);
+    this.waterLFO.gain.setTargetAtTime(abyss ? 22 : 90, now, 1.5);
+    this.master.gain.setTargetAtTime(abyss ? 0.13 : 0.16, now, 1.5);
+    clearTimeout(this.bubbleTimer); this.bubbleTimer = null;
+    clearTimeout(this.rumbleTimer); this.rumbleTimer = null;
+    if (abyss) this._scheduleRumble();
+    else this._scheduleBubble();
   }
 
   // 海の残響。水中は高域が早く減衰するので、暗く長い尾を引く
@@ -332,7 +390,8 @@ export class UnderwaterAudio {
 
   stop() {
     this.enabled = false;
-    if (this.bubbleTimer) clearTimeout(this.bubbleTimer);
+    if (this.bubbleTimer) { clearTimeout(this.bubbleTimer); this.bubbleTimer = null; }
+    if (this.rumbleTimer) { clearTimeout(this.rumbleTimer); this.rumbleTimer = null; }
     if (this.master && this.ctx) {
       this.master.gain.setTargetAtTime(0, this.ctx.currentTime, 0.4);
     }
