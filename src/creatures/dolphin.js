@@ -400,7 +400,16 @@ export class DolphinPod {
         aimIn: false,               // 助走中、内向きへ向き直している最中か
         launchJitter: 0,            // 跳ぶ向きの個体差(助走の開始時に決める)
         diveT: 0,                   // 助走で潜っている残り時間
+        entryVel: new THREE.Vector3(),  // 着水した瞬間の速度
+        recover: 0,                 // 着水の勢いが抜けるまでの残り時間
+        chargeRamp: 0,              // 巡航→助走の加速の立ち上がり
+        chargeSpeed0: 0,            // 助走に入った瞬間の速さ
+        climb: false,               // 助走の上昇区間に入ったか
+        climbRamp: 0,               // 離水時の速度ベクトルへ寄せる進み具合
+        climbPitch0: 0,             // 上昇に入った瞬間の仰角
+        climbSpeed0: 0,             // 上昇に入った瞬間の速さ
         launchVy: 0,                // 跳び上がる初速(助走の開始時に決める)
+        launchFwd: 0,               // 跳ぶときの前進速度(助走中にプール内へ詰める)
         wasAbove: false,
         body: length * 0.17,
       });
@@ -411,6 +420,20 @@ export class DolphinPod {
 
   /** 他のポッドも含めた全個体を渡すと、互いにぶつからなくなる */
   setNeighbors(list) { this.neighbors = list; }
+
+  /**
+   * 今の位置・向きのまま跳んだとき、着水がプールに収まる最大の前進速度。
+   * |pos + s·dir| = R を s について解いて、許される水平移動距離を出す。
+   */
+  maxLaunchFwd(m) {
+    const flight = 2 * m.launchVy / GRAVITY;
+    const dx = Math.sin(m.heading), dz = Math.cos(m.heading);
+    const R = POOL_LIMIT * 0.95;
+    const pd = m.pos.x * dx + m.pos.z * dz;
+    const disc = pd * pd - (m.pos.x * m.pos.x + m.pos.z * m.pos.z) + R * R;
+    const s = disc > 0 ? Math.max(-pd + Math.sqrt(disc), 0) : 0;
+    return s / Math.max(flight, 0.01);
+  }
 
   get podCenter() {
     _v.set(0, 0, 0);
@@ -431,22 +454,10 @@ export class DolphinPod {
 
       // ---- 離水判定は水中の移動計算より前に行う ----
       // (後にすると、せっかく与えた打ち上げ速度が遊泳速度で上書きされてしまう)
-      if (m.state === 'charge' && m.pos.y > surf - 0.6) {
+      if (m.state === 'charge' && m.climb && m.vel.y > 0 && m.pos.y > surf - 0.6) {
         m.state = 'air';
-        // 跳ぶ向きは助走のあいだに合わせてある。ここで向きを変えてはいけない
-        // (水面を割る瞬間に体がねじれて見える)。
-        // それでも着水がプールからはみ出しそうなときは、向きではなく
-        // 前進の勢いだけを落として収める。こちらは見た目に出ない。
-        const flight = 2 * m.launchVy / GRAVITY;
-        const dxh = Math.sin(m.heading), dzh = Math.cos(m.heading);
-        const R = POOL_LIMIT * 0.95;
-        // |pos + s·dir| = R を解いて、収まる最大の水平移動距離 s を出す
-        const pd = m.pos.x * dxh + m.pos.z * dzh;
-        const disc = pd * pd - (m.pos.x * m.pos.x + m.pos.z * m.pos.z) + R * R;
-        const sMax = disc > 0 ? Math.max(-pd + Math.sqrt(disc), 0) : 0;
-        const fwd = Math.min(bh.launchFwd, sMax / Math.max(flight, 0.01));
-        m.vel.set(dxh, 0, dzh).multiplyScalar(fwd);
-        m.vel.y = m.launchVy;
+        // 速度は助走からそのまま引き継ぐ。ここで作り直してはいけない。
+        // 上昇の終わりで既に離水と同じ向き・速さになっている。
         // 離水は体が水を押し上げるだけなので、着水よりは控えめ
         this.splash.burst(m.pos.clone().setY(surf), U.uTime.value, this.bodyScale * 0.55);
         if (this.onBreach) this.onBreach();
@@ -469,6 +480,7 @@ export class DolphinPod {
         if (m.pos.y <= surf && m.vel.y < 0) {
           // 着水
           m.state = 'cruise';
+          m.climb = false;
           m.timer = bh.interval[0] + Math.random() * bh.interval[1];
           m.pos.y = surf;
           // 着水は落下のエネルギーが一気に水面へ移るので派手になる。
@@ -477,6 +489,10 @@ export class DolphinPod {
           this.splash.burst(m.pos, U.uTime.value, this.bodyScale * (0.75 + 0.55 * impact));
           m.vel.multiplyScalar(0.45);
           m.heading = Math.atan2(m.vel.x, m.vel.z);
+          // 水に入った勢いはしばらく残る。次のフレームで巡航速度へ作り直すと
+          // 姿勢が1フレームで水平に跳ねるので、0.5秒かけて戻す
+          m.entryVel.copy(m.vel);
+          m.recover = 0.5;
         }
       } else {
         // ---- 水中 ----
@@ -484,24 +500,44 @@ export class DolphinPod {
         let speed;
 
         if (m.state === 'charge') {
-          // 助走: いったん深く潜り、そこから水面へ全速力で駆け上がる。
-          // 潜っている時間を確保しておかないと、跳ぶ向きへ向き直る余裕がない
-          // (向きが合わないまま水面に着いて、離水時の不自然な回頭につながる)
-          m.diveT -= dt;
-          targetY = m.diveT > 0 ? this.center.y - 3.5 : surf;
-          speed = bh.charge;
+          // 助走: いったん深く潜り、そこから水面へ斜めに駆け上がる。
+          // 潜る区間を確保しておかないと、跳ぶ向きと角度へ整える余裕がない。
+          //
+          // 巡航から一気に全速へ切り替えると、速さも仰角もそこで飛ぶ
+          // (巡航3m/s・水平 → 助走11m/s・下向き38度)。加速も潜り角も
+          // 0.8秒かけて立ち上げる。
+          m.chargeRamp = Math.min(m.chargeRamp + dt / 0.8, 1);
+          speed = m.chargeSpeed0 + (bh.charge - m.chargeSpeed0)
+                * (m.chargeRamp * m.chargeRamp * (3 - 2 * m.chargeRamp));
+          targetY = this.center.y - 3.5;
+          if (!m.climb) {
+            m.diveT -= dt;
+            // 十分潜ったら上昇へ。ここから離水時の速度ベクトルへ寄せていく
+            if (m.pos.y < surf - 6.0 || m.diveT <= 0) {
+              m.climb = true;
+              m.climbRamp = 0;
+              m.climbPitch0 = Math.atan2(m.vel.y, Math.hypot(m.vel.x, m.vel.z));
+              m.climbSpeed0 = m.vel.length();
+            }
+          }
+          // 助走が長引きすぎたら諦めて巡航に戻す(水面へ出られない状況の保険)
+          if (m.timer <= 0) { m.state = 'cruise'; m.climb = false; m.timer = bh.interval[0]; }
         } else {
           // 巡航: ポッドでゆるくまとまって回遊する
           targetY = this.center.y + wander1(t * 0.06 + m.seed, m.seed) * 3.0;
           speed = bh.cruise * (1 + wander1(t * 0.1 + m.seed * 2, m.seed) * 0.3);
           if (m.timer <= 0) {
             m.state = 'charge';
-            m.timer = 8;
+            m.timer = 10;
             m.aimIn = false;
+            m.climb = false;
+            m.chargeRamp = 0;
+            m.chargeSpeed0 = m.vel.length();
             m.launchJitter = (Math.random() - 0.5) * 0.9;
             m.diveT = 1.2;   // 潜っている時間。この間に跳ぶ向きへ向き直る
             // 跳ぶ勢いはここで決めてしまう。助走中に着水点を正しく読むため
             m.launchVy = bh.launchUp[0] + Math.random() * bh.launchUp[1];
+            m.launchFwd = bh.launchFwd;
             targetY = this.center.y - 3.5;
           }
         }
@@ -513,7 +549,7 @@ export class DolphinPod {
           // このまま跳んだら着水がプールの外になるとわかった時点で
           // 内向きへ舵を切りはじめ、離水までに向き直っておく。
           // (離水時に heading を代入すると、水面で体が一瞬でねじれる)
-          const reach = bh.launchFwd * 2 * m.launchVy / GRAVITY;
+          const reach = m.launchFwd * 2 * m.launchVy / GRAVITY;
           const lx = m.pos.x + Math.sin(m.heading) * reach;
           const lz = m.pos.z + Math.cos(m.heading) * reach;
           // いったん内向きに決めたら助走中は戻さない(境界でふらつかせない)
@@ -558,15 +594,45 @@ export class DolphinPod {
         m.heading += THREE.MathUtils.clamp(turn, -1.8, 1.8) * dt;
         m.bank += (THREE.MathUtils.clamp(-turn * 0.5, -0.55, 0.55) - m.bank) * (1 - Math.exp(-3 * dt));
 
-        // 海底の上を保つ
-        const floor = sandHeight(m.pos.x, m.pos.z) + m.body + 0.8;
-        targetY = Math.max(targetY, floor);
-        targetY = Math.min(targetY, surf - (m.state === 'charge' ? 0.0 : m.body + 0.4));
+        if (m.state === 'charge' && m.climb) {
+          // ---- 助走の上昇: 離水時の速度ベクトルへ滑らかに寄せる ----
+          // ここを targetY(= 水面)で駆動してはいけない。水面へ近づくほど
+          // 残り距離が 0 に収束して上昇が緩み、水面直下ではほぼ水平になる。
+          // その状態から離水時に打ち上げ速度を代入すると、1フレームで
+          // 仰角が 0° → 55° へ跳ね、速さも落ちて不自然な飛び出しになる。
+          // 実際のイルカは、水面を割る前からもう跳ぶ角度で上がってきている。
+          m.climbRamp = Math.min(m.climbRamp + dt / 0.6, 1);
+          const e = m.climbRamp * m.climbRamp * (3 - 2 * m.climbRamp);
+          // 着水がプールに収まるよう前進の勢いだけ詰める(向き・角度は変えない)。
+          // 助走中にじわじわ効かせるので、離水の瞬間に飛ぶことはない
+          const fwdCap = this.maxLaunchFwd(m);
+          m.launchFwd += THREE.MathUtils.clamp(fwdCap - m.launchFwd, -14 * dt, 14 * dt);
+          m.launchFwd = Math.min(m.launchFwd, bh.launchFwd);
+          const pitchL = Math.atan2(m.launchVy, m.launchFwd);
+          const spdL = Math.hypot(m.launchVy, m.launchFwd);
+          const pitch = m.climbPitch0 + (pitchL - m.climbPitch0) * e;
+          const spd = m.climbSpeed0 + (spdL - m.climbSpeed0) * e;
+          const ch = Math.cos(pitch) * spd;
+          m.vel.set(Math.sin(m.heading) * ch, Math.sin(pitch) * spd, Math.cos(m.heading) * ch);
+        } else {
+          // 海底の上を保つ
+          const floor = sandHeight(m.pos.x, m.pos.z) + m.body + 0.8;
+          targetY = Math.max(targetY, floor);
+          targetY = Math.min(targetY, surf - (m.state === 'charge' ? 0.0 : m.body + 0.4));
 
-        const dy = targetY - m.pos.y;
-        const rate = m.state === 'charge' ? 3.2 : 0.9;
-        const vy = THREE.MathUtils.clamp(dy * rate, -speed * 0.8, speed * 0.9);
-        m.vel.set(Math.sin(m.heading) * speed, vy, Math.cos(m.heading) * speed);
+          const dy = targetY - m.pos.y;
+          const rate = m.state === 'charge' ? 3.2 : 0.9;
+          // 潜り角も加速と同じ立ち上がりにする。速さだけ滑らかにしても、
+          // 下向きの制限が速さに比例したままだと仰角は一瞬で最大まで振れる
+          const down = speed * 0.8 * (m.state === 'charge' ? m.chargeRamp : 1);
+          const vy = THREE.MathUtils.clamp(dy * rate, -down, speed * 0.9);
+          m.vel.set(Math.sin(m.heading) * speed, vy, Math.cos(m.heading) * speed);
+          if (m.recover > 0) {
+            m.recover -= dt;
+            const k = 1 - Math.max(m.recover, 0) / 0.5;
+            m.vel.lerpVectors(m.entryVel, m.vel, k * k * (3 - 2 * k));
+          }
+        }
         m.pos.addScaledVector(m.vel, dt);
 
         if (this.world) this.world.pushOut(m.pos, m.body, m.vel);
