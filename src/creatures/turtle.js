@@ -555,18 +555,20 @@ function skinColor(up) {
 
 // ============ 首〜頭(一体のロフト) ============
 // 首と頭を1つの連続した形状として作るので継ぎ目が出ない。
-// 参考写真の頭は「カプセル」ではなく、
-//   ・頬(眼のすぐ後ろ)が最も張り、そこから前へくさび状に細まる
+// 参考写真の頭は「カプセル」でも「細長い筒」でもなく、
+//   ・頬(眼のすぐ後ろ)が最も張り、そこが首よりはっきり太い
+//   ・眼から吻先までは短く、頭幅の半分ほどしかない
 //   ・先端は尖らず丸く落ちる(嘴)
 //   ・上嘴が下顎にかぶさるので、口の線に沿って段差がある
-const HEAD_LEN = 1.30;
-const HP_V  = [0.00, 0.12, 0.26, 0.40, 0.52, 0.64, 0.74, 0.84, 0.93];
-const HP_HW = [0.360, 0.290, 0.235, 0.225, 0.245, 0.283, 0.292, 0.268, 0.222];
-const HP_HH = [0.320, 0.260, 0.215, 0.208, 0.228, 0.268, 0.278, 0.258, 0.218];
-const HP_CY = [0.000, 0.035, 0.070, 0.098, 0.112, 0.112, 0.100, 0.072, 0.034];
+// 首を頭より太くしたり、眼の前を長くとると、頭のない細長い管に見えてしまう。
+const HEAD_LEN = 1.22;
+const HP_V  = [0.00, 0.14, 0.30, 0.46, 0.60, 0.72, 0.80, 0.87, 0.93];
+const HP_HW = [0.340, 0.225, 0.190, 0.205, 0.268, 0.318, 0.325, 0.295, 0.235];
+const HP_HH = [0.300, 0.205, 0.176, 0.190, 0.244, 0.286, 0.290, 0.268, 0.220];
+const HP_CY = [0.000, 0.040, 0.078, 0.104, 0.118, 0.118, 0.106, 0.082, 0.044];
 const V_BEAK = 0.93;      // ここから先は嘴のキャップ
-const BEAK_LEN = 0.30;    // 嘴の突き出し(HEAD_LEN に対する加算)
-const BEAK_DROP = 0.085;  // 先端が下へフックする量
+const BEAK_LEN = 0.20;    // 嘴の突き出し(HEAD_LEN に対する加算)
+const BEAK_DROP = 0.070;  // 先端が下へフックする量
 const MOUTH_A = 2.02;     // 口の線(断面角。0=真上)
 
 function sampleHP(arr, v) {
@@ -600,7 +602,7 @@ function headSurface(v, a, out = new THREE.Vector3()) {
   const ca = Math.cos(a), sa = Math.sin(a);
   // 上嘴が下顎にかぶさる段差。口の線より下だけを内側へ寄せる
   const aa = Math.abs(((a + Math.PI) % (Math.PI * 2)) - Math.PI);
-  const jaw = 1 - 0.10 * sstep(v, 0.58, 0.92) * sstep(aa, MOUTH_A - 0.02, MOUTH_A + 0.16);
+  const jaw = 1 - 0.10 * sstep(v, 0.64, 0.94) * sstep(aa, MOUTH_A - 0.02, MOUTH_A + 0.16);
   return out.set(
     hw * sa * (ca > 0 ? 1.0 : 0.93) * jaw,
     cy + hh * ca * (ca > 0 ? 0.90 : 1.0) * (ca > 0 ? 1 : jaw),
@@ -616,11 +618,22 @@ function buildHeadNeck() {
   // 首と頭でモザイクの粒を変える。実物も、首は細かい鱗、頭頂は大きな板状の
   // 鱗になっている。UVの繰り返し数が違うので、境界のリングは頂点を重複させる
   // (位置は同一なので裂けない)。
+  // uRep は必ず整数にすること。一周して u が元に戻らないと、
+  // 頭の正中線にテクスチャの継ぎ目がまっすぐ走ってしまう。
+  //
+  // 嘴の区間だけはマテリアルを分ける。先端で断面が一点に畳まれるため、
+  // 巻きつけたモザイクは必ず無限に細い楔へ潰れて星形や縞になる。
+  // そもそも実物の嘴は鱗ではなく滑らかな角質なので、模様を貼らないのが正しい。
   const bands = [
-    { v0: 0.00, v1: 0.55, seg: 26, uRep: 3.0, vRep: 3.6, v0uv: 0.0 },
-    { v0: 0.55, v1: 1.00, seg: 22, uRep: 1.5, vRep: 1.9, v0uv: 0.0 },
+    { v0: 0.00, v1: 0.58, seg: 24, uRep: 3, vRep: 3.6, mat: 0 },  // 首
+    { v0: 0.58, v1: 0.955, seg: 18, uRep: 2, vRep: 1.5, mat: 0 },  // 頭
+    { v0: 0.955, v1: 1.00, seg: 8, uRep: 2, vRep: 1.5, mat: 1 },   // 嘴(角質)
   ];
+  const HORN_TOP = new THREE.Color('#7d6743').convertSRGBToLinear();
+  const HORN_EDGE = new THREE.Color('#c3b489').convertSRGBToLinear();
+  const _horn = new THREE.Color();
 
+  let skinEnd = 0;
   for (const bd of bands) {
     const base = pos.length / 3;
     for (let i = 0; i <= bd.seg; i++) {
@@ -629,8 +642,17 @@ function buildHeadNeck() {
         const a = (j / SEG_A) * Math.PI * 2;
         headSurface(v, a, pt);
         pos.push(pt.x, pt.y, pt.z);
-        uvs.push((j / SEG_A) * bd.uRep, bd.v0uv + (v - bd.v0) * bd.vRep);
-        const c = skinColor(Math.cos(a) * 0.5 + 0.5);
+        uvs.push((j / SEG_A) * bd.uRep, (v - bd.v0) * bd.vRep);
+        const up = Math.cos(a) * 0.5 + 0.5;
+        let c;
+        if (bd.mat === 1) {
+          // 角質にはテクスチャを貼れない(先端でUVが潰れる)ので、
+          // 一様な色にならないよう頂点色そのものをムラつかせる
+          c = _horn.copy(HORN_EDGE).lerp(HORN_TOP, sstep(up, 0.18, 0.62));
+          c.multiplyScalar(0.90 + 0.20 * vnoise(pt.x * 26 + 3, pt.z * 26));
+        } else {
+          c = skinColor(up);
+        }
         cols.push(c.r, c.g, c.b);
       }
     }
@@ -641,6 +663,7 @@ function buildHeadNeck() {
         idx.push(a0, b0, a0 + 1, a0 + 1, b0, b0 + 1);
       }
     }
+    if (bd.mat === 0) skinEnd = idx.length;
   }
   const geo = new THREE.BufferGeometry();
   geo.setIndex(idx);
@@ -648,6 +671,8 @@ function buildHeadNeck() {
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   geo.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
   geo.computeVertexNormals();
+  geo.addGroup(0, skinEnd, 0);                    // 鱗の皮膚
+  geo.addGroup(skinEnd, idx.length - skinEnd, 1); // 嘴
   return geo;
 }
 
@@ -655,7 +680,7 @@ function buildHeadNeck() {
 function buildMouthLine() {
   const pos = [], idx = [];
   const W = 0.055;
-  const V0 = 0.60, V1 = 0.995;
+  const V0 = 0.66, V1 = 0.995;
   const N = 26;
   const p = new THREE.Vector3();
   for (const side of [1, -1]) {
@@ -779,7 +804,10 @@ export class SeaTurtle {
 
     // ---- 首〜頭(一体のロフト。根本は甲羅の中に差し込む) ----
     this.head = new THREE.Group();
-    this.head.add(new THREE.Mesh(buildHeadNeck(), skin));
+    // 嘴は鱗ではなく滑らかな角質なので、モザイクを貼らない別マテリアルにする
+    const beakMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.68 });
+    addCausticsToStandard(beakMat, 0.7);
+    this.head.add(new THREE.Mesh(buildHeadNeck(), [skin, beakMat]));
 
     // 口(嘴の合わせ目)
     const mouthMat = new THREE.MeshStandardMaterial({ color: '#1e1810', roughness: 0.5 });
@@ -789,7 +817,7 @@ export class SeaTurtle {
     const nostrilMat = new THREE.MeshStandardMaterial({ color: '#241d13', roughness: 0.7 });
     const nPos = new THREE.Vector3();
     for (const s of [-1, 1]) {
-      headSurface(0.965, s * 0.42, nPos);
+      headSurface(0.972, s * 0.42, nPos);
       const n = new THREE.Mesh(new THREE.SphereGeometry(0.021, 10, 8), nostrilMat);
       n.position.copy(nPos).multiplyScalar(0.985);
       n.position.z = nPos.z;
@@ -799,10 +827,10 @@ export class SeaTurtle {
 
     // 目: 頭部表面にはめ込み、まぶたの縁で囲う
     const eyeMat = new THREE.MeshStandardMaterial({
-      color: '#150e06', roughness: 0.30, metalness: 0.0,
+      color: '#150e06', roughness: 0.38, metalness: 0.0,
     });
     const lidMat = new THREE.MeshStandardMaterial({ color: '#4a3a22', roughness: 0.80 });
-    const eyeV = 0.735, eyeA = 1.26;
+    const eyeV = 0.805, eyeA = 1.16;
     const ePos = new THREE.Vector3();
     for (const s of [-1, 1]) {
       headSurface(eyeV, s * eyeA, ePos);
@@ -811,12 +839,12 @@ export class SeaTurtle {
       const nrm = new THREE.Vector3(ePos.x / (hw * hw), (ePos.y - cy) / (hh * hh), 0).normalize();
 
       const eye = new THREE.Mesh(new THREE.SphereGeometry(0.050, 16, 12), eyeMat);
-      eye.position.copy(ePos).addScaledVector(nrm, -0.010);
+      eye.position.copy(ePos).addScaledVector(nrm, -0.022);
       this.head.add(eye);
 
       // まぶた: 上下でわずかに被さるので縦につぶす
-      const lid = new THREE.Mesh(new THREE.TorusGeometry(0.050, 0.011, 8, 18), lidMat);
-      lid.position.copy(ePos).addScaledVector(nrm, -0.004);
+      const lid = new THREE.Mesh(new THREE.TorusGeometry(0.049, 0.014, 8, 18), lidMat);
+      lid.position.copy(ePos).addScaledVector(nrm, -0.010);
       lid.lookAt(lid.position.clone().add(nrm));
       lid.scale.set(1.08, 0.78, 1.0);
       this.head.add(lid);
