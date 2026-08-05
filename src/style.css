@@ -135,7 +135,9 @@ body {
 }
 #guide.hidden { pointer-events: none; }
 #guideBox {
-  width: min(90vw, 1000px);
+  /* 縦長(540×1170)の動画なので、幅ではなく高さで収まりを決める。
+     幅だけで決めると、横長の画面では画面外へ突き抜ける。 */
+  width: min(92vw, 430px, calc((100vh - 130px) * 540 / 1170));
   background: rgba(4, 16, 28, 0.94); border: 1px solid var(--glass-line);
   border-radius: 16px; overflow: hidden;
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6);
@@ -152,16 +154,28 @@ body {
   border-radius: 9px; width: 32px; height: 32px; font-size: 13px; cursor: pointer;
 }
 #guideClose:hover { background: rgba(20, 60, 90, 0.7); }
-#guideVideo { display: block; width: 100%; background: #04101c; }
+#guideVideo { display: block; width: 100%; aspect-ratio: 540 / 1170; background: #04101c; }
 
 @media (max-width: 720px) {
   #panel { width: 86%; }
   #hud-title h1 { font-size: 20px; }
   #hud-title .hint { display: none; }
-  /* 狭い画面ではゾーンタブを下へ逃がす(タイトルと重ならないように) */
+  /* 狭い画面では上に3つ並べる余裕がないので、ゾーンタブを最下段へ敷き、
+     その上にコントロールを積む(横に並べると必ず重なる) */
   #zoneBar {
-    top: auto; bottom: 78px; padding: 4px;
-    max-width: calc(100% - 32px); overflow-x: auto;
+    top: auto; bottom: 16px; left: 50%; padding: 4px;
+    max-width: calc(100% - 24px); overflow-x: auto;
   }
   #zoneBar .zone { padding: 7px 12px; font-size: 12px; }
+  #hud-left { left: 16px; right: 16px; bottom: 74px; }
+  #hud-left .ctl input[type="range"] { width: 100%; }
+  #fps { display: none; }
+  /* 追跡中の解説も、コントロールの上へ逃がす */
+  #infoPop {
+    left: 16px; right: 16px; bottom: 176px; transform: none;
+    max-width: none; font-size: 11.5px; padding: 10px 14px;
+  }
+  /* 指で押しやすい大きさに */
+  .chip { padding: 10px 16px; font-size: 13px; }
+  #panelToggle { padding: 12px 18px; }
 }
