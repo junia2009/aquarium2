@@ -7,6 +7,7 @@ import { FISH_SHAPES } from '../creatures/fishGeometry.js';
 import { createFishMaterial } from '../creatures/fishMaterial.js';
 import { School, makeSchoolInstanceAttr } from '../creatures/school.js';
 import { AtollaSwarm, DreamCucumbers, TunicateBed } from '../creatures/abyssal.js';
+import { Anglerfish } from '../creatures/angler.js';
 import { disturbPoint } from '../interaction.js';
 import { ABYSS_SPECIES } from '../species.js';
 
@@ -85,15 +86,18 @@ export const ABYSS = {
     for (const c of vents.colliders) world.addStatic(c.center, c.rx, c.ry, c.rz);
 
     // --- ハダカイワシの群れ ---
-    // 深海でいちばん数の多い魚。ゆっくり漂い、腹の発光器だけが動いて見える
+    // 深海でいちばん数の多い魚。ゆっくり漂い、腹の発光器だけが動いて見える。
+    // 実物は体長10cm前後。チョウチンアンコウ(50cm)と並ぶので、
+    // ここを盛ると大きさの関係が一目で嘘になる
+    const LANTERN_LEN = 0.11;
     const lanternGeo = FISH_SHAPES.lanternfish();
-    lanternGeo.scale(0.42, 0.42, 0.42);
+    lanternGeo.scale(LANTERN_LEN, LANTERN_LEN, LANTERN_LEN);
     const LANTERN_N = 90;
     const lanternMesh = new THREE.InstancedMesh(
       lanternGeo,
       createFishMaterial({
         pattern: 8,
-        len: lanternGeo.userData.length * 0.42,
+        len: lanternGeo.userData.length * LANTERN_LEN,
         swim: { freq: 6.5, amp: 0.075, waveNum: 0.95, headAmp: 0.10, flapFreq: 4.5 },
       }),
       LANTERN_N
@@ -105,10 +109,11 @@ export const ABYSS = {
       mesh: lanternMesh, count: LANTERN_N,
       center: new THREE.Vector3(-4, 9.5, 2), homeRadius: 15, seed: 9,
       params: {
-        maxSpeed: 2.4, minSpeed: 0.7, perception: 2.2,
-        wSep: 1.8, wAli: 0.9, wCoh: 0.7, maxForce: 7,
-        yMin: 5.0, yMax: WORLD.surfaceY - 1.0, burstSpeed: 6.5,
-        bodyRadius: 0.16, avoidRange: 1.0,
+        // 体長10cmの魚の速度感。毎秒10体長で1m/s強
+        maxSpeed: 1.3, minSpeed: 0.40, perception: 1.0, sepDist: 0.34,
+        wSep: 1.8, wAli: 0.9, wCoh: 0.7, maxForce: 5,
+        yMin: 5.0, yMax: WORLD.surfaceY - 1.0, burstSpeed: 3.4,
+        bodyRadius: 0.05, avoidRange: 0.4,
       },
     });
 
@@ -135,19 +140,28 @@ export const ABYSS = {
       spots: tunicateSpots(),
     });
 
+    // --- チョウチンアンコウ ---
+    // ハダカイワシの群れの近くに待ち伏せさせる。エスカの光が群れを引き寄せ、
+    // 一匹が近づきすぎたところで大口を開ける
+    const angler = new Anglerfish(root, {
+      home: new THREE.Vector3(-3.5, 8.2, 3.0), length: 0.52, prey: lanterns,
+    });
+
     return {
       world,
       followTargets: {
-        lanternfish: { get: () => lanterns.schoolCenter, dist: [4, 11] },
+        lanternfish: { get: () => lanterns.schoolCenter, dist: [1.4, 4.0] },
         atolla: { get: () => atolla.swarmCenter, dist: [3.5, 10] },
         seacucumber: { get: () => cukes.center3, dist: [1.5, 4.0] },
         tunicate: { get: () => tunicates.center3, dist: [1.2, 3.0] },
+        angler: { get: () => angler.pos, dist: [1.4, 3.6] },
       },
       update(dt, camera) {
         lanterns.update(dt, [], world);
         atolla.update(dt);
         cukes.update(dt);
         tunicates.update(dt, camera);
+        angler.update(dt, camera);
       },
       onTap(ray, hit) {
         // 深海で光を向けられるのは強い刺激。
@@ -156,9 +170,11 @@ export const ABYSS = {
         // クラゲは視線で直接判定する(群れの代理点を経由すると当たらない)
         const jelly = atolla.alarmAlongRay(ray, 2.6);
         if (jelly) atolla.alarmNear(jelly, 5);
-        if (disturbPoint(ray, lanterns, 3.5, hit)) lanterns.scare(hit, 9, 70);
+        if (disturbPoint(ray, lanterns, 2.0, hit)) lanterns.scare(hit, 3.5, 26);
         // ユメナマコは触られると体表が青く光る(捕食者に「印」をつける)
         if (hit) cukes.glowNear(hit, 3.0);
+        // チョウチンアンコウを狙って触れたら、その場で襲いかからせる
+        if (hit && hit.distanceTo(angler.pos) < 1.2) angler.provoke();
       },
     };
   },

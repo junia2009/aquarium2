@@ -52,6 +52,7 @@ export class School {
     this.pos = [];
     this.vel = [];
     this.panics = []; // {pos, t0, radius, strength}
+    this.lures = [];  // {pos, radius, strength} — 毎フレーム作り直す
     for (let i = 0; i < count; i++) {
       const a = Math.random() * Math.PI * 2;
       const r = Math.random() * homeRadius * 0.4;
@@ -69,6 +70,15 @@ export class School {
     // 警戒度。隣の個体から次々に伝播する(実魚の驚愕が群れを走る現象)
     this.alarm = new Float32Array(count);
     this.alarmNext = new Float32Array(count);
+  }
+
+  /**
+   * 誘引点。チョウチンアンコウの擬餌のように「近寄ってしまう光」を置く。
+   * 1フレーム限りなので、置く側が毎フレーム呼び直す。
+   * 警戒中の個体には効かない(逃げている魚は光に見とれない)。
+   */
+  lure(point, radius = 6, strength = 3.5) {
+    this.lures.push({ pos: point, radius, strength });
   }
 
   // クリック等による驚愕反応
@@ -209,6 +219,19 @@ export class School {
         }
       }
 
+      // ---- 誘引(擬餌への接近) ----
+      // 引力は距離に反比例させず、近いほど強くする。深海の小魚が
+      // 光の一点へ吸い寄せられていく、あの動きになる
+      for (const lu of this.lures) {
+        const dx = lu.pos.x - pos.x, dy = lu.pos.y - pos.y, dz = lu.pos.z - pos.z;
+        const d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 < lu.radius * lu.radius && d2 > 1e-4) {
+          const d = Math.sqrt(d2);
+          const s = lu.strength * (1 - d / lu.radius) * (1 - panicked);
+          force.x += dx / d * s; force.y += dy / d * s; force.z += dz / d * s;
+        }
+      }
+
       // ---- 警戒の伝播 ----
       // 直接刺激を受けた個体だけでなく、隣の慌てた仲間を見た個体も反応する。
       // 1フレームで1ホップずつ伝わるので、驚愕が群れを波のように走る。
@@ -250,6 +273,8 @@ export class School {
     this.alarmNext = swap;
 
     this.schoolCenter.copy(centerAccum).multiplyScalar(1 / this.count);
+    // 誘引点は1フレーム限り。置いた側が毎フレーム置き直す
+    this.lures.length = 0;
     this.writeMatrices(dt);
   }
 
