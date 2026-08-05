@@ -29,59 +29,73 @@ const POOL_LIMIT = 26;
 
 // ============ 種ごとの体型・体色・行動 ============
 // 16点のプロファイルで、吻 → メロン → 胴 → 尾柄 の太さの変化を表現する。
+//
+// 寸法の決め方に注意。`length` は「吻先から尾柄まで」で、尾びれはその後ろへ
+// 伸びるので、鯨類の全長(吻先〜尾びれの切れ込み)は length の 1.078 倍になる。
+// 下のコメントの m 表記はすべてこの全長のこと。
+//
+// 体高・体幅は全長に対する比で決める。ここを大きくすると、長さは同じでも
+// 「ずんぐり短い」シルエットになってしまう(実際にそうなっていた)。
+// 実物の胴の高さは全長の 0.17〜0.22 程度しかない。
+const TAIL_TO_TOTAL = 1.078;   // length → 鯨類の全長
+const len = (total) => total / TAIL_TO_TOTAL;
+
 export const DOLPHIN_KINDS = {
-  // バンドウイルカ: 標準的な体型。短い吻と鎌形の背びれ
+  // バンドウイルカ: 全長3.7m。標準的な体型。短い吻と鎌形の背びれ
   bottlenose: {
     key: 'bottlenose',
     pattern: 5,
-    length: 3.4,
+    length: len(3.70),
     shape: {
-      hRatio: 0.148, wRatio: 0.125,
-      hProfile: [0.11, 0.15, 0.21, 0.52, 0.80, 0.94, 1.00, 0.99, 0.95, 0.87, 0.75, 0.61, 0.46, 0.32, 0.21, 0.13],
-      wProfile: [0.10, 0.14, 0.19, 0.46, 0.74, 0.91, 1.00, 0.99, 0.94, 0.84, 0.70, 0.55, 0.40, 0.27, 0.17, 0.10],
-      yOffset: [-0.09, -0.09, -0.07, -0.02, 0.04, 0.07, 0.07, 0.06, 0.04, 0.02, 0.00, -0.01, -0.02, -0.01, 0.0, 0.0],
+      // 胴高 = 全長の 0.185 / 胴幅 = 0.155
+      hRatio: 0.100, wRatio: 0.084,
+      hProfile: [0.07, 0.22, 0.42, 0.72, 0.90, 0.98, 1.00, 0.99, 0.95, 0.89, 0.81, 0.71, 0.60, 0.49, 0.40, 0.33],
+      wProfile: [0.06, 0.19, 0.38, 0.68, 0.88, 0.97, 1.00, 0.98, 0.93, 0.85, 0.75, 0.63, 0.50, 0.38, 0.28, 0.21],
+      yOffset: [-0.14, -0.13, -0.10, -0.03, 0.05, 0.10, 0.10, 0.09, 0.06, 0.03, 0.00, -0.02, -0.03, -0.02, 0.0, 0.0],
       tail: { len: 0.20, height: 0.52, fork: 0.46, horizontal: true },
-      dorsal: { from: 0.40, to: 0.60, height: 0.62 },
-      pectoral: { at: 0.27, len: 0.20, width: 0.075 },
+      dorsal: { from: 0.38, to: 0.76, height: 1.40 },
+      pectoral: { at: 0.27, len: 0.18, width: 0.070 },
     },
     swim: { freq: 2.6, amp: 0.05, waveNum: 0.55, headAmp: 0.05, flapFreq: 1.4 },
     behavior: { cruise: 3.0, charge: 11.0, launchUp: [8.0, 3.0], launchFwd: 6.5, interval: [24, 36] },
   },
 
-  // シロイルカ: 全身白く、背びれがない(代わりに低い隆起)。
+  // シロイルカ: 全長5.0m で最大。全身白く、背びれがない(代わりに低い隆起)。
   // 丸く膨らんだメロンとずんぐりした体が特徴で、泳ぎはゆったり。
   beluga: {
     key: 'beluga',
     pattern: 6,
-    length: 4.9,
+    length: len(5.00),
     shape: {
-      hRatio: 0.176, wRatio: 0.152,
-      hProfile: [0.34, 0.62, 0.85, 0.97, 1.00, 1.00, 0.98, 0.95, 0.90, 0.83, 0.73, 0.61, 0.47, 0.34, 0.22, 0.12],
-      wProfile: [0.30, 0.58, 0.82, 0.95, 1.00, 1.00, 0.98, 0.94, 0.88, 0.80, 0.69, 0.56, 0.42, 0.29, 0.18, 0.10],
-      yOffset: [0.02, 0.06, 0.09, 0.10, 0.09, 0.07, 0.05, 0.03, 0.01, 0.00, -0.01, -0.02, -0.02, -0.01, 0.0, 0.0],
-      tail: { len: 0.21, height: 0.50, fork: 0.42, horizontal: true },
+      // 3種のなかでは最も太いが、それでも胴高は全長の 0.215
+      hRatio: 0.116, wRatio: 0.100,
+      hProfile: [0.30, 0.58, 0.82, 0.95, 1.00, 1.00, 0.99, 0.97, 0.93, 0.88, 0.81, 0.72, 0.62, 0.51, 0.41, 0.34],
+      wProfile: [0.26, 0.54, 0.79, 0.93, 1.00, 1.00, 0.99, 0.96, 0.91, 0.85, 0.77, 0.67, 0.55, 0.43, 0.32, 0.23],
+      yOffset: [0.03, 0.09, 0.13, 0.15, 0.13, 0.10, 0.07, 0.04, 0.01, 0.00, -0.01, -0.03, -0.03, -0.02, 0.0, 0.0],
+      tail: { len: 0.21, height: 0.42, fork: 0.42, horizontal: true },
       dorsal: null,                                    // 背びれを持たない
-      pectoral: { at: 0.28, len: 0.17, width: 0.085 }, // 丸く小さい胸びれ
+      pectoral: { at: 0.28, len: 0.15, width: 0.075 }, // 丸く小さい胸びれ
     },
     swim: { freq: 1.7, amp: 0.05, waveNum: 0.5, headAmp: 0.06, flapFreq: 1.0 },
     // 大きく穏やか。跳ぶことは稀で、跳んでも低い
     behavior: { cruise: 2.1, charge: 7.0, launchUp: [4.2, 1.4], launchFwd: 4.0, interval: [100, 90] },
   },
 
-  // カマイルカ: 背は黒く腹は白、体側に淡灰色の帯(サスペンダー模様)。
+  // カマイルカ: 全長2.5m で最小。背は黒く腹は白、体側に淡灰色の帯。
   // 大きく反り返った鎌形の背びれ。小柄で俊敏、よく跳ぶ。
   whiteSided: {
     key: 'whiteSided',
     pattern: 7,
-    length: 2.4,
+    length: len(2.50),
     shape: {
-      hRatio: 0.150, wRatio: 0.118,
-      hProfile: [0.14, 0.22, 0.50, 0.80, 0.94, 1.00, 1.00, 0.98, 0.94, 0.86, 0.74, 0.60, 0.45, 0.31, 0.20, 0.12],
-      wProfile: [0.12, 0.19, 0.45, 0.75, 0.91, 1.00, 1.00, 0.97, 0.92, 0.83, 0.70, 0.55, 0.40, 0.27, 0.17, 0.10],
-      yOffset: [-0.07, -0.07, -0.04, 0.01, 0.05, 0.07, 0.07, 0.06, 0.04, 0.02, 0.00, -0.01, -0.02, -0.01, 0.0, 0.0],
-      tail: { len: 0.20, height: 0.54, fork: 0.48, horizontal: true },
-      dorsal: { from: 0.40, to: 0.62, height: 0.95 },  // 高く反り返る
-      pectoral: { at: 0.26, len: 0.19, width: 0.07 },
+      // 3種のなかで最も細身。胴高は全長の 0.170
+      hRatio: 0.092, wRatio: 0.075,
+      hProfile: [0.10, 0.26, 0.52, 0.80, 0.94, 1.00, 1.00, 0.98, 0.94, 0.88, 0.80, 0.70, 0.59, 0.48, 0.39, 0.32],
+      wProfile: [0.09, 0.23, 0.48, 0.76, 0.92, 0.99, 1.00, 0.97, 0.92, 0.84, 0.75, 0.64, 0.52, 0.40, 0.30, 0.22],
+      yOffset: [-0.11, -0.10, -0.06, 0.01, 0.07, 0.10, 0.10, 0.09, 0.06, 0.03, 0.00, -0.02, -0.03, -0.02, 0.0, 0.0],
+      tail: { len: 0.20, height: 0.62, fork: 0.48, horizontal: true },
+      dorsal: { from: 0.38, to: 0.79, height: 1.90 },  // 高く反り返る
+      pectoral: { at: 0.26, len: 0.17, width: 0.065 },
     },
     swim: { freq: 3.4, amp: 0.055, waveNum: 0.6, headAmp: 0.05, flapFreq: 1.8 },
     // 小柄で俊敏。頻繁に跳ぶ
@@ -383,6 +397,10 @@ export class DolphinPod {
         seed: Math.random() * 40,
         state: 'cruise',            // cruise | charge | air
         timer: iv[0] * 0.5 + Math.random() * iv[1],
+        aimIn: false,               // 助走中、内向きへ向き直している最中か
+        launchJitter: 0,            // 跳ぶ向きの個体差(助走の開始時に決める)
+        diveT: 0,                   // 助走で潜っている残り時間
+        launchVy: 0,                // 跳び上がる初速(助走の開始時に決める)
         wasAbove: false,
         body: length * 0.17,
       });
@@ -415,14 +433,20 @@ export class DolphinPod {
       // (後にすると、せっかく与えた打ち上げ速度が遊泳速度で上書きされてしまう)
       if (m.state === 'charge' && m.pos.y > surf - 0.6) {
         m.state = 'air';
-        // 外周寄りにいるときは内向きに跳ぶ。そうしないと着水がプールの外になる
-        const rr = Math.hypot(m.pos.x - this.center.x, m.pos.z - this.center.z);
-        if (rr > this.radius * 0.55) {
-          m.heading = Math.atan2(this.center.x - m.pos.x, this.center.z - m.pos.z)
-                    + (Math.random() - 0.5) * 1.1;
-        }
-        m.vel.set(Math.sin(m.heading), 0, Math.cos(m.heading)).multiplyScalar(bh.launchFwd);
-        m.vel.y = bh.launchUp[0] + Math.random() * bh.launchUp[1];
+        // 跳ぶ向きは助走のあいだに合わせてある。ここで向きを変えてはいけない
+        // (水面を割る瞬間に体がねじれて見える)。
+        // それでも着水がプールからはみ出しそうなときは、向きではなく
+        // 前進の勢いだけを落として収める。こちらは見た目に出ない。
+        const flight = 2 * m.launchVy / GRAVITY;
+        const dxh = Math.sin(m.heading), dzh = Math.cos(m.heading);
+        const R = POOL_LIMIT * 0.95;
+        // |pos + s·dir| = R を解いて、収まる最大の水平移動距離 s を出す
+        const pd = m.pos.x * dxh + m.pos.z * dzh;
+        const disc = pd * pd - (m.pos.x * m.pos.x + m.pos.z * m.pos.z) + R * R;
+        const sMax = disc > 0 ? Math.max(-pd + Math.sqrt(disc), 0) : 0;
+        const fwd = Math.min(bh.launchFwd, sMax / Math.max(flight, 0.01));
+        m.vel.set(dxh, 0, dzh).multiplyScalar(fwd);
+        m.vel.y = m.launchVy;
         // 離水は体が水を押し上げるだけなので、着水よりは控えめ
         this.splash.burst(m.pos.clone().setY(surf), U.uTime.value, this.bodyScale * 0.55);
         if (this.onBreach) this.onBreach();
@@ -460,8 +484,11 @@ export class DolphinPod {
         let speed;
 
         if (m.state === 'charge') {
-          // 助走: 深く潜ってから水面へ全速力で駆け上がる
-          targetY = surf;
+          // 助走: いったん深く潜り、そこから水面へ全速力で駆け上がる。
+          // 潜っている時間を確保しておかないと、跳ぶ向きへ向き直る余裕がない
+          // (向きが合わないまま水面に着いて、離水時の不自然な回頭につながる)
+          m.diveT -= dt;
+          targetY = m.diveT > 0 ? this.center.y - 3.5 : surf;
           speed = bh.charge;
         } else {
           // 巡航: ポッドでゆるくまとまって回遊する
@@ -469,22 +496,49 @@ export class DolphinPod {
           speed = bh.cruise * (1 + wander1(t * 0.1 + m.seed * 2, m.seed) * 0.3);
           if (m.timer <= 0) {
             m.state = 'charge';
-            m.timer = 6;
-            // 助走のためいったん潜る
+            m.timer = 8;
+            m.aimIn = false;
+            m.launchJitter = (Math.random() - 0.5) * 0.9;
+            m.diveT = 1.2;   // 潜っている時間。この間に跳ぶ向きへ向き直る
+            // 跳ぶ勢いはここで決めてしまう。助走中に着水点を正しく読むため
+            m.launchVy = bh.launchUp[0] + Math.random() * bh.launchUp[1];
             targetY = this.center.y - 3.5;
           }
         }
 
-        // --- 針路: 群れの中心へゆるく寄りつつ、外周で内向きに ---
-        let turn = wander1(t * 0.12 + m.seed * 3, m.seed) * 0.7;
-        const dx = m.pos.x - this.center.x, dz = m.pos.z - this.center.z;
-        const r = Math.hypot(dx, dz);
-        if (r > this.radius) {
-          const toIn = Math.atan2(-dx, -dz);
-          let diff = toIn - m.heading;
-          while (diff > Math.PI) diff -= Math.PI * 2;
-          while (diff < -Math.PI) diff += Math.PI * 2;
-          turn += diff * 1.2;
+        let turn;
+        if (m.state === 'charge') {
+          // --- 助走中の針路 ---
+          // 跳ぶ向きは、水面を割る瞬間ではなく助走のあいだに決める。
+          // このまま跳んだら着水がプールの外になるとわかった時点で
+          // 内向きへ舵を切りはじめ、離水までに向き直っておく。
+          // (離水時に heading を代入すると、水面で体が一瞬でねじれる)
+          const reach = bh.launchFwd * 2 * m.launchVy / GRAVITY;
+          const lx = m.pos.x + Math.sin(m.heading) * reach;
+          const lz = m.pos.z + Math.cos(m.heading) * reach;
+          // いったん内向きに決めたら助走中は戻さない(境界でふらつかせない)
+          if (Math.hypot(lx, lz) > POOL_LIMIT * 0.72) m.aimIn = true;
+          if (m.aimIn) {
+            const want = Math.atan2(this.center.x - m.pos.x, this.center.z - m.pos.z) + m.launchJitter;
+            let diff = want - m.heading;
+            while (diff > Math.PI) diff -= Math.PI * 2;
+            while (diff < -Math.PI) diff += Math.PI * 2;
+            turn = diff * 3.0;
+          } else {
+            turn = 0;   // まっすぐ助走する
+          }
+        } else {
+          // --- 巡航の針路: 群れの中心へゆるく寄りつつ、外周で内向きに ---
+          turn = wander1(t * 0.12 + m.seed * 3, m.seed) * 0.7;
+          const dx = m.pos.x - this.center.x, dz = m.pos.z - this.center.z;
+          const r = Math.hypot(dx, dz);
+          if (r > this.radius) {
+            const toIn = Math.atan2(-dx, -dz);
+            let diff = toIn - m.heading;
+            while (diff > Math.PI) diff -= Math.PI * 2;
+            while (diff < -Math.PI) diff += Math.PI * 2;
+            turn += diff * 1.2;
+          }
         }
         // 仲間・他種との近接回避(neighbors には全ポッドの個体が入る)
         for (const o of others) {
@@ -533,7 +587,12 @@ export class DolphinPod {
           const nx = m.pos.x / wr, nz = m.pos.z / wr;
           m.pos.x = nx * POOL_LIMIT;
           m.pos.z = nz * POOL_LIMIT;
-          m.heading = Math.atan2(-nx, -nz) + (Math.random() - 0.5) * 0.6;
+          // ここも向きを代入してはいけない。壁に触れた瞬間に体が反転して見える。
+          // 位置は止めたうえで、強めに舵を切って数十フレームで向き直る
+          let diff = Math.atan2(-nx, -nz) - m.heading;
+          while (diff > Math.PI) diff -= Math.PI * 2;
+          while (diff < -Math.PI) diff += Math.PI * 2;
+          m.heading += THREE.MathUtils.clamp(diff * 3.0, -2.5, 2.5) * dt;
         }
       }
 
