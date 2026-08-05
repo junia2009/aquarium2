@@ -13,12 +13,27 @@ import * as THREE from 'three';
 // (角度で引くと、等高線が角丸長方形になって輪のように見えてしまう)
 
 // 配列を 0..1 のtで線形補間サンプリング
-function sampleProfile(arr, t) {
+function sampleLinear(arr, t) {
   const f = Math.min(Math.max(t, 0), 1) * (arr.length - 1);
   const i = Math.floor(f);
   const u = f - i;
   if (i >= arr.length - 1) return arr[arr.length - 1];
   return arr[i] * (1 - u) + arr[i + 1] * u;
+}
+
+// Catmull-Rom による滑らかなサンプリング。
+// 線形補間だと制御点ごとに傾きが折れるので、メロンのように短い区間で
+// 太さが大きく変わる形では、その折れがそのまま面の稜線として見えてしまう。
+function sampleSmooth(arr, t) {
+  const n = arr.length;
+  const f = Math.min(Math.max(t, 0), 1) * (n - 1);
+  const i = Math.min(Math.floor(f), n - 2);
+  const u = f - i;
+  const p0 = arr[Math.max(i - 1, 0)], p1 = arr[i];
+  const p2 = arr[i + 1], p3 = arr[Math.min(i + 2, n - 1)];
+  return 0.5 * (2 * p1 + (p2 - p0) * u
+    + (2 * p0 - 5 * p1 + 4 * p2 - p3) * u * u
+    + (-p0 + 3 * p1 - 3 * p2 + p3) * u * u * u);
 }
 
 export function buildFishGeometry(opts) {
@@ -44,7 +59,12 @@ export function buildFishGeometry(opts) {
     anal = null,      // 臀びれ(背びれと同じ形式で腹側へ)
     pectoral = { at: 0.3, len: 0.30, width: 0.14 },
     pelvic = null,    // 腹びれ(胸びれと同じ形式)
+    // プロファイルの補間。既定は線形。短い区間で太さが大きく変わる体型
+    // (シロイルカのメロンなど)では、制御点の折れが稜線として見えるので
+    // smooth: true にする
+    smooth = false,
   } = opts;
+  const sampleProfile = smooth ? sampleSmooth : sampleLinear;
 
   const positions = [];
   const bodyUV = [];
@@ -258,6 +278,29 @@ export function buildFishGeometry(opts) {
           push(x0 + outX, y0 + dropY, z - sweep, t + s * 0.05, 0.34, partId);
           // 後縁
           push(x0 + outX * 0.98, y0 + dropY - chord * 0.10, z - sweep - chord, t + s * 0.10, 0.28, partId);
+        }
+        for (let j = 0; j < pSegs; j++) {
+          const a = pStart + j * 2;
+          if (side > 0) indices.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
+          else indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+        }
+      } else if (spec.shape === 'paddle') {
+        // 幅広く丸い櫂。付け根に弦長(chord)を持たせ、先端を丸く落とす。
+        // 既定の胸びれは付け根の弦長が0で、根元が一点に集まった針のような
+        // 形になる。細い翼ならそれでいいが、シロイルカのような板状のひれ
+        // には使えない。droop を負にすると先端が上へ反る(成体の特徴)。
+        const pSegs = spec.segs ?? 10;
+        const span = spec.width * L;          // 外への張り出し
+        const sweep = spec.len * L;           // 後退量
+        const chord0 = (spec.chord ?? 0.06) * L;
+        for (let j = 0; j <= pSegs; j++) {
+          const s = j / pSegs;
+          const out = span * Math.sin(s * Math.PI * 0.52);
+          const chord = chord0 * Math.pow(Math.max(1 - s * s, 0), 0.42);
+          const back = sweep * (0.15 * s + 0.85 * s * s);
+          const drop = -(spec.droop ?? 0.22) * sweep * s * s;
+          push(x0 + side * out, y0 + drop, z - back, t + s * 0.06, 0.34, partId);
+          push(x0 + side * out, y0 + drop - chord * 0.05, z - back - chord, t + s * 0.10, 0.28, partId);
         }
         for (let j = 0; j < pSegs; j++) {
           const a = pStart + j * 2;

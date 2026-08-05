@@ -318,21 +318,28 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, float
     col = white;
     // 腹側はごくわずかに明るく、背は少しだけくすむ
     col *= 0.94 + 0.10 * (1.0 - smoothstep(0.45, 0.95, v));
-    // 背びれの代わりの低い隆起(背中の稜線がうっすら影になる)
+    // 背びれの代わりの低い隆起。稜はジオメトリ側(belugaSection)で作るので、
+    // ここは影だけ。u の範囲はそちらの帯と必ず合わせること
     float ridge = smoothstep(0.030, 0.0, abs(v - 0.985))
-                * smoothstep(0.36, 0.46, u) * smoothstep(0.80, 0.68, u);
+                * smoothstep(0.40, 0.50, u) * smoothstep(0.92, 0.82, u);
     col = mix(col, white * 0.86, ridge * 0.7);
+    // 首のくびれの影(頸椎が癒合していないので、鯨類には珍しく首がある)
+    float neck = smoothstep(0.055, 0.0, abs(u - 0.285)) * smoothstep(0.15, 0.45, v);
+    col = mix(col, white * 0.90, neck * 0.5);
     // 皮膚の質感(かすかな斑)
     col *= 0.97 + 0.06 * fbm(vec2(u * 22.0, v * 9.0));
     // 口の裂け目と、口角のわずかな影(ほほえんで見えるライン)
-    float mouth = smoothstep(0.020, 0.0, abs(v - 0.34))
-                * smoothstep(0.01, 0.05, u) * smoothstep(0.24, 0.17, u);
+    float mouth = smoothstep(0.020, 0.0, abs(v - 0.30))
+                * smoothstep(0.03, 0.07, u) * smoothstep(0.25, 0.18, u);
     col = mix(col, vec3(0.40, 0.40, 0.41), mouth * 0.75);
-    // 噴気孔
-    float blow = smoothstep(0.030, 0.012, length(vec2((u - 0.235) * 2.4, v - 0.99)));
+    // 噴気孔(メロンの頂点のすぐ後ろ)
+    float blow = smoothstep(0.030, 0.012, length(vec2((u - 0.220) * 2.4, v - 0.99)));
     col = mix(col, vec3(0.42, 0.43, 0.44), blow * 0.7);
-    // 小さな黒い目
-    col = mix(col, vec3(0.06, 0.06, 0.07), eyeDot(u, v, 0.225, 0.52, 0.024));
+    // ひれは胴と同じ調子に揃える。胴の陰影は v(断面角)で作っているが、
+    // ひれの v は膜の座標なので、そのままだと腹側扱いになって白く浮く
+    if (part > 0.5) col = white * 0.93;
+    // 小さな黒い目。口角のすぐ後ろ、やや下につく
+    col = mix(col, vec3(0.06, 0.06, 0.07), eyeDot(u, v, 0.240, 0.38, 0.022));
     glossMul = 1.7;
   } else {
     // ---- カマイルカ: 黒い背・白い腹に、体側を走る淡灰色の帯 ----

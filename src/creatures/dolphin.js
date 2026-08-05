@@ -40,6 +40,30 @@ const POOL_LIMIT = 26;
 const TAIL_TO_TOTAL = 1.078;   // length → 鯨類の全長
 const len = (total) => total / TAIL_TO_TOTAL;
 
+const sstep = (x, e0, e1) => {
+  const t = Math.min(Math.max((x - e0) / (e1 - e0), 0), 1);
+  return t * t * (3 - 2 * t);
+};
+
+// シロイルカの断面変形。楕円のままでは出せない3つの特徴を足す。
+//   ・背びれの代わりの稜: 後半身の正中線に低い隆起が走り、こぶ状に波打つ
+//   ・尾柄のキール: 尾の手前で断面が横へ張り出し、平たい板のようになる
+//   ・メロン: 上半分が横へ張り出し、その下の吻は細い。楕円のままだと
+//     真上から見たときに頭が尖って見える
+// (x, y) は単位円上の点で y=+1 が背、t は 0=吻 1=尾柄
+function belugaSection(x, y, t) {
+  const mid = Math.exp(-(x / 0.34) * (x / 0.34));          // 正中線の近くだけ
+  const band = sstep(t, 0.40, 0.54) * (1 - sstep(t, 0.90, 1.0));
+  const knob = 0.80 + 0.20 * Math.cos(t * 46);             // こぶの波
+  const ny = y + 0.13 * mid * Math.max(y, 0) * band * knob;
+  const flat = Math.exp(-(y / 0.38) * (y / 0.38));         // 断面の横腹だけ
+  let nx = x + 0.13 * flat * x * sstep(t, 0.68, 0.90);
+  const head = 1 - sstep(t, 0.06, 0.26);
+  const lobe = 0.5 + 0.5 * y;                              // 0=腹 1=背(滑らかに)
+  nx *= 1 + head * (0.14 * lobe - 0.16 * (1 - lobe));
+  return [nx, ny];
+}
+
 export const DOLPHIN_KINDS = {
   // バンドウイルカ: 全長3.7m。標準的な体型。短い吻と鎌形の背びれ
   bottlenose: {
@@ -61,20 +85,34 @@ export const DOLPHIN_KINDS = {
   },
 
   // シロイルカ: 全長5.0m で最大。全身白く、背びれがない(代わりに低い隆起)。
-  // 丸く膨らんだメロンとずんぐりした体が特徴で、泳ぎはゆったり。
+  // 実物は「太った水滴」ではなく、はっきり筋肉質で凹凸がある。
+  //   ・丸く張り出したメロン(額)が独立した山になっていて、その後ろが少しくびれる
+  //     (頸椎が癒合していないので、鯨類には珍しく本当に「首」がある)
+  //   ・くびれの後ろで胸がぐっと太くなる
+  //   ・背びれの代わりに、後半身の正中線を低い稜が走る。こぶ状に波打つ
+  //   ・尾柄が深く、側面にキールがある
   beluga: {
     key: 'beluga',
     pattern: 6,
     length: len(5.00),
     shape: {
-      // 3種のなかでは最も太いが、それでも胴高は全長の 0.215
-      hRatio: 0.116, wRatio: 0.100,
-      hProfile: [0.30, 0.58, 0.82, 0.95, 1.00, 1.00, 0.99, 0.97, 0.93, 0.88, 0.81, 0.72, 0.62, 0.51, 0.41, 0.34],
-      wProfile: [0.26, 0.54, 0.79, 0.93, 1.00, 1.00, 0.99, 0.96, 0.91, 0.85, 0.77, 0.67, 0.55, 0.43, 0.32, 0.23],
-      yOffset: [0.03, 0.09, 0.13, 0.15, 0.13, 0.10, 0.07, 0.04, 0.01, 0.00, -0.01, -0.03, -0.03, -0.02, 0.0, 0.0],
-      tail: { len: 0.21, height: 0.42, fork: 0.42, horizontal: true },
-      dorsal: null,                                    // 背びれを持たない
-      pectoral: { at: 0.28, len: 0.15, width: 0.075 }, // 丸く小さい胸びれ
+      // 3種のなかで最も太い。胴高は全長の 0.234 / 胴幅 0.203
+      hRatio: 0.126, wRatio: 0.109,
+      //          吻    メロン →   頂点  首    胸 →  最大 ...................  尾柄
+      hProfile: [0.52, 0.86, 0.94, 0.91, 0.87, 0.96, 1.00, 1.00, 0.99, 0.97, 0.93, 0.87, 0.79, 0.70, 0.59, 0.48],
+      wProfile: [0.46, 0.80, 0.88, 0.86, 0.81, 0.93, 1.00, 1.00, 0.99, 0.96, 0.91, 0.83, 0.73, 0.62, 0.50, 0.39],
+      // メロンは上へ張り出し、口は下に残る。ここを寝かせると額の丸みが消える
+      yOffset: [0.22, 0.26, 0.27, 0.24, 0.15, 0.07, 0.02, 0.00, -0.01, -0.02, -0.02, -0.02, -0.02, -0.01, 0.0, 0.0],
+      sectionMod: belugaSection,
+      smooth: true,   // メロンの折れを出さない
+      // 吻先は「短く丸い蓋」。伸ばすと円錐になってメロンが台無しになるので、
+      // キャップの長さは付け根の半径よりはっきり短くすること
+      nose: { rings: 7, len: 0.022, flat: 3.4 },
+      tail: { len: 0.21, height: 0.42, fork: 0.34, horizontal: true },
+      dorsal: null,                                    // 背びれを持たない(稜は断面で作る)
+      // 幅広く丸い櫂。成体は先端が上へ反る(droop を負にする)
+      pectoral: { shape: 'paddle', at: 0.30, len: 0.050, width: 0.130,
+                  chord: 0.075, droop: -0.55, low: 0.42 },
     },
     swim: { freq: 1.7, amp: 0.05, waveNum: 0.5, headAmp: 0.06, flapFreq: 1.0 },
     // 大きく穏やか。跳ぶことは稀で、跳んでも低い
@@ -112,8 +150,11 @@ function buildDolphinGeometry(kind) {
     hProfile: s.hProfile,
     wProfile: s.wProfile,
     yOffset: s.yOffset,
-    rings: 34,
-    radial: 20,
+    rings: 40,
+    radial: 22,
+    sectionMod: s.sectionMod ?? null,
+    nose: s.nose ?? null,
+    smooth: !!s.smooth,
     tail: s.tail,
     dorsal: s.dorsal,
     pectoral: s.pectoral,
