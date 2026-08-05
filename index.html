@@ -46,6 +46,7 @@
       </div>
       <div class="ctl-row">
         <button id="soundBtn" class="chip" type="button">🔇 環境音</button>
+        <button id="guideBtn" class="chip" type="button">▶ 遊び方</button>
         <button id="freeBtn" class="chip hidden" type="button">✕ 追跡解除</button>
       </div>
       <div id="fps"></div>
@@ -59,6 +60,23 @@
     </aside>
 
     <div id="infoPop" class="hidden"></div>
+
+    <!-- 遊び方の動画。media/ はビルド時に dist/ へそのままコピーされるので、
+         ビルドあり・なしのどちらの配信でも同じ相対パスで解決できる -->
+    <div id="guide" class="hidden">
+      <div id="guideBox">
+        <div id="guideHead">
+          <span>遊び方</span>
+          <button id="guideClose" type="button" aria-label="閉じる">✕</button>
+        </div>
+        <!-- source は開いたときに JS で入れる。HTMLに書くと Vite が assets/ へ
+             ハッシュ付きで複製してしまい、media/ と二重に入る。
+             遅延指定なので、遊び方を開くまで一切ダウンロードされない。
+             H.264 を持たないブラウザ(一部の Linux ビルドなど)向けに
+             WebM/VP9 も置き、再生できるほうが選ばれるようにしている。 -->
+        <video id="guideVideo" controls playsinline preload="none"></video>
+      </div>
+    </div>
   </div>
   <script type="module" src="./src/main.js"></script>
 </body>

@@ -11,6 +11,7 @@ const pwaFiles = {
     cpSync('manifest.webmanifest', 'dist/manifest.webmanifest');
     cpSync('404.html', 'dist/404.html');
     cpSync('icons', 'dist/icons', { recursive: true });
+    cpSync('media', 'dist/media', { recursive: true });   // 遊び方の動画
 
     // Vite はマニフェストとアイコンをハッシュ付きで assets/ へ移してしまうが、
     // マニフェスト内の icons・start_url・scope は「マニフェスト自身の位置」からの

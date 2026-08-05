@@ -126,6 +126,34 @@ body {
 #infoPop b { color: var(--accent); font-size: 13.5px; }
 .hidden { opacity: 0; visibility: hidden; }
 
+/* ---- 遊び方の動画 ---- */
+#guide {
+  position: absolute; inset: 0; z-index: 40;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(2, 10, 18, 0.78); backdrop-filter: blur(6px);
+  transition: opacity 0.25s;
+}
+#guide.hidden { pointer-events: none; }
+#guideBox {
+  width: min(90vw, 1000px);
+  background: rgba(4, 16, 28, 0.94); border: 1px solid var(--glass-line);
+  border-radius: 16px; overflow: hidden;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6);
+  transform: scale(0.97); transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+}
+#guide:not(.hidden) #guideBox { transform: scale(1); }
+#guideHead {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 14px 12px 18px;
+  font-size: 13px; letter-spacing: 0.18em; color: var(--dim);
+}
+#guideClose {
+  background: transparent; border: 1px solid var(--glass-line); color: var(--ink);
+  border-radius: 9px; width: 32px; height: 32px; font-size: 13px; cursor: pointer;
+}
+#guideClose:hover { background: rgba(20, 60, 90, 0.7); }
+#guideVideo { display: block; width: 100%; background: #04101c; }
+
 @media (max-width: 720px) {
   #panel { width: 86%; }
   #hud-title h1 { font-size: 20px; }

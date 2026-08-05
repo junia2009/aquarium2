@@ -89,6 +89,47 @@ export function setupUI({ zones, onFollow, onFree, onZone, audio }) {
     U.uSunI.value = sunSlider.value / 100;
   });
 
+  // ---- 遊び方の動画 ----
+  // 開いている間だけ再生する。閉じたら必ず止めて頭出しに戻す
+  // (裏で鳴り続けたり、次に開いたとき途中から始まったりしないように)。
+  const guide = document.getElementById('guide');
+  const guideVideo = document.getElementById('guideVideo');
+  // 開いている間に押されていたキーが残ると、閉じた瞬間に泳ぎ出してしまう
+  const diveKeysReset = () => window.dispatchEvent(new Event('blur'));
+  // 上から順に、再生できる最初の形式が選ばれる
+  const GUIDE_SRC = [
+    ['./media/aquarium-guide.mp4', 'video/mp4'],
+    ['./media/aquarium-guide.webm', 'video/webm'],
+  ];
+  function openGuide() {
+    guide.classList.remove('hidden');
+    document.body.classList.add('modal-open');   // 開いている間はカメラを動かさない
+    if (!guideVideo.firstChild) {
+      for (const [src, type] of GUIDE_SRC) {
+        const s = document.createElement('source');
+        s.src = src; s.type = type;
+        guideVideo.appendChild(s);
+      }
+      guideVideo.load();
+    }
+    guideVideo.currentTime = 0;
+    guideVideo.play().catch(() => {});   // 自動再生が拒否されても操作で再生できる
+  }
+  function closeGuide() {
+    guide.classList.add('hidden');
+    document.body.classList.remove('modal-open');
+    diveKeysReset();
+    guideVideo.pause();
+    guideVideo.currentTime = 0;
+  }
+  document.getElementById('guideBtn').addEventListener('click', openGuide);
+  document.getElementById('guideClose').addEventListener('click', closeGuide);
+  // 背景を押しても閉じる(動画本体を押したときは閉じない)
+  guide.addEventListener('click', (e) => { if (e.target === guide) closeGuide(); });
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !guide.classList.contains('hidden')) closeGuide();
+  });
+
   // FPS表示(0.5秒ごと)
   let frames = 0;
   let acc = 0;

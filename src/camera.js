@@ -115,6 +115,8 @@ export class DiveCamera {
 
     window.addEventListener('keydown', (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      // 遊び方の動画などを開いている間は泳がない
+      if (document.body.classList.contains('modal-open')) return;
       this.keys.add(e.code);
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));

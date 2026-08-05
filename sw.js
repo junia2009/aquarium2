@@ -29,6 +29,10 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return; // 外部リソースは素通し
 
+  // 動画は Range リクエストで飛んでくる。206 Partial Content は Cache API に
+  // 入れられず cache.put が例外を投げるため、SWを通さずブラウザに任せる。
+  if (req.headers.has('range') || url.pathname.endsWith('.mp4')) return;
+
   // ハッシュ付きの不変資産はキャッシュ優先(内容が変わればファイル名が変わる)
   const immutable = url.pathname.includes('/assets/');
 
