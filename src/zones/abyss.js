@@ -6,7 +6,7 @@ import { CollisionWorld } from '../collision.js';
 import { FISH_SHAPES } from '../creatures/fishGeometry.js';
 import { createFishMaterial } from '../creatures/fishMaterial.js';
 import { School, makeSchoolInstanceAttr } from '../creatures/school.js';
-import { AtollaSwarm } from '../creatures/abyssal.js';
+import { AtollaSwarm, DreamCucumbers, TunicateBed } from '../creatures/abyssal.js';
 import { disturbPoint } from '../interaction.js';
 import { ABYSS_SPECIES } from '../species.js';
 
@@ -23,6 +23,30 @@ const VENTS = [
   { x: 14.5, z: -8.5, h: 3.6, r: 0.85, seed: 11 },
   { x: 7.5, z: -15.5, h: 4.2, r: 0.95, seed: 27 },
 ];
+
+// オオグチボヤの群落。数カ所にかたまって生え、株ごとの間隔は数十cm。
+// 同じ群落の個体はそろって流れの上手(＝口を開ける向き)を向く。
+function tunicateSpots() {
+  const CLUMPS = [
+    { x: 14.8, z: -14.8, r: 0.9, n: 14, face: 2.2 },
+    { x: 13.2, z: -16.4, r: 0.7, n: 9, face: 2.1 },
+    { x: 5.3, z: -6.8, r: 0.8, n: 11, face: -0.9 },
+  ];
+  const out = [];
+  for (const c of CLUMPS) {
+    for (let i = 0; i < c.n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = Math.sqrt(Math.random()) * c.r;
+      out.push({
+        x: c.x + Math.cos(a) * r,
+        z: c.z + Math.sin(a) * r,
+        scale: 0.10 + Math.random() * 0.05,
+        face: c.face,
+      });
+    }
+  }
+  return out;
+}
 
 export const ABYSS = {
   key: 'abyss',
@@ -94,15 +118,36 @@ export const ABYSS = {
       count: 5, center: new THREE.Vector3(-2, 9.5, -4), radius: 13,
     });
 
+    // --- ユメナマコ ---
+    // 泥の上を漂う半透明のナマコ。中身(泥を詰めた消化管)が透けて見える
+    const cukes = new DreamCucumbers(root, {
+      count: 6, center: new THREE.Vector3(-6, 0, -8), radius: 5,
+      floorFn: abyssTerrain,
+    });
+
+    // --- オオグチボヤ ---
+    // 海丘の斜面に固着する。チューブワームの群落とは場所を分ける
+    // (混ざると赤い鰓冠に埋もれて、口が開くところが見えなくなる)
+    const tunicates = new TunicateBed(root, {
+      floorFn: abyssTerrain,
+      // scale は 1.0 で「柄まで約12cm」。実物どおり小さいので、
+      // 一株ずつ離して置かず、身を寄せ合った群落にする
+      spots: tunicateSpots(),
+    });
+
     return {
       world,
       followTargets: {
         lanternfish: { get: () => lanterns.schoolCenter, dist: [4, 11] },
         atolla: { get: () => atolla.swarmCenter, dist: [3.5, 10] },
+        seacucumber: { get: () => cukes.center3, dist: [1.5, 4.0] },
+        tunicate: { get: () => tunicates.center3, dist: [1.2, 3.0] },
       },
       update(dt, camera) {
         lanterns.update(dt, [], world);
         atolla.update(dt);
+        cukes.update(dt);
+        tunicates.update(dt, camera);
       },
       onTap(ray, hit) {
         // 深海で光を向けられるのは強い刺激。
@@ -112,6 +157,8 @@ export const ABYSS = {
         const jelly = atolla.alarmAlongRay(ray, 2.6);
         if (jelly) atolla.alarmNear(jelly, 5);
         if (disturbPoint(ray, lanterns, 3.5, hit)) lanterns.scare(hit, 9, 70);
+        // ユメナマコは触られると体表が青く光る(捕食者に「印」をつける)
+        if (hit) cukes.glowNear(hit, 3.0);
       },
     };
   },

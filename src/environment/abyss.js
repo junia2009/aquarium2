@@ -232,14 +232,16 @@ function createPlumes(scene, mouths) {
 // 赤いのは「赤い光が届かない=見えない色だから」で、それをそのまま描く。
 function createTubeWorms(scene, clusters) {
   const group = new THREE.Group();
-  const tubeMat = new THREE.MeshStandardMaterial({ color: '#e6e0d0', roughness: 0.85 });
-  const plumeMat = new THREE.MeshStandardMaterial({ color: '#d81a1e', roughness: 0.55 });
+  // 棲管はキチン質。真っ白ではなく、泥と硫化物で汚れた生成り色
+  const tubeMat = new THREE.MeshStandardMaterial({ color: '#a89d88', roughness: 0.95 });
+  // 鰓冠の赤はヘモグロビンの色。鮮やかな朱ではなく、暗い血の色
+  const plumeMat = new THREE.MeshStandardMaterial({ color: '#7d1013', roughness: 0.75 });
   addCausticsToStandard(tubeMat, 0.0);
   addCausticsToStandard(plumeMat, 0.0);
 
   const tube = new THREE.CylinderGeometry(0.022, 0.034, 1, 6, 1, true);
   // 鰓冠は丸みのある羽根。真球だとマッチ棒、尖った円錐だと矢尻に見える
-  const plume = new THREE.SphereGeometry(1, 8, 7);
+  const plume = new THREE.SphereGeometry(1, 12, 9);
   plume.scale(0.055, 0.17, 0.055);
   plume.translate(0, 0.10, 0);
 

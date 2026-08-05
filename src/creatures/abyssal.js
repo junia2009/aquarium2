@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { baseUniforms, WORLD, U } from '../env.js';
 import { UW_FRAG_PRELUDE, UW_FRAG_OUTPUT } from '../glsl.js';
 import { wander1 } from '../noise.js';
+import { addCausticsToStandard } from '../environment/seabed.js';
 
 // ============ 深海の生物 ============
 
@@ -317,6 +318,561 @@ export class AtollaSwarm {
         u.uPulse.value = pulse;
         u.uAlarmAge.value = j.alarm;
       }
+    }
+  }
+}
+
+// ---- ユメナマコ ----
+// 海底を這わずに泳ぐナマコ。体は半透明のピンクで、飲み込んだ泥が
+// 消化管に透けて見える。前方の大きな「ヴェール」(変形した管足)を
+// 波打たせて泳ぎ、降りては泥を食べ、また舞い上がる。
+// 刺激を受けると体表が青く光る。
+
+// 体の紡錘。後端は尖り、前端は口の開いた丸い縁で終わる(ここにヴェールが付く)。
+// 太いのは前寄り。全長1.0を基準にして、使う側で実寸へ縮める。
+const CUKE_R = (t) => Math.pow(Math.sin(Math.PI * Math.min(Math.pow(t, 1.4) * 0.90, 0.86)), 0.72);
+const CUKE_HH = 0.30, CUKE_WW = 0.24;
+
+function buildCucumberBody() {
+  const RINGS = 24, SEG = 20;
+  const pos = [], uv = [], idx = [];
+  for (let i = 0; i <= RINGS; i++) {
+    const t = i / RINGS;
+    const r = CUKE_R(t);
+    const hh = r * CUKE_HH, ww = r * CUKE_WW;
+    for (let j = 0; j <= SEG; j++) {
+      const a = (j / SEG) * Math.PI * 2;
+      // 背は丸く、腹は平ら(泥の上をなでる面)
+      const cy = Math.cos(a);
+      pos.push(Math.sin(a) * ww, cy * hh * (cy > 0 ? 1.0 : 0.62) + 0.05 * r, t - 0.5);
+      uv.push(j / SEG, t);
+    }
+  }
+  for (let i = 0; i < RINGS; i++) {
+    for (let j = 0; j < SEG; j++) {
+      const a = i * (SEG + 1) + j, b = a + 1;
+      const c = (i + 1) * (SEG + 1) + j, d = c + 1;
+      idx.push(a, c, b, b, c, d);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setIndex(idx);
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.computeVertexNormals();
+  return geo;
+}
+
+// 飲み込んだ泥の詰まった消化管。半透明の体を透かして、これがいちばん濃く見える。
+// 体の内側に別メッシュとして置く(体色に混ぜるだけでは、半透明どうしの
+// 描画順で消えてしまう)
+function buildGut() {
+  const LONG = 20, SEG = 10;
+  const pos = [], uv = [], idx = [];
+  for (let i = 0; i <= LONG; i++) {
+    const s = i / LONG;
+    const z = -0.34 + s * 0.70;
+    const t = z + 0.5;
+    const body = CUKE_R(t);
+    // 腸は腹側を通り、途中で少しうねる
+    const cy = -body * CUKE_HH * 0.34 + 0.05 * body;
+    const cx = Math.sin(s * 6.0) * body * CUKE_WW * 0.14;
+    // 食べたばかりの前半が太い
+    const rr = (0.030 + 0.045 * Math.sin(Math.PI * Math.pow(s, 0.8))) * Math.min(1, body * 1.6);
+    for (let j = 0; j <= SEG; j++) {
+      const a = (j / SEG) * Math.PI * 2;
+      pos.push(cx + Math.sin(a) * rr, cy + Math.cos(a) * rr, z);
+      uv.push(j / SEG, s);
+    }
+  }
+  for (let i = 0; i < LONG; i++) {
+    for (let j = 0; j < SEG; j++) {
+      const a = i * (SEG + 1) + j, b = a + 1;
+      const c = (i + 1) * (SEG + 1) + j, d = c + 1;
+      idx.push(a, c, b, b, c, d);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setIndex(idx);
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.computeVertexNormals();
+  return geo;
+}
+
+// 前縁のヴェール。癒合した口触手が作る縁飾りで、口のまわりを一周する笠。
+// 背側がいちばん大きく張り出す。
+function buildVeil() {
+  const RAD = 8, SEG = 30;
+  const pos = [], uv = [], idx = [];
+  const r0 = CUKE_R(1.0);
+  for (let i = 0; i <= RAD; i++) {
+    const t = i / RAD;
+    const flare = Math.pow(t, 0.85);
+    for (let j = 0; j <= SEG; j++) {
+      const s = j / SEG;
+      const a = s * Math.PI * 2;
+      const cy = Math.cos(a);
+      // 背側(cy>0)ほど大きく開く
+      const grow = flare * (0.075 + 0.050 * Math.max(cy, 0.0));
+      const ww = r0 * CUKE_WW + grow;
+      const hh = r0 * CUKE_HH + grow;
+      pos.push(Math.sin(a) * ww, cy * hh + 0.05 * r0, flare * 0.15);
+      uv.push(s, t);
+    }
+  }
+  for (let i = 0; i < RAD; i++) {
+    for (let j = 0; j < SEG; j++) {
+      const a = i * (SEG + 1) + j, b = a + 1;
+      const c = (i + 1) * (SEG + 1) + j, d = c + 1;
+      idx.push(a, c, b, b, c, d);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setIndex(idx);
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.computeVertexNormals();
+  return geo;
+}
+
+// 背中の遊泳膜。左右の疣足が癒合してできた低い帆。
+// 高く立てるとイカのヒレに見えてしまうので、体高の半分より低く抑える。
+function buildDorsalWeb() {
+  const LONG = 20, UP = 5;
+  const pos = [], uv = [], idx = [];
+  for (let i = 0; i <= LONG; i++) {
+    const s = i / LONG;
+    const z = -0.30 + s * 0.62;
+    const t = z + 0.5;
+    const base = CUKE_R(t) * (CUKE_HH + 0.05);
+    // 帆の高さ: 中ほどから前寄りが最も高い
+    const h = Math.sin(Math.PI * Math.pow(s, 0.7)) * 0.115;
+    for (let j = 0; j <= UP; j++) {
+      const u = j / UP;
+      pos.push(0, base + h * u, z);
+      uv.push(s, u);
+    }
+  }
+  for (let i = 0; i < LONG; i++) {
+    for (let j = 0; j < UP; j++) {
+      const a = i * (UP + 1) + j, b = a + 1;
+      const c = (i + 1) * (UP + 1) + j, d = c + 1;
+      idx.push(a, c, b, b, c, d);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setIndex(idx);
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.computeVertexNormals();
+  return geo;
+}
+
+// uTime は UW_FRAG_PRELUDE 側で宣言済み。フラグメントで重複させないよう、
+// 頂点シェーダにだけ足す
+const CUKE_COMMON = /* glsl */ `
+uniform float uSeed;
+uniform float uGlow;    // 刺激を受けたときの発光(0..1)
+`;
+const CUKE_VTIME = /* glsl */ `uniform float uTime;
+`;
+
+const CUKE_BODY_VERT = CUKE_VTIME + CUKE_COMMON + /* glsl */ `
+varying vec2 vUv;
+varying vec3 vWorldPos;
+varying vec3 vNormal;
+void main() {
+  vec3 p = position;
+  // 体もゆるく波打つ。後ろほど遅れる
+  float w = sin(uTime * 1.6 + uSeed * 7.0 - (p.z + 0.5) * 4.0);
+  p.y += w * 0.045 * (p.z + 0.5);
+  vec4 wp = modelMatrix * vec4(p, 1.0);
+  vWorldPos = wp.xyz;
+  vNormal = normalize(mat3(modelMatrix) * normal);
+  vUv = uv;
+  gl_Position = projectionMatrix * viewMatrix * wp;
+}
+`;
+
+const CUKE_BODY_FRAG = UW_FRAG_PRELUDE + CUKE_COMMON + /* glsl */ `
+varying vec2 vUv;
+varying vec3 vWorldPos;
+varying vec3 vNormal;
+void main() {
+  vec3 n = normalize(vNormal);
+  if (!gl_FrontFacing) n = -n;
+  vec3 V = normalize(cameraPosition - vWorldPos);
+
+  // 半透明の赤紫。周囲光では黒く沈み、ライトを当てた瞬間だけ色が出る
+  vec3 albedo = vec3(0.60, 0.15, 0.19);
+  // 体表に並ぶ細かい疣足の粒
+  albedo *= 0.92 + 0.08 * sin(vUv.x * 62.0) * sin(vUv.y * 46.0);
+
+  vec3 col = underwaterLight(albedo, n, vWorldPos, V, 22.0, 0.14);
+  // 刺激を受けたときの発光。体表全体がぼんやり青く光る
+  col += vec3(0.16, 0.55, 0.72) * uGlow * (0.5 + 0.5 * sin(uTime * 5.0 + uSeed));
+  col = applyUnderwaterFog(col, vWorldPos);
+  // 縁ほど厚みがあって濁る(半透明の体の見え方)
+  float fr = pow(1.0 - abs(dot(n, V)), 2.0);
+  gl_FragColor = vec4(col, 0.40 + 0.42 * fr);
+  ${UW_FRAG_OUTPUT}
+}
+`;
+
+const VEIL_VERT = CUKE_VTIME + CUKE_COMMON + /* glsl */ `
+varying vec2 vUv;
+varying vec3 vWorldPos;
+varying vec3 vNormal;
+void main() {
+  vec3 p = position;
+  // ヴェールを波打たせる。これが推進力になる
+  float r = length(p.xy);
+  p.z += sin(uTime * 2.4 + uSeed * 5.0 + (p.x + p.y) * 5.0) * 0.10 * r;
+  vec4 wp = modelMatrix * vec4(p, 1.0);
+  vWorldPos = wp.xyz;
+  vNormal = normalize(mat3(modelMatrix) * normal);
+  vUv = uv;
+  gl_Position = projectionMatrix * viewMatrix * wp;
+}
+`;
+
+const VEIL_FRAG = UW_FRAG_PRELUDE + CUKE_COMMON + /* glsl */ `
+varying vec2 vUv;
+varying vec3 vWorldPos;
+varying vec3 vNormal;
+void main() {
+  vec3 n = normalize(vNormal);
+  if (!gl_FrontFacing) n = -n;
+  vec3 V = normalize(cameraPosition - vWorldPos);
+  vec3 albedo = vec3(0.66, 0.20, 0.24);
+  vec3 col = underwaterLight(albedo, n, vWorldPos, V, 18.0, 0.10);
+  col += vec3(0.16, 0.55, 0.72) * uGlow * 0.8;
+  col = applyUnderwaterFog(col, vWorldPos);
+  // 膜は縁ほど薄い
+  gl_FragColor = vec4(col, 0.80 - 0.34 * vUv.y);
+  ${UW_FRAG_OUTPUT}
+}
+`;
+
+// 消化管。体と同じ波にのせて動かさないと、中身だけ取り残されて見える
+const GUT_VERT = CUKE_VTIME + CUKE_COMMON + /* glsl */ `
+varying vec2 vUv;
+varying vec3 vWorldPos;
+varying vec3 vNormal;
+void main() {
+  vec3 p = position;
+  float w = sin(uTime * 1.6 + uSeed * 7.0 - (p.z + 0.5) * 4.0);
+  p.y += w * 0.045 * (p.z + 0.5);
+  vec4 wp = modelMatrix * vec4(p, 1.0);
+  vWorldPos = wp.xyz;
+  vNormal = normalize(mat3(modelMatrix) * normal);
+  vUv = uv;
+  gl_Position = projectionMatrix * viewMatrix * wp;
+}
+`;
+
+const GUT_FRAG = UW_FRAG_PRELUDE + CUKE_COMMON + /* glsl */ `
+varying vec2 vUv;
+varying vec3 vWorldPos;
+varying vec3 vNormal;
+void main() {
+  vec3 n = normalize(vNormal);
+  if (!gl_FrontFacing) n = -n;
+  vec3 V = normalize(cameraPosition - vWorldPos);
+  // 飲んだ泥そのものの色。粒の詰まり具合で濃淡が出る
+  float lump = 0.75 + 0.25 * sin(vUv.y * 34.0 + uSeed);
+  vec3 albedo = mix(vec3(0.085, 0.070, 0.055), vec3(0.15, 0.125, 0.10), lump);
+  // 泥は体の中身。外皮ごしに見えるぶん、直接ライトを浴びるより暗い
+  vec3 col = underwaterLight(albedo, n, vWorldPos, V, 8.0, 0.0) * 0.55;
+  col = applyUnderwaterFog(col, vWorldPos);
+  gl_FragColor = vec4(col, 0.95);
+  ${UW_FRAG_OUTPUT}
+}
+`;
+
+// 背の帆。ヴェールと同じ膜だが、こちらは進行方向へ緩やかにあおられる
+const WEB_VERT = CUKE_VTIME + CUKE_COMMON + /* glsl */ `
+varying vec2 vUv;
+varying vec3 vWorldPos;
+varying vec3 vNormal;
+void main() {
+  vec3 p = position;
+  // 一枚の薄い膜が、前から後ろへ波を送る。高いところほど大きく振れる
+  p.x += sin(uTime * 1.9 + uSeed * 3.0 - p.z * 6.0) * 0.11 * uv.y;
+  vec4 wp = modelMatrix * vec4(p, 1.0);
+  vWorldPos = wp.xyz;
+  vNormal = normalize(mat3(modelMatrix) * normal);
+  vUv = uv;
+  gl_Position = projectionMatrix * viewMatrix * wp;
+}
+`;
+
+const WEB_FRAG = UW_FRAG_PRELUDE + CUKE_COMMON + /* glsl */ `
+varying vec2 vUv;
+varying vec3 vWorldPos;
+varying vec3 vNormal;
+void main() {
+  vec3 n = normalize(vNormal);
+  if (!gl_FrontFacing) n = -n;
+  vec3 V = normalize(cameraPosition - vWorldPos);
+  vec3 albedo = vec3(0.63, 0.18, 0.22);
+  vec3 col = underwaterLight(albedo, n, vWorldPos, V, 18.0, 0.10);
+  col += vec3(0.16, 0.55, 0.72) * uGlow * 0.8;
+  col = applyUnderwaterFog(col, vWorldPos);
+  // 根元は厚く、縁は消え入るように薄い
+  gl_FragColor = vec4(col, 0.78 - 0.46 * vUv.y);
+  ${UW_FRAG_OUTPUT}
+}
+`;
+
+export class DreamCucumbers {
+  constructor(scene, { count = 4, center = new THREE.Vector3(0, 4, 0), radius = 14, floorFn } = {}) {
+    this.items = [];
+    this.center = center.clone();
+    this.radius = radius;
+    this.floorFn = floorFn || (() => 0);
+    this.time = 0;
+    const bodyGeo = buildCucumberBody();
+    const veilGeo = buildVeil();
+    const webGeo = buildDorsalWeb();
+    const gutGeo = buildGut();
+
+    for (let i = 0; i < count; i++) {
+      const seed = Math.random() * 100;
+      // 実物は体長20〜25cm、ヴェールまで入れて30cm強。小さい生き物なので
+      // ここを盛ると一気に嘘になる
+      const scale = 0.26 + Math.random() * 0.14;
+      const group = new THREE.Group();
+      const u = () => ({ ...baseUniforms(), uSeed: { value: seed }, uGlow: { value: 0 } });
+      const bu = u(), vu = u(), wu = u(), gu = u();
+      // 描画順を明示する。半透明どうしは距離で並べ替えても、入れ子になった
+      // 中身(腸)と外皮(体)の前後は決まらない
+      const gut = new THREE.Mesh(gutGeo, new THREE.ShaderMaterial({
+        uniforms: gu, vertexShader: GUT_VERT, fragmentShader: GUT_FRAG,
+        transparent: true, depthWrite: false,
+      }));
+      gut.renderOrder = 0;
+      group.add(gut);
+
+      const web = new THREE.Mesh(webGeo, new THREE.ShaderMaterial({
+        uniforms: wu, vertexShader: WEB_VERT, fragmentShader: WEB_FRAG,
+        transparent: true, depthWrite: false, side: THREE.DoubleSide,
+      }));
+      web.renderOrder = 1;
+      group.add(web);
+
+      const body = new THREE.Mesh(bodyGeo, new THREE.ShaderMaterial({
+        uniforms: bu, vertexShader: CUKE_BODY_VERT, fragmentShader: CUKE_BODY_FRAG,
+        transparent: true, depthWrite: false, side: THREE.DoubleSide,
+      }));
+      body.renderOrder = 2;
+      group.add(body);
+
+      const veil = new THREE.Mesh(veilGeo, new THREE.ShaderMaterial({
+        uniforms: vu, vertexShader: VEIL_VERT, fragmentShader: VEIL_FRAG,
+        transparent: true, depthWrite: false, side: THREE.DoubleSide,
+      }));
+      veil.position.z = 0.48;
+      veil.renderOrder = 3;
+      group.add(veil);
+
+      group.scale.setScalar(scale);
+      const a = Math.random() * Math.PI * 2;
+      const r = Math.sqrt(Math.random()) * radius;
+      group.position.set(center.x + Math.cos(a) * r, 0, center.z + Math.sin(a) * r);
+      scene.add(group);
+
+      this.items.push({
+        group, seed, scale, uniforms: [bu, vu, wu, gu],
+        heading: Math.random() * Math.PI * 2,
+        // 降りて泥を食べ、また舞い上がる。その周期
+        phase: Math.random() * Math.PI * 2,
+        glow: 0,
+      });
+    }
+  }
+
+  /**
+   * 図鑑から寄るときの注視点。ばらけて漂う小さな生き物なので、平均を取ると
+   * 誰もいない場所を向く。1個体に張り付いて追う。
+   */
+  get center3() {
+    return _v.copy(this.items[0].group.position).clone();
+  }
+
+  /** 近くの個体を光らせる */
+  glowNear(point, radius = 6) {
+    for (const it of this.items) {
+      if (it.group.position.distanceTo(point) < radius) it.glow = 1;
+    }
+  }
+
+  update(dt) {
+    this.time += dt;
+    const t = this.time;
+    for (const it of this.items) {
+      // 降下 → 着底して摂餌 → 舞い上がる、をゆっくり繰り返す
+      const cyc = Math.sin(t * 0.10 + it.phase);
+      const floor = this.floorFn(it.group.position.x, it.group.position.z);
+      const targetY = floor + 0.12 + Math.max(cyc, -0.2) * 2.4;
+      const p = it.group.position;
+      p.y += (targetY - p.y) * (1 - Math.exp(-0.9 * dt));
+
+      it.heading += wander1(t * 0.07 + it.seed, it.seed) * 0.5 * dt;
+      const spd = 0.18 + 0.14 * Math.max(cyc, 0);
+      p.x += Math.sin(it.heading) * spd * dt;
+      p.z += Math.cos(it.heading) * spd * dt;
+
+      const dx = p.x - this.center.x, dz = p.z - this.center.z;
+      const r = Math.hypot(dx, dz);
+      if (r > this.radius) {
+        it.heading = Math.atan2(-dx, -dz);
+        p.x = this.center.x + (dx / r) * this.radius;
+        p.z = this.center.z + (dz / r) * this.radius;
+      }
+      it.group.rotation.y = it.heading;
+      // 上がるときは頭を上げ、降りるときは下げる
+      it.group.rotation.x = THREE.MathUtils.clamp(-cyc * 0.35, -0.4, 0.4);
+
+      if (it.glow > 0) it.glow = Math.max(0, it.glow - dt / 3.5);
+      for (const u of it.uniforms) u.uGlow.value = it.glow;
+    }
+  }
+}
+
+// ---- オオグチボヤ ----
+// 海底に柄で立ち、大きな入水口を袋のように開いて流れに向ける。
+// 通りかかった小さな生き物が入ると、口をすぼめて閉じ込める。
+// ホヤのなかまでありながら濾過ではなく捕食をする、珍しい種。
+
+function buildFunnel() {
+  const RINGS = 14, SEG = 22;
+  const pos = [], uv = [], idx = [];
+  for (let i = 0; i <= RINGS; i++) {
+    const t = i / RINGS;
+    for (let j = 0; j <= SEG; j++) {
+      const a = (j / SEG) * Math.PI * 2;
+      pos.push(Math.sin(a), t, Math.cos(a));   // 半径は頂点シェーダで決める
+      uv.push(j / SEG, t);
+    }
+  }
+  for (let i = 0; i < RINGS; i++) {
+    for (let j = 0; j < SEG; j++) {
+      const a = i * (SEG + 1) + j, b = a + 1;
+      const c = (i + 1) * (SEG + 1) + j, d = c + 1;
+      idx.push(a, c, b, b, c, d);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setIndex(idx);
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.computeVertexNormals();
+  return geo;
+}
+
+const FUNNEL_VERT = /* glsl */ `
+uniform float uOpen;    // 0=閉じている 1=大きく開く
+uniform float uTime;
+uniform float uSeed;
+varying vec2 vUv;
+varying vec3 vWorldPos;
+varying vec3 vNormal;
+void main() {
+  float t = uv.y;
+  // 開いたときは漏斗、閉じたときは細い袋。口だけが大きく変わる
+  float rOpen   = 0.16 + 0.95 * pow(t, 1.7);
+  float rClosed = 0.16 + 0.14 * pow(t, 0.7);
+  float r = mix(rClosed, rOpen, uOpen);
+  // 流れに揺れる
+  float sway = sin(uTime * 0.7 + uSeed * 6.0) * 0.05 * t * t;
+  vec3 p = vec3(position.x * r + sway, t * (0.55 + 0.35 * uOpen), position.z * r);
+  vec4 wp = modelMatrix * vec4(p, 1.0);
+  vWorldPos = wp.xyz;
+  // 半径が t で変わるので、法線は面から取り直す
+  vec3 tang = vec3(position.z, 0.0, -position.x);
+  float dr = mix(0.14 * 0.7 * pow(max(t, 1e-3), -0.3), 0.95 * 1.7 * pow(t, 0.7), uOpen);
+  vec3 bit = vec3(position.x * dr, 0.55 + 0.35 * uOpen, position.z * dr);
+  vNormal = normalize(mat3(modelMatrix) * normalize(cross(bit, tang)));
+  vUv = uv;
+  gl_Position = projectionMatrix * viewMatrix * wp;
+}
+`;
+
+const FUNNEL_FRAG = UW_FRAG_PRELUDE + /* glsl */ `
+uniform float uOpen;
+varying vec2 vUv;
+varying vec3 vWorldPos;
+varying vec3 vNormal;
+void main() {
+  vec3 n = normalize(vNormal);
+  if (!gl_FrontFacing) n = -n;
+  vec3 V = normalize(cameraPosition - vWorldPos);
+  // 半透明の白。口の内側は影になって暗い
+  vec3 albedo = mix(vec3(0.62, 0.63, 0.60), vec3(0.30, 0.31, 0.30), float(!gl_FrontFacing));
+  vec3 col = underwaterLight(albedo, n, vWorldPos, V, 16.0, 0.08);
+  col = applyUnderwaterFog(col, vWorldPos);
+  gl_FragColor = vec4(col, 0.78);
+  ${UW_FRAG_OUTPUT}
+}
+`;
+
+export class TunicateBed {
+  constructor(scene, { spots = [], floorFn } = {}) {
+    this.items = [];
+    const funnelGeo = buildFunnel();
+    const stalkGeo = new THREE.CylinderGeometry(0.035, 0.07, 1, 8, 1, true);
+    const stalkMat = new THREE.MeshStandardMaterial({ color: '#8f8f86', roughness: 0.9 });
+    addCausticsToStandard(stalkMat, 0.0);
+
+    for (const s of spots) {
+      const y = floorFn(s.x, s.z);
+      const seed = Math.random() * 100;
+      const group = new THREE.Group();
+      // 実物は柄まで入れて10〜15cm。漏斗の口が大きいだけで、体は小さい
+      const stalkLen = 0.5 + Math.random() * 0.6;   // 群落の scale(≒0.13)倍される
+      const stalk = new THREE.Mesh(stalkGeo, stalkMat);
+      stalk.scale.y = stalkLen;
+      stalk.position.y = stalkLen * 0.5;
+      group.add(stalk);
+
+      const u = { ...baseUniforms(), uOpen: { value: 1 }, uSeed: { value: seed } };
+      const funnel = new THREE.Mesh(funnelGeo, new THREE.ShaderMaterial({
+        uniforms: u, vertexShader: FUNNEL_VERT, fragmentShader: FUNNEL_FRAG,
+        transparent: true, depthWrite: false, side: THREE.DoubleSide,
+      }));
+      funnel.position.y = stalkLen;
+      group.add(funnel);
+
+      group.position.set(s.x, y, s.z);
+      group.scale.setScalar(s.scale ?? 1);
+      // 口は流れの方へ向く。群落でそろって同じ方を向くのが実物の見どころ
+      group.rotation.y = (s.face ?? 0.6) + (Math.random() - 0.5) * 0.4;
+      group.rotation.z = 0.28 + (Math.random() - 0.5) * 0.2;
+      scene.add(group);
+      this.items.push({ group, u, open: 1, target: 1 });
+    }
+  }
+
+  /**
+   * 図鑑から寄るときの注視点。群落は離れて何カ所もあるので、全個体の
+   * 平均を取ると誰もいない中間地点を向いてしまう。最初の株を見る。
+   */
+  get center3() {
+    const p = this.items[0].group.position;
+    return _v.set(p.x, p.y + 0.10, p.z).clone();
+  }
+
+  /** 近づかれると口を閉じる。離れるとゆっくり開き直す */
+  update(dt, camera) {
+    for (const it of this.items) {
+      const d = it.group.position.distanceTo(camera.position);
+      it.target = d < 1.3 ? 0.06 : 1.0;
+      // 閉じるのは速く、開くのは恐る恐る
+      const rate = it.target < it.open ? 7.0 : 0.6;
+      it.open += (it.target - it.open) * (1 - Math.exp(-rate * dt));
+      it.u.uOpen.value = it.open;
     }
   }
 }
