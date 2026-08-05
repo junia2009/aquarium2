@@ -91,8 +91,8 @@ export const ABYSS = {
 
     // --- ハダカイワシの群れ ---
     // 深海でいちばん数の多い魚。ゆっくり漂い、腹の発光器だけが動いて見える。
-    // 実物は体長10cm前後。チョウチンアンコウ(50cm)と並ぶので、
-    // ここを盛ると大きさの関係が一目で嘘になる
+    // 実物は体長10cm前後。すぐ隣でミツクリエナガチョウチンアンコウ(18cm)が
+    // これを丸呑みするので、ここを盛ると大きさの関係が一目で嘘になる
     const LANTERN_LEN = 0.11;
     const lanternGeo = FISH_SHAPES.lanternfish();
     lanternGeo.scale(LANTERN_LEN, LANTERN_LEN, LANTERN_LEN);
@@ -144,11 +144,11 @@ export const ABYSS = {
       spots: tunicateSpots(),
     });
 
-    // --- チョウチンアンコウ ---
+    // --- ミツクリエナガチョウチンアンコウ ---
     // ハダカイワシの群れの近くに待ち伏せさせる。エスカの光が群れを引き寄せ、
     // 一匹が近づきすぎたところで大口を開ける
     const angler = new Anglerfish(root, {
-      home: new THREE.Vector3(-3.5, 8.2, 3.0), length: 0.52, prey: lanterns,
+      home: new THREE.Vector3(-3.5, 8.2, 3.0), length: 0.19, prey: lanterns,
     });
 
     return {
@@ -158,7 +158,7 @@ export const ABYSS = {
         atolla: { get: () => atolla.swarmCenter, dist: [3.5, 10] },
         seacucumber: { get: () => cukes.center3, dist: [1.5, 4.0] },
         tunicate: { get: () => tunicates.center3, dist: [1.2, 3.0] },
-        angler: { get: () => angler.pos, dist: [1.4, 3.6] },
+        angler: { get: () => angler.pos, dist: [0.38, 1.0] },
         // 煙突は動かないが、図鑑から選んだら見にいけたほうがいい。
         // いちばん大きい噴出口の少し下(煙の出口が視界の上に来る高さ)を見る
         vent: { get: () => VENT_VIEW, dist: [7, 16] },
@@ -181,7 +181,7 @@ export const ABYSS = {
         // ユメナマコは触られると体表が青く光る(捕食者に「印」をつける)
         if (hit) cukes.glowNear(hit, 3.0);
         // チョウチンアンコウを狙って触れたら、その場で襲いかからせる
-        if (hit && hit.distanceTo(angler.pos) < 1.2) angler.provoke();
+        if (hit && hit.distanceTo(angler.pos) < 0.6) angler.provoke();
       },
     };
   },
