@@ -361,6 +361,18 @@ export const FISH_SHAPES = {
       dorsal: { from: 0.22, to: 0.78, height: 0.35 },
       pectoral: { at: 0.32, len: 0.22, width: 0.09 },
     }),
+  // ハダカイワシ: 頭が大きく吻が短い。眼が体に対して極端に大きく、
+  // 尾柄が細い。暗闇でわずかな光を拾うための体型
+  lanternfish: () =>
+    buildFishGeometry({
+      length: 1.0, height: 0.215, width: 0.095,
+      hProfile: [0.30, 0.78, 0.98, 1.00, 0.92, 0.74, 0.42, 0.16],
+      wProfile: [0.42, 0.86, 1.00, 0.98, 0.86, 0.64, 0.36, 0.16],
+      yOffset: [0.02, 0.05, 0.05, 0.03, 0.00, -0.02, -0.02, 0.0],
+      tail: { len: 0.24, height: 0.66, fork: 0.52 },
+      dorsal: { from: 0.42, to: 0.66, height: 0.40 },
+      pectoral: { at: 0.30, len: 0.15, width: 0.055 },
+    }),
   // カクレクマノミ: ずんぐりした楕円
   clownfish: () =>
     buildFishGeometry({

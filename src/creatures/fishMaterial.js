@@ -103,6 +103,7 @@ void main() {
 
 // ---- 模様関数(種ごと) ----
 // uPattern: 0=マイワシ 1=カクレクマノミ 2=ナンヨウハギ 3=ジンベエザメ 4=ザトウクジラ
+//           5=バンドウイルカ 6=シロイルカ 7=カマイルカ 8=ハダカイワシ
 const PATTERN_GLSL = /* glsl */ `
 uniform float uPattern;
 uniform float uTimeP;
@@ -114,10 +115,19 @@ float eyeDot(float u, float v, float eu, float ev, float size) {
   return smoothstep(size, size * 0.55, length(d));
 }
 
-vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, float hgt, vec3 lp, out float glossMul) {
+// 発光器の列。実物のハダカイワシは体の下面に丸い発光器が並び、
+// その並び方が種の見分けになる。
+float photoRow(float u, float v, float vy, float n, float rad){
+  float x = fract(u * n) - 0.5;
+  float band = smoothstep(0.11, 0.19, u) * smoothstep(0.95, 0.85, u);
+  return smoothstep(rad, rad * 0.35, length(vec2(x * 1.7, (v - vy) * 3.2))) * band;
+}
+
+vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, float hgt, vec3 lp, out float glossMul, out vec3 emit) {
   float u = clamp(buv.x, 0.0, 1.0);
   float v = buv.y;
   glossMul = 1.0;
+  emit = vec3(0.0);
   vec3 col = vec3(0.5);
 
   if (uPattern < 0.5) {
@@ -341,7 +351,7 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, float
     // 小さな黒い目。口角のすぐ後ろ、やや下につく
     col = mix(col, vec3(0.06, 0.06, 0.07), eyeDot(u, v, 0.240, 0.38, 0.022));
     glossMul = 1.7;
-  } else {
+  } else if (uPattern < 7.5) {
     // ---- カマイルカ: 黒い背・白い腹に、体側を走る淡灰色の帯 ----
     vec3 back  = vec3(0.055, 0.060, 0.075);
     vec3 belly = vec3(0.72, 0.715, 0.70);
@@ -366,6 +376,38 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, float
     // 目
     col = mix(col, vec3(0.02, 0.02, 0.03), eyeDot(u, v, 0.185, 0.50, 0.028));
     glossMul = 1.6;
+  } else {
+    // ---- ハダカイワシ: 黒褐色の体に、腹面の発光器が青緑に灯る ----
+    // 鱗が剥がれやすく、生きた個体は体側が銀色に光る。
+    // 発光器(photophore)は腹側に並び、上から差すわずかな光と
+    // 同じ明るさで下へ光ることで、自分の影を消してしまう
+    // (カウンターイルミネーション)。だから並ぶのは必ず体の下面。
+    vec3 body   = vec3(0.055, 0.062, 0.080);
+    vec3 silver = vec3(0.58, 0.66, 0.76);
+    col = mix(body, body * 1.8, smoothstep(0.75, 0.25, v));
+    // 体側の銀。剥がれかけた鱗のむらとして斑に出す。
+    // ここを弱くすると、ライトを当てても黒い影のままで魚に見えない
+    float scales = smoothstep(0.22, 0.62, fbm(vec2(u * 26.0, v * 10.0)));
+    float rim = pow(1.0 - abs(dot(n, V)), 2.2);
+    col = mix(col, silver, scales * 0.78 * smoothstep(0.92, 0.30, v) + rim * 0.35);
+    // 体に対して極端に大きな眼。わずかな光を拾うための深海の適応
+    col = mix(col, vec3(0.02, 0.02, 0.028), eyeDot(u, v, 0.130, 0.60, 0.052));
+    col = mix(col, silver * 1.4, eyeDot(u, v, 0.130, 0.60, 0.062) * (1.0 - eyeDot(u, v, 0.130, 0.60, 0.050)) * 0.8);
+
+    // ---- 発光器 ----
+    float po = photoRow(u, v, 0.055, 13.0, 0.075)
+             + photoRow(u, v, 0.150, 11.0, 0.066)
+             + photoRow(u, v, 0.280, 7.0, 0.058);
+    po = clamp(po, 0.0, 1.0);
+    // 弱く明滅する。生体発光は化学反応なので、光は一定ではない
+    float flick = 0.72 + 0.28 * sin(uTimeP * 2.3 + tint * 40.0 + u * 12.0);
+    emit = vec3(0.18, 0.68, 0.92) * po * flick * 2.6;
+    col = mix(col, vec3(0.10, 0.16, 0.19), po * 0.8);
+    // 尾柄の上下にある大きな発光腺(オス・メスで位置が違う)
+    float gland = smoothstep(0.055, 0.0, length(vec2((u - 0.845) * 1.6, (v - (tint > 0.5 ? 0.86 : 0.10)) * 2.4)));
+    emit += vec3(0.34, 0.78, 0.95) * gland * (0.55 + 0.45 * sin(uTimeP * 1.1 + tint * 20.0)) * 1.8;
+    if (part > 0.5) col = body * 1.4;
+    glossMul = 1.9;
   }
   return col;
 }
@@ -386,7 +428,8 @@ void main() {
   vec3 V = normalize(cameraPosition - vWorldPos);
 
   float glossMul;
-  vec3 albedo = fishAlbedo(vBodyUV, vWorldPos, n, V, vTint, vPart, vHeight, vLocal, glossMul);
+  vec3 emit;
+  vec3 albedo = fishAlbedo(vBodyUV, vWorldPos, n, V, vTint, vPart, vHeight, vLocal, glossMul, emit);
 
   // ひれは薄く透ける
   float finAlpha = vPart > 0.5 ? 0.75 : 1.0;
@@ -406,6 +449,8 @@ void main() {
   float fr = pow(1.0 - abs(dot(n, V)), 3.0);
   col += uAmbTop * fr * (0.07 + 0.20 * glossMul);
 
+  // 生物発光は外からの光に依らない。真っ暗でもここだけが光る
+  col += emit;
   col = applyUnderwaterFog(col, vWorldPos);
   gl_FragColor = vec4(col, finAlpha);
   ${UW_FRAG_OUTPUT}
