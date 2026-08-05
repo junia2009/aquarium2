@@ -109,12 +109,26 @@ export function addCausticsToStandard(mat, strength = 0.9) {
     shader.uniforms.uSunIC = U.uSunI;
     shader.uniforms.uSurfaceYC = U.uSurfaceY;
     shader.uniforms.uCauStrength = { value: strength };
+    // ダイバーライト。深海ゾーンでは岩や煙突を照らす唯一の光になる
+    shader.uniforms.uLampPos = U.uLampPos;
+    shader.uniforms.uLampDir = U.uLampDir;
+    shader.uniforms.uLampColor = U.uLampColor;
+    shader.uniforms.uLampI = U.uLampI;
+    shader.uniforms.uLampCos = U.uLampCos;
+    shader.uniforms.uLampReach = U.uLampReach;
 
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vCauWorldPos;')
       .replace(
         '#include <worldpos_vertex>',
-        '#include <worldpos_vertex>\nvCauWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;'
+        /* glsl */ `#include <worldpos_vertex>
+        // インスタンス描画では transformed にインスタンス行列が入らない。
+        // ここで掛けないと、全個体が原点にいることになってライトが当たらない
+        #ifdef USE_INSTANCING
+          vCauWorldPos = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz;
+        #else
+          vCauWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+        #endif`
       );
 
     shader.fragmentShader = shader.fragmentShader
@@ -128,6 +142,26 @@ export function addCausticsToStandard(mat, strength = 0.9) {
         uniform float uSunIC;
         uniform float uSurfaceYC;
         uniform float uCauStrength;
+        uniform vec3 uLampPos;
+        uniform vec3 uLampDir;
+        uniform vec3 uLampColor;
+        uniform float uLampI;
+        uniform float uLampCos;
+        uniform float uLampReach;
+        // glsl.js の lampArrive と同じ式。標準マテリアル側にも同じ光を届ける
+        vec3 lampArriveStd(vec3 wp){
+          if (uLampI <= 0.001) return vec3(0.0);
+          vec3 d = wp - uLampPos;
+          float dist = length(d);
+          vec3 L = d / max(dist, 1e-4);
+          float ca = dot(L, uLampDir);
+          if (ca < uLampCos || dist > uLampReach) return vec3(0.0);
+          float cone = smoothstep(uLampCos, mix(uLampCos, 1.0, 0.62), ca);
+          float fall = 1.0 / (1.0 + dist / 10.0);
+          fall *= 1.0 - smoothstep(uLampReach * 0.60, uLampReach, dist);
+          vec3 ext = exp(-vec3(0.042, 0.012, 0.006) * dist * 2.0);
+          return uLampColor * ext * (cone * fall * uLampI);
+        }
         float causticIterStd(vec2 uv, float t){
           vec2 p = mod(uv * 6.28318530718, 6.28318530718) - 250.0;
           vec2 i = vec2(p);
@@ -153,6 +187,10 @@ export function addCausticsToStandard(mat, strength = 0.9) {
           float depth = clamp((uSurfaceYC - vCauWorldPos.y) / uSurfaceYC, 0.0, 1.0);
           float reach = mix(1.0, 0.35, depth);
           reflectedLight.directDiffuse += uSunColorC * cau * uCauStrength * up * uSunIC * reach;
+          vec3 lamp = lampArriveStd(vCauWorldPos);
+          vec3 lampL = normalize(uLampPos - vCauWorldPos);
+          reflectedLight.directDiffuse += diffuseColor.rgb * lamp
+            * (0.22 + 0.78 * clamp(dot(normal, lampL), 0.0, 1.0));
         }`
       );
   };

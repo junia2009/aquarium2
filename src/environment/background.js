@@ -27,7 +27,9 @@ export function createBackground(scene) {
         // 深淵 → 水平線 → 上方の明るさ
         vec3 deep    = vec3(0.008, 0.045, 0.085);
         vec3 horizon = uFogColor * 0.95;
-        vec3 upper   = uFogColor * 1.9 + vec3(0.05, 0.14, 0.16);
+        // 上方の明るみはゾーンの環境光に連動させる。定数で足すと、
+        // 太陽の届かない深海でも天井だけ青く残ってしまう
+        vec3 upper   = uFogColor * 1.9 + uAmbTop * 0.25;
         vec3 col = mix(deep, horizon, smoothstep(0.0, 0.5, up));
         col = mix(col, upper, smoothstep(0.5, 1.0, up));
         // 太陽方向のぼんやりした明るみ(水中の前方散乱)

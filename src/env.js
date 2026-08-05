@@ -19,6 +19,16 @@ export const U = {
   uSurfaceY:   { value: WORLD.surfaceY },
   uAmbTop:     { value: new THREE.Color('#3b87a8') }, // 上方からの環境光
   uAmbBottom:  { value: new THREE.Color('#07222f') }, // 下方(底)からの照り返し
+
+  // ---- ダイバーライト(深海ゾーン用) ----
+  // 太陽の届かない深さでは、見えるものは「自分の光が当たったもの」と
+  // 「自分で光るもの」だけになる。uLampI = 0 のゾーンでは一切効かない。
+  uLampPos:    { value: new THREE.Vector3() },        // カメラ位置
+  uLampDir:    { value: new THREE.Vector3(0, 0, -1) },// カメラの向き
+  uLampColor:  { value: new THREE.Color('#eaf4ff') },
+  uLampI:      { value: 0.0 },                        // 0=消灯(既存ゾーン)
+  uLampCos:    { value: Math.cos(0.42) },             // 光錐の半頂角のcos
+  uLampReach:  { value: 26.0 },                       // 届く距離
 };
 
 export function baseUniforms() {
@@ -33,5 +43,11 @@ export function baseUniforms() {
     uSurfaceY: U.uSurfaceY,
     uAmbTop: U.uAmbTop,
     uAmbBottom: U.uAmbBottom,
+    uLampPos: U.uLampPos,
+    uLampDir: U.uLampDir,
+    uLampColor: U.uLampColor,
+    uLampI: U.uLampI,
+    uLampCos: U.uLampCos,
+    uLampReach: U.uLampReach,
   };
 }

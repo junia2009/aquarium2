@@ -170,8 +170,7 @@ export function createBubbles(scene, emitters) {
 
 // ============ マリンスノー(浮遊懸濁物) ============
 // 水の「質量感」を出す立役者。ゆっくり沈降しながら漂う微粒子。
-export function createMarineSnow(scene) {
-  const count = 900;
+export function createMarineSnow(scene, { count = 900, size = 1.0 } = {}) {
   const box = { x: 70, y: WORLD.surfaceY, z: 70 };
   const positions = new Float32Array(count * 3);
   const seeds = new Float32Array(count * 2);
@@ -197,6 +196,11 @@ export function createMarineSnow(scene) {
     vertexShader: /* glsl */ `
       uniform float uTime;
       uniform float uPixelRatio;
+      uniform vec3 uLampPos;
+      uniform vec3 uLampDir;
+      uniform float uLampI;
+      uniform float uLampCos;
+      uniform float uLampReach;
       attribute vec2 aSeed;
       varying float vA;
       void main() {
@@ -206,11 +210,18 @@ export function createMarineSnow(scene) {
         p.z += cos(uTime * 0.28 + aSeed.x * 70.0) * 0.9;
         vec4 mv = viewMatrix * vec4(p, 1.0);
         gl_Position = projectionMatrix * mv;
-        float size = 0.5 + fract(aSeed.x * 13.7) * 1.1;
+        float size = (0.5 + fract(aSeed.x * 13.7) * 1.1) * ${size.toFixed(2)};
         gl_PointSize = size * 3.2 * uPixelRatio * clamp(14.0 / max(-mv.z, 1.0), 0.3, 2.4);
         // 近くの粒ほどわずかに濃く。水上へ出たら水中の浮遊物は見えない
         vA = clamp(1.6 - length(mv.xyz) * 0.03, 0.08, 0.5)
            * (1.0 - smoothstep(-0.2, 1.5, cameraPosition.y - ${WORLD.surfaceY.toFixed(1)}));
+        // ダイバーライトのある深海では、光錐に入った粒だけが光る。
+        // 闇の中を舞う雪がライトに照らされて浮かび上がる、あの絵になる
+        vec3 dl = p - uLampPos;
+        float ld = length(dl);
+        float lampF = smoothstep(uLampCos, mix(uLampCos, 1.0, 0.5), dot(dl / max(ld, 1e-4), uLampDir))
+                    * (1.0 - smoothstep(uLampReach * 0.35, uLampReach, ld)) * uLampI;
+        vA *= mix(1.0, 0.05 + 2.6 * lampF, step(0.001, uLampI));
       }
     `,
     fragmentShader: /* glsl */ `

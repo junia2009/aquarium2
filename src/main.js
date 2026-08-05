@@ -7,6 +7,7 @@ import { createBackground, createLights } from './environment/background.js';
 import { setTerrain } from './environment/seabed.js';
 import { GREAT_TANK } from './zones/greatTank.js';
 import { DOLPHIN_POOL } from './zones/dolphinPool.js';
+import { ABYSS } from './zones/abyss.js';
 
 import { setupUI } from './ui.js';
 import { UnderwaterAudio } from './audio.js';
@@ -33,7 +34,9 @@ const audio = new UnderwaterAudio();
 
 // ================= ゾーン =================
 // 各ゾーンは初回訪問時に構築し、以降は表示の切り替えだけで往復する。
-const ZONES = [GREAT_TANK, DOLPHIN_POOL];
+const ZONES = [GREAT_TANK, DOLPHIN_POOL, ABYSS];
+const DEFAULT_SUN = new THREE.Color('#ffefcf');
+const DEFAULT_LAMP = new THREE.Color('#eaf4ff');
 const built = new Map();
 let active = null;
 
@@ -63,10 +66,24 @@ function enterZone(key, { moveCamera = true } = {}) {
   U.uAmbTop.value.copy(e.ambTop);
   U.uAmbBottom.value.copy(e.ambBottom);
   U.uSunDir.value.copy(e.sunDir);
+  // 太陽の色はゾーンごと。深海では限りなく黒に近く、太陽を掛けた項が全部消える
+  U.uSunColor.value.copy(e.sunColor || DEFAULT_SUN);
+  // ダイバーライト。lamp を持たないゾーンでは消灯したまま
+  U.uLampI.value = e.lamp ? e.lamp.intensity : 0;
+  if (e.lamp) {
+    U.uLampColor.value.copy(e.lamp.color || DEFAULT_LAMP);
+    U.uLampReach.value = e.lamp.reach ?? 26;
+    U.uLampCos.value = Math.cos(e.lamp.angle ?? 0.42);
+  }
   scene.fog.color.copy(e.fogColor);
   scene.fog.density = e.fogDensity;
   renderer.toneMappingExposure = e.exposure;
   lights.sun.position.copy(e.sunDir).multiplyScalar(60);
+  lights.sun.color.copy(U.uSunColor.value);
+  // 標準マテリアル用の半球光も、カスタムシェーダ側の環境光と同じ色にする。
+  // ここを固定色のままにすると、深海でも岩や煙突だけ青く照らされてしまう
+  lights.hemi.color.copy(e.ambTop);
+  lights.hemi.groundColor.copy(e.ambBottom);
 
   diveCam.world = zone.world;
   diveCam.clearFollow();
@@ -163,9 +180,14 @@ function animate() {
   U.uTime.value = clock.elapsedTime;
   lights.sun.intensity = 1.6 * U.uSunI.value;
   lights.hemi.intensity = 0.9 * (0.6 + 0.4 * U.uSunI.value);
-
   active.update(dt, camera);
   diveCam.update(dt);
+  // ダイバーライトは頭に付いているので、カメラを動かした「後」に追従させる。
+  // 先に更新すると、振り向いたとき光が1フレーム遅れてついてくる
+  if (U.uLampI.value > 0) {
+    U.uLampPos.value.copy(camera.position);
+    camera.getWorldDirection(U.uLampDir.value);
+  }
   // 頭が水面から出ると、こもった水中音から水面のさざめきへ入れ替わる
   audio.setAbove(THREE.MathUtils.smoothstep(camera.position.y, U.uSurfaceY.value - 0.2, U.uSurfaceY.value + 0.8));
 

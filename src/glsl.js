@@ -13,6 +13,12 @@ uniform float uFogDensity;
 uniform float uSurfaceY;
 uniform vec3  uAmbTop;
 uniform vec3  uAmbBottom;
+uniform vec3  uLampPos;
+uniform vec3  uLampDir;
+uniform vec3  uLampColor;
+uniform float uLampI;
+uniform float uLampCos;
+uniform float uLampReach;
 `;
 
 // --- ハッシュ / ノイズ ---
@@ -157,6 +163,27 @@ vec3 applyUnderwaterFog(vec3 col, vec3 wp){
 
 // --- 半球環境光 + 太陽光の基本ライティング ---
 export const UW_LIGHTING = /* glsl */ `
+// ダイバーライト。太陽の届かない深さでは唯一の外部光になる。
+// その点に「届いているライトの色」を返す(法線は掛けない)。
+//
+// 頭に付いた光源なので、光はライト→対象→目と水の中を往復する。
+// 水は赤から先に吸うので、遠いものほど青緑に沈み、近いものだけが
+// 本来の色を見せる。深海の赤い生物が周囲光では黒く沈み、
+// ライトを当てた瞬間だけ赤く浮かび上がるのはこのため。
+vec3 lampArrive(vec3 wp){
+  if (uLampI <= 0.001) return vec3(0.0);
+  vec3 d = wp - uLampPos;
+  float dist = length(d);
+  vec3 L = d / max(dist, 1e-4);
+  float ca = dot(L, uLampDir);
+  if (ca < uLampCos || dist > uLampReach) return vec3(0.0);
+  float cone = smoothstep(uLampCos, mix(uLampCos, 1.0, 0.62), ca);
+  float fall = 1.0 / (1.0 + dist / 10.0);
+  fall *= 1.0 - smoothstep(uLampReach * 0.60, uLampReach, dist);
+  vec3 ext = exp(-vec3(0.042, 0.012, 0.006) * dist * 2.0);   // 往復ぶんの吸収
+  return uLampColor * ext * (cone * fall * uLampI);
+}
+
 vec3 underwaterLight(vec3 albedo, vec3 n, vec3 wp, vec3 viewDir, float specPow, float specI){
   float ndl = clamp(dot(n, uSunDir), 0.0, 1.0);
   // 半波長ラップ(水中の柔らかい拡散)
@@ -168,10 +195,16 @@ vec3 underwaterLight(vec3 albedo, vec3 n, vec3 wp, vec3 viewDir, float specPow, 
   hemi = mix(hemi, skyHemi, air);
   vec3 light = hemi * 1.15 + uSunColor * (0.35 * ndl + 0.45 * wrap) * uSunI * sunReach(wp);
   light += uSunColor * ndl * 0.75 * uSunI * air;   // 直射日光
+  // ダイバーライト(消灯ゾーンでは lampArrive が 0 を返すので何も起きない)
+  vec3 lamp = lampArrive(wp);
+  vec3 lampL = normalize(uLampPos - wp);
+  light += lamp * (0.22 + 0.78 * clamp(dot(n, lampL), 0.0, 1.0));
   vec3 col = albedo * light;
   // スペキュラ
   vec3 h = normalize(uSunDir + viewDir);
   col += uSunColor * pow(clamp(dot(n, h), 0.0, 1.0), specPow) * specI * uSunI * sunReach(wp);
+  vec3 hl = normalize(lampL + viewDir);
+  col += lamp * pow(clamp(dot(n, hl), 0.0, 1.0), specPow) * specI;
   return col;
 }
 `;
