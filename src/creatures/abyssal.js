@@ -248,38 +248,56 @@ export class AtollaSwarm {
     }
   }
 
+  /**
+   * 図鑑から寄るときの注視点。
+   * 全個体の平均を取ると、5匹が半径13mに散っているので誰もいない
+   * 中間地点を向いてしまう。そこを向いたままではタップする相手もいない。
+   * 1匹に張り付いて追う。
+   */
   get swarmCenter() {
-    _v.set(0, 0, 0);
-    for (const j of this.jellies) _v.add(j.group.position);
-    return _v.multiplyScalar(1 / this.jellies.length).clone();
-  }
-
-  /** 指定点の近くの個体に警報発光を起こす */
-  alarmNear(point, radius = 6) {
-    let hit = 0;
-    for (const j of this.jellies) {
-      if (j.group.position.distanceTo(point) < radius) { j.alarm = 0; hit++; }
-    }
-    return hit;
+    const p = this.jellies[0].group.position;
+    return _v.set(p.x, p.y + 0.18 * this.jellies[0].scale, p.z).clone();
   }
 
   /**
-   * 視線が通った個体に警報発光を起こす。
-   * 「その個体を狙って光を向けた」ことを直接判定するので、
-   * 群れの重心のような代理点を経由するより素直に当たる。
+   * 視線の通った1匹に警報発光を起こす。
+   *
+   * 傘は「半径1.0、高さ -0.10〜+0.46」の平たいドーム(個体の scale 倍)。
+   * 縦だけ引き伸ばして球にそろえてから、素直にレイと球の交差を解く。
+   * 円柱状の大ざっぱな判定にすると、
+   *   ・当たり判定が傘の3倍以上に膨らみ、狙っていない個体を掴む
+   *   ・視線からの距離ではなく「手前かどうか」で選ぶので、
+   *     画面の中心にいる個体を素通りして奥の別個体が光る
+   * の両方が起きる。
+   *
+   * 発光するのは襲われた本人だけ。まわりの個体は光らない
+   * (警報は「自分が襲われている」という合図で、伝染するものではない)。
+   *
+   * @param slack 指で狙う余裕。傘の半径に対する倍率
+   * @returns 光らせた個体の位置(当たらなければ null)
    */
-  alarmAlongRay(ray, maxPerp = 2.6) {
+  alarmAlongRay(ray, slack = 1.4) {
+    const BELL_MID = 0.18;   // 傘の中心の高さ(ドームの上端と縁の中ほど)
+    const FLAT = 0.28;       // 傘の高さの半分 / 傘の半径
+    const o = ray.origin, d = ray.direction;
     let best = null, bestT = Infinity;
     for (const j of this.jellies) {
-      _v.copy(j.group.position).sub(ray.origin);
-      const t = _v.dot(ray.direction);
-      if (t <= 0) continue;
-      // 視線からの垂直距離。傘の半径ぶんは余裕を見る
-      const perp = Math.sqrt(Math.max(_v.lengthSq() - t * t, 0));
-      if (perp < maxPerp + j.scale && t < bestT) { best = j; bestT = t; }
+      const R = j.scale * slack;
+      const ox = o.x - j.group.position.x;
+      const oy = (o.y - (j.group.position.y + BELL_MID * j.scale)) / FLAT;
+      const oz = o.z - j.group.position.z;
+      const dy = d.y / FLAT;
+      const a = d.x * d.x + dy * dy + d.z * d.z;
+      const b = 2 * (ox * d.x + oy * dy + oz * d.z);
+      const c = ox * ox + oy * oy + oz * oz - R * R;
+      const disc = b * b - 4 * a * c;
+      if (disc < 0) continue;
+      const t = (-b - Math.sqrt(disc)) / (2 * a);
+      if (t > 0 && t < bestT) { bestT = t; best = j; }
     }
-    if (best) { best.alarm = 0; return best.group.position; }
-    return null;
+    if (!best) return null;
+    best.alarm = 0;
+    return best.group.position.clone();
   }
 
   update(dt) {
@@ -701,11 +719,43 @@ export class DreamCucumbers {
     return _v.copy(this.items[0].group.position).clone();
   }
 
-  /** 近くの個体を光らせる */
-  glowNear(point, radius = 6) {
+  /**
+   * 視線の通った1匹だけを光らせる。
+   *
+   * 「タップ地点から半径N mの個体を全部光らせる」ようにすると、
+   * 群れているぶん一度に何匹も光ってしまい、
+   * しかも海底のどこを触っても光る。触れた本人だけが光るのが正しい。
+   *
+   * 体は細長い紡錘なので、進行方向へ寝かせた楕円体として交差を取る。
+   * @param slack 指で狙う余裕(1.0 で体の輪郭ぴったり)
+   * @returns 光らせた個体の位置(当たらなければ null)
+   */
+  glowAlongRay(ray, slack = 1.35) {
+    const o = ray.origin, d = ray.direction;
+    let best = null, bestT = Infinity;
     for (const it of this.items) {
-      if (it.group.position.distanceTo(point) < radius) it.glow = 1;
+      const p = it.group.position;
+      const c = Math.cos(-it.heading), sn = Math.sin(-it.heading);
+      // ローカル座標へ(位置を引いて、進行方向まわりに戻す)
+      const rx = o.x - p.x, ry = o.y - p.y, rz = o.z - p.z;
+      // 体軸(+Z)まわりの向きを打ち消す回転。rotation.y = heading
+      const ox = rx * c + rz * sn, oz = -rx * sn + rz * c;
+      const dx = d.x * c + d.z * sn, dz = -d.x * sn + d.z * c;
+      // 楕円体を単位球にそろえる
+      const L = 0.52 * it.scale, Hh = 0.34 * it.scale, Ww = 0.28 * it.scale;
+      const ax = ox / Ww, ay = ry / Hh, az = oz / L;
+      const bx = dx / Ww, by = d.y / Hh, bz = dz / L;
+      const A = bx * bx + by * by + bz * bz;
+      const B = 2 * (ax * bx + ay * by + az * bz);
+      const C = ax * ax + ay * ay + az * az - slack * slack;
+      const disc = B * B - 4 * A * C;
+      if (disc < 0) continue;
+      const t = (-B - Math.sqrt(disc)) / (2 * A);
+      if (t > 0 && t < bestT) { bestT = t; best = it; }
     }
+    if (!best) return null;
+    best.glow = 1;
+    return best.group.position.clone();
   }
 
   update(dt) {

@@ -155,7 +155,7 @@ export const ABYSS = {
       world,
       followTargets: {
         lanternfish: { get: () => lanterns.schoolCenter, dist: [1.4, 4.0] },
-        atolla: { get: () => atolla.swarmCenter, dist: [3.5, 10] },
+        atolla: { get: () => atolla.swarmCenter, dist: [2.2, 6.0] },
         seacucumber: { get: () => cukes.center3, dist: [1.5, 4.0] },
         tunicate: { get: () => tunicates.center3, dist: [1.2, 3.0] },
         angler: { get: () => angler.pos, dist: [0.38, 1.0] },
@@ -175,11 +175,11 @@ export const ABYSS = {
         // Atollaクラゲは逃げる代わりに警報発光を始め、
         // ハダカイワシの群れは爆発的に散る。
         // クラゲは視線で直接判定する(群れの代理点を経由すると当たらない)
-        const jelly = atolla.alarmAlongRay(ray, 2.6);
-        if (jelly) atolla.alarmNear(jelly, 5);
+        atolla.alarmAlongRay(ray);
         if (disturbPoint(ray, lanterns, 2.0, hit)) lanterns.scare(hit, 3.5, 26);
-        // ユメナマコは触られると体表が青く光る(捕食者に「印」をつける)
-        if (hit) cukes.glowNear(hit, 3.0);
+        // ユメナマコは触られると体表が青く光る(捕食者に「印」をつける)。
+        // 光るのは触れた本人だけ
+        cukes.glowAlongRay(ray);
         // チョウチンアンコウを狙って触れたら、その場で襲いかからせる
         if (hit && hit.distanceTo(angler.pos) < 0.6) angler.provoke();
       },
