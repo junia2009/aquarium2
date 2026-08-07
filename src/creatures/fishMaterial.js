@@ -275,7 +275,16 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, float
     vec3 back = vec3(0.09, 0.105, 0.135);
     vec3 belly = vec3(0.78, 0.80, 0.83);
     float border = 0.34 + sin(u * 14.0 + tint * 6.0) * 0.02;
+    // 頭では、背と腹の境目がそのまま口の線になる。
+    // 吻端から下へ弓なりに垂れ、口角(u≈0.26)で上がる——この一本の弧が
+    // 「ザトウクジラの顔」を決める。ここが無いと、ただの黒い円錐に見える
+    float headMix = 1.0 - smoothstep(0.03, 0.32, u);
+    float mouthV = 0.47 - 0.21 * sin(3.14159 * clamp(u / 0.27, 0.0, 1.0));
+    border = mix(border, mouthV, headMix);
     col = mix(belly, back, smoothstep(border - 0.06, border + 0.08, v));
+    // 口の合わせ目そのもの(細い影)
+    float lip = smoothstep(0.020, 0.002, abs(v - mouthV)) * headMix;
+    col = mix(col, vec3(0.045, 0.05, 0.06), lip * 0.85);
     // 喉から腹の畝: 体軸に沿う筋(断面角=vに沿って刻む)
     float groove = pow(abs(sin(v * 62.0)), 6.0)
                  * smoothstep(0.36, 0.18, v) * smoothstep(0.62, 0.35, u);
@@ -286,15 +295,38 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, float
                  * smoothstep(0.32, 0.15, length(fract(mg) - 0.5))
                  * smoothstep(0.4, 0.6, v);
     col += vec3(0.12) * mottle;
-    // 胸びれとフリューク腹側は白
-    if (part > 2.5) col = mix(col, vec3(0.85, 0.88, 0.90), 0.85);
+    // 胸びれ。ザトウクジラのひれは上下とも白いが、真っ白な板ではない。
+    // v が前縁(0.34)から後縁(0.28)へ振られているので、それで縁を作る
+    if (part > 2.5) {
+      float chordT = clamp((v - 0.28) / 0.06, 0.0, 1.0);   // 0=後縁 1=前縁
+      vec3 flip = vec3(0.80, 0.83, 0.86);
+      // 前縁に並ぶ大きな瘤。この種の胸びれの目印
+      float lead = smoothstep(0.70, 1.0, chordT);
+      flip *= 1.0 - lead * pow(abs(sin((u - 0.31) * 520.0)), 3.0) * 0.26;
+      // 後縁は薄暗く落ちる
+      flip *= 0.74 + 0.26 * smoothstep(0.0, 0.22, chordT);
+      col = mix(col, flip, 0.9);
+    }
     // フリュークの腹側も背と同じ暗さ。尾柄から滑らかに移行させる
     if (abs(part - 1.0) < 0.1) {
       float toFluke = clamp((buv.x - 1.0) / 0.20, 0.0, 1.0);
       col = mix(col, back * 0.9, smoothstep(0.5, 0.7, v) * toFluke);
     }
-    // 目(両側、口角の少し上)
-    col = mix(col, vec3(0.02), eyeDot(u, v, 0.09, 0.42, 0.03));
+    // 瘤(tubercle)。毛根の残った突起が吻の上面と下顎の縁に点々と並ぶ。
+    // ザトウクジラだと一目で分かる目印だが、実物は直径5cmほどしかないので
+    // 大きく描くと嘘になる。粒の間隔と大きさは実寸(体長16.5m)に合わせ、
+    // 上半分を明るく下半分を暗くして、盛り上がりだけを感じさせる
+    vec2 kg = vec2(u * 46.0, v * 15.0);
+    vec2 kc = floor(kg);
+    vec2 koff = (vec2(hash12(kc + 5.1), hash12(kc + 11.3)) - 0.5) * 0.5;
+    vec2 kf = fract(kg) - 0.5 - koff;
+    float knob = step(0.62, hash12(kc)) * smoothstep(0.26, 0.10, length(kf));
+    // 吻の上面と下顎の縁だけ。胴には出ない
+    float knobZone = headMix * (smoothstep(0.02, 0.10, v - mouthV)
+                              + smoothstep(0.02, 0.09, mouthV - v) * 0.8);
+    col *= 1.0 + knob * clamp(knobZone, 0.0, 1.0) * (0.30 - 0.85 * smoothstep(-0.05, 0.12, kf.y));
+    // 目(口角のわずかに上、うしろ)
+    col = mix(col, vec3(0.02), eyeDot(u, v, 0.225, 0.40, 0.028));
     glossMul = 0.35;
   } else if (uPattern < 5.5) {
     // ---- バンドウイルカ: 背は濃灰、体側は中灰、腹は淡い ----
