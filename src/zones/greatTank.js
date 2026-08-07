@@ -146,7 +146,7 @@ export const GREAT_TANK = {
     // (軸平行のままだと、泳ぐ向きによって前後がはみ出したり横が
     //  太くなったりして、めり込みとすり抜けの両方が起きる)。
     world.addDynamic(whaleShark, 1.9, 1.7, 7.4, { oriented: true });
-    world.addDynamic(whale, 1.55, 1.90, 8.4, { oriented: true });
+    world.addDynamic(whale, 1.62, 2.15, 8.4, { oriented: true });
     world.addDynamic(ray, 2.6, 0.9, 2.2);
     world.addDynamic(turtle, 1.7, 0.9, 1.8);
     for (const c of [whaleShark, whale, ray, turtle, jellies]) c.setWorld(world);
