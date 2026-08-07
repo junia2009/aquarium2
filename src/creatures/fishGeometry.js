@@ -307,6 +307,81 @@ export function buildFishGeometry(opts) {
           if (side > 0) indices.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
           else indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
         }
+      } else if (spec.shape === 'flipper') {
+        // 鯨類の胸びれ。ほかの胸びれのように「平面図を板で作る」と、
+        // どうしても飛行機の主翼になる。厚みがなく、弦がまっすぐで、
+        // 先端が尖っているからで、生き物の腕にはそのどれも当てはまらない。
+        // ここでは立体として作る。
+        //   ・前縁が丸く厚く、後縁へ向かって薄くなる断面(翼型)を持たせる
+        //   ・先端は尖らせず、輪郭を丸く閉じる
+        //   ・ザトウクジラでは前縁に大きな瘤(tubercle)が並び、輪郭が波打つ。
+        //     これは飾りではなく、失速を遅らせて小さな半径で旋回するための構造で、
+        //     この種のひれをひと目で見分ける特徴でもある
+        // 瘤ひとつを5〜6分割できるだけの station を取る。
+        // 粗いと輪郭が階段になり、彫刻刀で削ったように見える
+        const pSegs = spec.segs ?? 56;
+        const cSegs = spec.chordSegs ?? 10;
+        const span = spec.width * L;              // 外への張り出し
+        const sweep = spec.len * L;               // 後退量
+        const chord0 = (spec.chord ?? 0.06) * L;  // 付け根の弦長
+        const thick0 = (spec.thick ?? 0.17) * chord0;
+        const knobN = spec.knobs ?? 0;
+        const knobAmp = (spec.knobAmp ?? 0.11) * chord0;
+
+        // NACA4桁系の厚み分布。前縁が丸く、後縁が薄く閉じる
+        const thickAt = (c) => {
+          const q = Math.min(Math.max(c, 0), 1);
+          return 1.4845 * Math.sqrt(q) - 0.630 * q - 1.758 * q * q
+               + 1.4215 * q * q * q - 0.5075 * q * q * q * q;
+        };
+
+        for (let i = 0; i <= pSegs; i++) {
+          const sp = i / pSegs;                   // 0=付け根 1=先端
+          // station はほぼ等間隔に置く。sin で寄せると先端付近で station が
+          // 詰まり、弦だけが先に閉じて切り落としたような先端になる
+          const out = span * Math.pow(sp, 0.93);
+          const back = sweep * (0.18 * sp + 0.82 * sp * sp);
+          // 垂れ下がりは後退量ではなく張り出し量に対して効かせる。
+          // 後退の小さいこのひれで sweep 基準にすると、ほとんど水平の棒になる
+          const drop = -(spec.droop ?? 0.22) * span * Math.pow(sp, 1.6);
+          // 前縁の瘤。中ほどがいちばん大きく、根元と先端では消える
+          const kPhase = knobN > 0
+            ? (0.5 + 0.5 * Math.cos(sp * knobN * Math.PI * 2.0))
+              * Math.sin(Math.PI * Math.pow(sp, 0.85))
+            : 0;
+          const knob = knobAmp * kPhase;
+          // 弦は3〜4割の位置がいちばん広く、先端は丸く閉じる
+          const chord = chord0
+            * (0.80 + 0.34 * Math.sin(Math.PI * Math.pow(sp, 0.85)))
+            * Math.pow(Math.max(1 - Math.pow(sp, 2.6), 0), 0.42);
+          // 瘤は前へ張り出すだけでなく厚みも持つ。前後だけ動かすと上面が
+          // 平らなままで、輪郭は波打つのに面はのっぺり光る
+          const halfT = thick0 * (1 - 0.62 * sp) * 0.5 * (1 + 0.40 * kPhase);
+          // 瘤は前縁だけを押し出す。弦長で吸収させないと、
+          // 後縁まで同じ波が写って輪郭全体がぎざぎざになる
+          const leZ = z - back + knob;
+          const chordK = chord + knob;
+          for (let j = 0; j <= cSegs; j++) {
+            // 前縁 → 後縁(上面)→ 前縁(下面)と一周する
+            const q = j / cSegs;
+            const c = q <= 0.5 ? q * 2 : (1 - q) * 2;
+            const sgn = q <= 0.5 ? 1 : -1;
+            push(x0 + side * out,
+                 y0 + drop + sgn * thickAt(c) * halfT,
+                 leZ - c * chordK,
+                 t + sp * 0.08, sgn > 0 ? 0.34 : 0.28, partId);
+          }
+        }
+        for (let i = 0; i < pSegs; i++) {
+          for (let j = 0; j < cSegs; j++) {
+            const a = pStart + i * (cSegs + 1) + j;
+            const b = a + 1;
+            const c2 = pStart + (i + 1) * (cSegs + 1) + j;
+            const d = c2 + 1;
+            if (side > 0) indices.push(a, c2, b, b, c2, d);
+            else indices.push(a, b, c2, b, d, c2);
+          }
+        }
       } else {
         const pSegs = spec.segs ?? 3;
         for (let j = 0; j <= pSegs; j++) {

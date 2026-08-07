@@ -295,17 +295,21 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, float
                  * smoothstep(0.32, 0.15, length(fract(mg) - 0.5))
                  * smoothstep(0.4, 0.6, v);
     col += vec3(0.12) * mottle;
-    // 胸びれ。ザトウクジラのひれは上下とも白いが、真っ白な板ではない。
-    // v が前縁(0.34)から後縁(0.28)へ振られているので、それで縁を作る
+    // 胸びれ。v が上面(0.34)と下面(0.28)を分ける。
+    // 前縁の瘤は形として作ってあるので、ここでは色だけ。
+    // 下面は白く、上面は灰色がかって斑が入る
     if (part > 2.5) {
-      float chordT = clamp((v - 0.28) / 0.06, 0.0, 1.0);   // 0=後縁 1=前縁
-      vec3 flip = vec3(0.80, 0.83, 0.86);
-      // 前縁に並ぶ大きな瘤。この種の胸びれの目印
-      float lead = smoothstep(0.70, 1.0, chordT);
-      flip *= 1.0 - lead * pow(abs(sin((u - 0.31) * 520.0)), 3.0) * 0.26;
-      // 後縁は薄暗く落ちる
-      flip *= 0.74 + 0.26 * smoothstep(0.0, 0.22, chordT);
-      col = mix(col, flip, 0.9);
+      // 上面は体と同じくらい暗い灰色、下面だけが白い。
+      // 上下とも白くすると、水中で光を受けたとき一枚の紙に見える
+      float up = smoothstep(0.30, 0.325, v);
+      vec3 flip = mix(vec3(0.78, 0.80, 0.83), vec3(0.19, 0.21, 0.25), up);
+      // 傷とフジツボ痕。まっさらな白い板にしない
+      vec2 fg = vec2(u * 420.0, v * 30.0);
+      float sc = step(0.86, hash12(floor(fg)))
+               * smoothstep(0.34, 0.12, length(fract(fg) - 0.5));
+      flip *= 1.0 - sc * 0.22 * up;
+      flip += vec3(0.10) * sc * (1.0 - up);
+      col = mix(col, flip, 0.92);
     }
     // フリュークの腹側も背と同じ暗さ。尾柄から滑らかに移行させる
     if (abs(part - 1.0) < 0.1) {
