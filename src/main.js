@@ -11,6 +11,7 @@ import { ABYSS } from './zones/abyss.js';
 
 import { setupUI } from './ui.js';
 import { UnderwaterAudio } from './audio.js';
+import { UnderwaterScatter } from './postfx.js';
 
 // ================= 基盤 =================
 const canvas = document.getElementById('stage');
@@ -18,6 +19,8 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPrefere
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
+// 水の前方散乱。遠いものほど輪郭がぼける(→ postfx.js)
+const scatter = new UnderwaterScatter(renderer);
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerHeight, 0.1, 500);
@@ -144,6 +147,7 @@ window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  scatter.setSize(renderer);
 });
 
 // ================= PWA: Service Worker =================
@@ -192,9 +196,12 @@ function animate() {
     camera.getWorldDirection(U.uLampDir.value);
   }
   // 頭が水面から出ると、こもった水中音から水面のさざめきへ入れ替わる
-  audio.setAbove(THREE.MathUtils.smoothstep(camera.position.y, U.uSurfaceY.value - 0.2, U.uSurfaceY.value + 0.8));
+  const above = THREE.MathUtils.smoothstep(camera.position.y, U.uSurfaceY.value - 0.2, U.uSurfaceY.value + 0.8);
+  audio.setAbove(above);
 
-  renderer.render(scene, camera);
+  // 水上へ出たら散乱によるぼけも消す。目と空のあいだに水がないので、
+  // 同じ距離でも遠景は硬いまま見える
+  scatter.render(renderer, scene, camera, U.uFogDensity.value, 1 - above * 0.92);
   ui.tickFPS(dt);
 }
 
