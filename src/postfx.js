@@ -14,6 +14,10 @@ import * as THREE from 'three';
 //
 // ぼけ半径は水の濁り(uFogDensity)から決める。同じ距離でも、
 // 澄んだ大水槽より濁った深海のほうが早く輪郭を失う。
+//
+// ただし効かせすぎると、水が「深い」のではなく「濁っている」ように見える。
+// 澄んだ水では近〜中距離の輪郭は崩れないので、手を出すのは
+// もともとフォグで色が抜けている奥だけに限る。
 
 const VERT = /* glsl */ `
 varying vec2 vUv;
@@ -43,14 +47,14 @@ float viewDistance(float d) {
 
 // 距離からぼけ半径(ピクセル)へ
 float radiusAt(float depth) {
-  float dist = viewDistance(depth);
-  // 散乱で失われる鮮鋭さ。距離とともに飽和する。
-  // 1-exp() のままだと近〜中距離で効きすぎて、10mの魚まで溶けてしまう。
-  // 累乗して立ち上がりを遅らせ、「近くはくっきり、遠くから順に溶ける」
-  // という水中写真の見え方に合わせる
-  float soft = pow(1.0 - exp(-dist * uDensity), 1.6);
-  // 手前でも完全に硬い輪郭にはしない(水は常に少し散らす)
-  return uMaxRadius * (0.06 + 0.94 * soft) * uStrength;
+  // 光学的な深さ = 距離 × 濁り。輪郭が崩れ始めるのはこれが1を超えるあたり。
+  float tau = viewDistance(depth) * uDensity;
+  // 近〜中距離(大水槽なら20m以内)にはいっさい手を出さない。
+  // ここをぼかすと「奥行きのある澄んだ水」ではなく「濁った水」になる。
+  // 水族館の大水槽は澄んでいて、20mの魚は普通にくっきり見える。
+  // 効かせるのは、もともとフォグで水の色に溶けかけている奥だけ。
+  float soft = smoothstep(0.45, 2.2, tau);
+  return uMaxRadius * soft * uStrength;
 }
 
 void main() {
@@ -95,7 +99,7 @@ export class UnderwaterScatter {
    * @param renderer
    * @param maxRadius 最大ぼけ半径。1080p 相当での画素数で指定する
    */
-  constructor(renderer, { maxRadius = 6.0 } = {}) {
+  constructor(renderer, { maxRadius = 2.2 } = {}) {
     this.maxRadius = maxRadius;
     this.enabled = true;
 

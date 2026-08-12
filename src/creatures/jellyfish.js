@@ -159,14 +159,20 @@ void main() {
   if (!gl_FrontFacing) n = -n;
   vec3 V = normalize(cameraPosition - vWorldPos);
   float ndv = abs(dot(n, V));
-  float fres = pow(1.0 - ndv, 2.2);
-
-  // ほぼ透明な傘。縁と接線方向で白く浮かび上がる
-  vec3 col = vec3(0.62, 0.78, 0.92) * 0.10;
-  col += vec3(0.75, 0.88, 1.0) * fres * 0.85;
+  // 指数を下げると、縁の一点に集まらず内側へ広がった淡い明るみになる。
+  // 高いままだと「白い縁取り線」に見えて、水中の寒天質に見えない
+  float fres = pow(1.0 - ndv, 1.55);
 
   float rf = length(vLocal.xz);
   float a = atan(vLocal.z, vLocal.x);
+
+  // 傘の縁は寒天質が薄く尖って消えていく。ここで色とアルファを
+  // 断ち切ると、輪郭がくっきりした白い線になる。最外周で溶かす
+  float margin = smoothstep(1.00, 0.90, rf);
+
+  // ほぼ透明な傘。縁と接線方向で白く浮かび上がる
+  vec3 col = vec3(0.62, 0.78, 0.92) * 0.10;
+  col += vec3(0.75, 0.88, 1.0) * fres * 0.52;
 
   // 生殖腺: ミズクラゲの象徴である4つの馬蹄形。中心側が開いている
   float gon = 0.0;
@@ -191,7 +197,7 @@ void main() {
   float trans = clamp(dot(-n, uSunDir) * 0.5 + 0.5, 0.0, 1.0);
   col += vec3(0.5, 0.7, 0.85) * trans * 0.18 * uSunI;
 
-  float alpha = 0.15 + fres * 0.55 + gon * 0.26 + canal * 0.10;
+  float alpha = (0.13 + fres * 0.42 + gon * 0.26 + canal * 0.10) * margin;
   col = applyUnderwaterFog(col, vWorldPos);
   gl_FragColor = vec4(col, alpha);
   ${UW_FRAG_OUTPUT}
