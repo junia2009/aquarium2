@@ -402,8 +402,78 @@ export function createIceCanopy(scene, { seed = 1 } = {}) {
   mesh.renderOrder = -4;      // 水面より手前(水面は -5)
   scene.add(mesh);
 
-  return { mesh, floes, coverTexture: bakeCover(floes), leadSpots: findLeads(floes),
-         polynyas: floes.polynyas };
+  return {
+    mesh, floes,
+    coverTexture: bakeCover(floes),
+    leadSpots: findLeads(floes),
+    polynyas: floes.polynyas,
+    field: bakeField(floes),
+  };
+}
+
+// ---- 氷の高さ場 ----
+// 泳ぐペンギンは氷を突き抜けてはいけないし、氷の上へ跳び乗るには
+// 板の甲板がどこにあるかを知らなければならない。
+// どちらも「その (x,z) の真上に何があるか」を毎フレーム引く問題になる。
+//
+// floeDraft() を直接呼ぶと、板146枚 × 個体数 ぶんの atan2 とノイズを
+// 毎フレーム回すことになる。地形と同じように、あらかじめ格子へ焼いて
+// 双一次補間で引く。
+const FIELD_RES = 160;
+
+function bakeField(floes) {
+  const N = FIELD_RES;
+  const px = ICE_EXTENT / N;
+  const Y = WORLD.surfaceY;
+  // under: 泳げる上限(氷の下面)。氷がなければ水面
+  // deck : 氷の上面。氷がなければ -Infinity の代わりに大きな負の数
+  const under = new Float32Array(N * N).fill(Y);
+  const deck = new Float32Array(N * N).fill(-1e4);
+
+  for (const f of floes) {
+    const draft = f.thick * 0.90;
+    const free = f.thick * 0.10;
+    const i0 = Math.max(Math.floor((f.x - f.r + ICE_EXTENT / 2) / px) - 1, 0);
+    const i1 = Math.min(Math.ceil((f.x + f.r + ICE_EXTENT / 2) / px) + 1, N - 1);
+    const j0 = Math.max(Math.floor((f.z - f.r + ICE_EXTENT / 2) / px) - 1, 0);
+    const j1 = Math.min(Math.ceil((f.z + f.r + ICE_EXTENT / 2) / px) + 1, N - 1);
+    for (let j = j0; j <= j1; j++) {
+      const z = (j + 0.5) * px - ICE_EXTENT / 2;
+      for (let i = i0; i <= i1; i++) {
+        const x = (i + 0.5) * px - ICE_EXTENT / 2;
+        const dx = x - f.x, dz = z - f.z;
+        const d = Math.hypot(dx, dz);
+        const ang = Math.atan2(dz, dx);
+        const rr = floeRadius(f, ang);
+        if (d > rr) continue;
+        const u = d / Math.max(rr, 1e-3);
+        const k = j * N + i;
+        under[k] = Math.min(under[k], Y - floeDraft(f, u, ang) * draft);
+        deck[k] = Math.max(deck[k], Y + free * 0.3 + free * 1.2 * (1 - Math.pow(u, 3)));
+      }
+    }
+  }
+
+  const sample = (arr, x, z, outside) => {
+    const fx = (x + ICE_EXTENT / 2) / px - 0.5;
+    const fz = (z + ICE_EXTENT / 2) / px - 0.5;
+    if (fx < 0 || fz < 0 || fx > N - 1 || fz > N - 1) return outside;
+    const i = Math.floor(fx), j = Math.floor(fz);
+    const tx = fx - i, tz = fz - j;
+    const i1 = Math.min(i + 1, N - 1), j1 = Math.min(j + 1, N - 1);
+    const a = arr[j * N + i] * (1 - tx) + arr[j * N + i1] * tx;
+    const b = arr[j1 * N + i] * (1 - tx) + arr[j1 * N + i1] * tx;
+    return a * (1 - tz) + b * tz;
+  };
+
+  return {
+    /** その位置で泳げる上限(氷の下面、氷がなければ水面) */
+    under: (x, z) => sample(under, x, z, Y),
+    /** 氷の甲板の高さ。氷がなければ大きな負の数 */
+    deck: (x, z) => sample(deck, x, z, -1e4),
+    /** その位置に氷があるか(縁のぼけを避けたいので甲板で判定) */
+    hasIce: (x, z) => sample(deck, x, z, -1e4) > -100,
+  };
 }
 
 // ---- 被覆テクスチャ ----

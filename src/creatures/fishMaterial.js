@@ -49,13 +49,34 @@ void main() {
 #endif
   vTint = tint;
 
+  // ---- 羽ばたきの位相と振幅 ----
+  // ペンギンだけは、これを時間から作らない。
+  //   ・翼を速く打つ/止めて滑空する、を切り替えるのが泳ぎの中身なので、
+  //     打つ速さは個体ごとに毎フレーム変わる。時間×周波数で作ると、
+  //     速さを変えた瞬間に位相が飛んで翼が瞬間移動する
+  //   ・群れの全個体が同じ拍で打つのも不自然
+  // そこでCPU側で位相を積分し、振幅とあわせて aInfo で渡す。
+  // 体のうねりのほうは、位相を個体の色ゆらぎから作って散らしておく。
+  float wingPhase = uTime * uFlapFreq;
+  float wingAmp = 1.0;
+  float bodyPhase = phase;
+  float bodySpd = spd;
+  if (uWing > 0.5) {
+#ifdef USE_INSTANCING
+    wingPhase = aInfo.x;
+    wingAmp = aInfo.y;
+#endif
+    bodyPhase = tint * 6.2831853;
+    bodySpd = 1.0;
+  }
+
   vec3 p = position;
 #ifdef USE_INSTANCING
   p *= aInfo.z; // 個体ごとの体格差
 #endif
   vec3 n = normal;
   float t = clamp(aBodyUV.x, 0.0, 1.3); // 尾びれは1超
-  float w = uTime * uSwimFreq * spd + phase;
+  float w = uTime * uSwimFreq * bodySpd + bodyPhase;
 
   // 進行波: 頭は小さく、尾に向かって振幅増大
   float amp = uWaveAmp * (uHeadAmp + pow(min(t, 1.0), 2.0)) * uFishLen;
@@ -83,7 +104,7 @@ void main() {
     if (uWing > 0.5) {
       // ペンギンの翼。骨が癒合していて曲がらないので、肩を軸に
       // 板ごと振る。左右は同位相(魚のように交互に漕ぐのではない)。
-      float beat = sin(uTime * uFlapFreq * spd + phase);
+      float beat = sin(wingPhase);
       // 肩へ移してから体軸(Z)まわりに回す。左右で符号を変えると
       // 両翼の先が同時に上がる
       vec3 root = vec3(uWingRoot.x * side, uWingRoot.y, uWingRoot.z);
@@ -94,12 +115,13 @@ void main() {
       // 肩に近いほど回転を殺せば、埋没部は動かず外だけが振れる——
       // 肩の皮膚が付いていかないのは生き物でも同じ
       float span = clamp(abs(d.x) / max(uWingRoot.w, 1e-3), 0.0, 1.0);
-      float ang = beat * 0.52 * smoothstep(0.0, 0.24, span);   // 上下におよそ±30度
+      // 振幅0は「翼を左右に伸ばしたまま」。滑空はこの姿勢になる
+      float ang = beat * 0.52 * wingAmp * smoothstep(0.0, 0.24, span);
       float c = cos(ang * side), sn = sin(ang * side);
       vec3 r = vec3(d.x * c - d.y * sn, d.x * sn + d.y * c, d.z);
       // 翼をひねる(フェザリング)。打ち下ろしと打ち上げの両方で
       // 前へ押せるのは、この迎え角の切り替えがあるから
-      float tw = -cos(uTime * uFlapFreq * spd + phase) * 0.30;
+      float tw = -cos(wingPhase) * 0.30 * wingAmp;
       float tc = cos(tw * span), ts = sin(tw * span);
       r = vec3(r.x, r.y * tc - r.z * ts, r.y * ts + r.z * tc);
       p = root + r;

@@ -5,6 +5,8 @@ import { createSand } from '../environment/seabed.js';
 import { iceTerrain, createIceCanopy, createDropstones, ICE_EXTENT } from '../environment/ice.js';
 import { createGodRays, createMarineSnow } from '../environment/effects.js';
 import { CollisionWorld } from '../collision.js';
+import { PENGUIN_KINDS } from '../creatures/penguin.js';
+import { PenguinFlock, BubbleTrail } from '../creatures/penguinFlock.js';
 import { ICE_SEA_SPECIES } from '../species.js';
 
 // ============ 流氷の海ゾーン ============
@@ -56,6 +58,9 @@ export const ICE_SEA = {
     // 流氷の天蓋。ここで焼いた被覆テクスチャを全マテリアル共有の
     // ユニフォームへ渡すと、海底も岩も生き物も、まとめて氷の影に入る
     const ice = createIceCanopy(root, { seed: 3 });
+    // いちばん大きい板の下面を、図鑑の注視点にする
+    const big = ice.floes.reduce((a, b) => (b.rMean > a.rMean ? b : a));
+    FLOE_VIEW.set(big.x, ice.field.under(big.x, big.z) - 1.2, big.z);
 
     // 光芒はリード(割れ目)からだけ差し込む。氷の下に立てても
     // 「板を突き抜けてくる光の柱」になってしまう
@@ -66,10 +71,53 @@ export const ICE_SEA = {
     const world = new CollisionWorld();
     for (const c of stones.colliders) world.addStatic(c.center, c.rx, c.ry, c.rz);
 
+    // --- ペンギン4種 ---
+    // 気泡は1つの粒プールを4種で共有する。種ごとに持たせても意味がなく、
+    // 描画呼び出しだけが増える
+    const bubbles = new BubbleTrail(root);
+    const flocks = {
+      king: new PenguinFlock(root, {
+        kind: PENGUIN_KINDS.king, count: 5,
+        center: new THREE.Vector3(-6, 8.5, 4), radius: 15,
+        iceField: ice.field, bubbles,
+      }),
+      gentoo: new PenguinFlock(root, {
+        kind: PENGUIN_KINDS.gentoo, count: 7,
+        center: new THREE.Vector3(7, 10.5, -8), radius: 17,
+        iceField: ice.field, bubbles,
+      }),
+      adelie: new PenguinFlock(root, {
+        kind: PENGUIN_KINDS.adelie, count: 8,
+        center: new THREE.Vector3(-9, 6.5, -11), radius: 16,
+        iceField: ice.field, bubbles,
+      }),
+      chinstrap: new PenguinFlock(root, {
+        kind: PENGUIN_KINDS.chinstrap, count: 7,
+        center: new THREE.Vector3(11, 9.0, 9), radius: 16,
+        iceField: ice.field, bubbles,
+      }),
+    };
+    // 種をまたいでぶつからないよう、全個体を共有する
+    const everyone = [];
+    for (const f of Object.values(flocks)) everyone.push(...f.members);
+    for (const f of Object.values(flocks)) {
+      f.setWorld(world);
+      f.setNeighbors(everyone);
+    }
+
     return {
       world,
       ice,
-      followTargets: {},
+      // 検証用。ヘッドレスから群れの内部状態を読むため
+      __flocks: flocks,
+      followTargets: {
+        king: { get: () => flocks.king.lead, dist: [2.2, 6.0] },
+        gentoo: { get: () => flocks.gentoo.lead, dist: [1.8, 5.0] },
+        adelie: { get: () => flocks.adelie.lead, dist: [1.6, 4.5] },
+        chinstrap: { get: () => flocks.chinstrap.lead, dist: [1.6, 4.5] },
+        // 流氷そのものも図鑑から見にいける。板の下面を見上げる位置へ
+        floe: { get: () => FLOE_VIEW, dist: [6, 14] },
+      },
       onEnter() {
         setIceCover(ice.coverTexture, ICE_EXTENT);
       },
@@ -77,9 +125,14 @@ export const ICE_SEA = {
         setIceCover(null);
       },
       update(dt, camera) {
+        for (const f of Object.values(flocks)) f.update(dt);
         godRays.update(camera);
       },
       onTap() {},
     };
   },
 };
+
+// 図鑑から「流氷」を選んだときの注視点。いちばん大きい板の下面。
+// build() のなかで確定させる
+const FLOE_VIEW = new THREE.Vector3(0, 13, 0);
