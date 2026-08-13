@@ -116,6 +116,11 @@ export function addCausticsToStandard(mat, strength = 0.9) {
     shader.uniforms.uLampI = U.uLampI;
     shader.uniforms.uLampCos = U.uLampCos;
     shader.uniforms.uLampReach = U.uLampReach;
+    // 流氷の覆い。岩だけ氷の影に入らないと、そこだけ浮いて見える
+    shader.uniforms.uIceTex = U.uIceTex;
+    shader.uniforms.uIceOn = U.uIceOn;
+    shader.uniforms.uIceExtent = U.uIceExtent;
+    shader.uniforms.uSunDirI = { value: U.uSunDir.value };
 
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vCauWorldPos;')
@@ -148,6 +153,18 @@ export function addCausticsToStandard(mat, strength = 0.9) {
         uniform float uLampI;
         uniform float uLampCos;
         uniform float uLampReach;
+        uniform sampler2D uIceTex;
+        uniform float uIceOn;
+        uniform float uIceExtent;
+        uniform vec3 uSunDirI;
+        // glsl.js の iceOpen と同じ式
+        float iceOpenStd(vec3 wp){
+          if (uIceOn < 0.5) return 1.0;
+          float depth = max(uSurfaceYC - wp.y, 0.0);
+          vec2 uv = (wp.xz + uSunDirI.xz / max(uSunDirI.y, 0.25) * depth) / uIceExtent + 0.5;
+          float cover = texture2D(uIceTex, clamp(uv, 0.001, 0.999)).r;
+          return 1.0 - cover * mix(0.95, 0.78, clamp(depth / 13.0, 0.0, 1.0));
+        }
         // glsl.js の lampArrive と同じ式。標準マテリアル側にも同じ光を届ける
         vec3 lampArriveStd(vec3 wp){
           if (uLampI <= 0.001) return vec3(0.0);
@@ -185,8 +202,15 @@ export function addCausticsToStandard(mat, strength = 0.9) {
           float cau = causticIterStd(proj * 0.06, uTime * 0.55);
           float up = clamp(normal.y * 0.75 + 0.45, 0.0, 1.0);
           float depth = clamp((uSurfaceYC - vCauWorldPos.y) / uSurfaceYC, 0.0, 1.0);
-          float reach = mix(1.0, 0.35, depth);
+          float reach = mix(1.0, 0.35, depth) * iceOpenStd(vCauWorldPos);
           reflectedLight.directDiffuse += uSunColorC * cau * uCauStrength * up * uSunIC * reach;
+          // 氷の影では拡散光そのものも落ちる。集光模様だけ消えて
+          // 岩が明るいままだと、影が「模様の抜け」にしか見えない
+          float open = iceOpenStd(vCauWorldPos);
+          reflectedLight.directDiffuse *= mix(0.20, 1.0, open);
+          // 空からの散乱光も氷が遮る。ここを落とさないと、
+          // 岩だけが氷の下で明るいまま浮いてしまう
+          reflectedLight.indirectDiffuse *= mix(0.16, 1.0, open);
           vec3 lamp = lampArriveStd(vCauWorldPos);
           vec3 lampL = normalize(uLampPos - vCauWorldPos);
           reflectedLight.directDiffuse += diffuseColor.rgb * lamp

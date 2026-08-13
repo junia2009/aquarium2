@@ -5,10 +5,10 @@ import { UW_UNIFORMS, UW_NOISE, UW_FOG } from '../glsl.js';
 // ============ 光芒(ゴッドレイ) ============
 // 加算合成のビルボード板に、動くノイズの光条を描く。
 // 毎フレーム、カメラの方角へY軸回転させて奥行感を出す。
-export function createGodRays(scene) {
+export function createGodRays(scene, { spots = null, width = 30 } = {}) {
   const group = new THREE.Group();
   const H = WORLD.surfaceY + 3;
-  const geo = new THREE.PlaneGeometry(30, H, 1, 1);
+  const geo = new THREE.PlaneGeometry(width, H, 1, 1);
   geo.translate(0, -H / 2, 0); // 上端を原点に(水面から吊り下げる)
 
   const makeMat = (seed) =>
@@ -56,11 +56,13 @@ export function createGodRays(scene) {
     });
 
   const rays = [];
-  const spots = [
+  // 既定は水槽じゅうに散らす。流氷ゾーンのように「ここからしか光が
+  // 入らない」場所が決まっているゾーンは、その位置を渡す
+  const places = spots || [
     { x: 2, z: -4 }, { x: -9, z: 3 }, { x: 10, z: 6 },
     { x: -4, z: -12 }, { x: 14, z: -8 }, { x: -14, z: -10 },
   ];
-  spots.forEach((s, i) => {
+  places.forEach((s, i) => {
     const m = new THREE.Mesh(geo, makeMat(i * 0.73 + 1));
     m.position.set(s.x, WORLD.surfaceY + 1, s.z);
     m.renderOrder = 50;

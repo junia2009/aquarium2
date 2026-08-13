@@ -19,6 +19,27 @@ uniform vec3  uLampColor;
 uniform float uLampI;
 uniform float uLampCos;
 uniform float uLampReach;
+uniform sampler2D uIceTex;
+uniform float uIceOn;
+uniform float uIceExtent;
+
+// 流氷の覆いを抜けて届く光の割合。
+// 海面が氷で蓋をされていると、太陽光は割れ目(リード)からしか入らない。
+// 厚さ2mの氷を抜けてくる光は数%しかないので、リードの真下との差は
+// ゆうに10倍になる。氷の海の明暗はほぼこれだけで決まるので、
+// 光を使うところ全部(直射・環境光・水の色)から参照できるよう、
+// いちばん手前の共通チャンクに置いてある。
+float iceOpen(vec3 wp){
+  if (uIceOn < 0.5) return 1.0;
+  float depth = max(uSurfaceY - wp.y, 0.0);
+  // 太陽が傾いているぶん、影は水平にずれる。浅いところで氷の真下にいても、
+  // 斜めに差す光が届くことがある——これが無いと影が「氷の型抜き」になる
+  vec2 uv = (wp.xz + uSunDir.xz / max(uSunDir.y, 0.25) * depth) / uIceExtent + 0.5;
+  float cover = texture2D(uIceTex, clamp(uv, 0.001, 0.999)).r;
+  // 深いほど影の縁は甘くなる。横から回り込んだ散乱光で埋まるため
+  float soft = clamp(depth / 13.0, 0.0, 1.0);
+  return 1.0 - cover * mix(0.95, 0.78, soft);
+}
 `;
 
 // --- ハッシュ / ノイズ ---
@@ -117,7 +138,7 @@ float causticIter(vec2 uv, float t){
 // 深度による減光(深いほど太陽光が届かない)
 float sunReach(vec3 wp){
   float depth = clamp((uSurfaceY - wp.y) / uSurfaceY, 0.0, 1.0);
-  return mix(1.0, 0.35, depth);
+  return mix(1.0, 0.35, depth) * iceOpen(wp);
 }
 
 // wp: ワールド座標, n: 法線, strength: 素材ごとの強さ
@@ -153,6 +174,10 @@ vec3 applyUnderwaterFog(vec3 col, vec3 wp){
   // 視線が上向きなら明るい水色、下向きなら暗い深青に寄せる
   vec3 dir = normalize(wp - cameraPosition);
   vec3 fogC = mix(uFogColor * 0.55, uFogColor * 1.35, clamp(dir.y * 0.5 + 0.55, 0.0, 1.0));
+  // 水の色は「水中で散乱した日射」そのもの。氷に蓋をされていれば
+  // 散らす光が届いていないので、水自体が暗く沈む。
+  // ここを一定にすると、影の中の遠景だけが明るく浮いて嘘になる
+  fogC *= mix(0.40, 1.0, iceOpen(wp));
   // 水上から覗き込むときは、浅いほど明るいターコイズ、深いほど暗く
   float camAbove = smoothstep(-0.2, 0.6, cameraPosition.y - uSurfaceY);
   vec3 downC = mix(uFogColor * 1.30, uFogColor * 0.50, clamp((uSurfaceY - wp.y) / 15.0, 0.0, 1.0));
@@ -188,7 +213,12 @@ vec3 underwaterLight(vec3 albedo, vec3 n, vec3 wp, vec3 viewDir, float specPow, 
   float ndl = clamp(dot(n, uSunDir), 0.0, 1.0);
   // 半波長ラップ(水中の柔らかい拡散)
   float wrap = clamp((dot(n, uSunDir) + 0.5) / 1.5, 0.0, 1.0);
-  vec3 hemi = mix(uAmbBottom, uAmbTop, clamp(n.y * 0.5 + 0.5, 0.0, 1.0));
+  // 流氷は直射日光だけでなく、空からの散乱光もまとめて遮る。
+  // 太陽の項にだけ影を掛けても、環境光が明るいままなので影が出てこない
+  // ——実際そうなって、氷の下と割れ目の下がまったく同じ明るさになった。
+  // 上向きの環境光は「上から降ってくる光」なので、これも氷で落とす
+  float open = iceOpen(wp);
+  vec3 hemi = mix(uAmbBottom, uAmbTop * mix(0.14, 1.0, open), clamp(n.y * 0.5 + 0.5, 0.0, 1.0));
   // 水面から出た体は、青い水中の環境光ではなく空と直射日光で照らされる
   float air = smoothstep(0.0, 1.4, wp.y - uSurfaceY);
   vec3 skyHemi = mix(vec3(0.20, 0.23, 0.26), vec3(0.42, 0.55, 0.76), clamp(n.y * 0.5 + 0.5, 0.0, 1.0));

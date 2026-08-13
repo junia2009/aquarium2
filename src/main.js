@@ -8,6 +8,7 @@ import { setTerrain } from './environment/seabed.js';
 import { GREAT_TANK } from './zones/greatTank.js';
 import { DOLPHIN_POOL } from './zones/dolphinPool.js';
 import { ABYSS } from './zones/abyss.js';
+import { ICE_SEA } from './zones/iceSea.js';
 
 import { setupUI } from './ui.js';
 import { UnderwaterAudio } from './audio.js';
@@ -37,7 +38,7 @@ const audio = new UnderwaterAudio();
 
 // ================= ゾーン =================
 // 各ゾーンは初回訪問時に構築し、以降は表示の切り替えだけで往復する。
-const ZONES = [GREAT_TANK, DOLPHIN_POOL, ABYSS];
+const ZONES = [GREAT_TANK, DOLPHIN_POOL, ABYSS, ICE_SEA];
 const DEFAULT_SUN = new THREE.Color('#ffefcf');
 const DEFAULT_LAMP = new THREE.Color('#eaf4ff');
 const built = new Map();
@@ -57,9 +58,15 @@ function buildZone(def) {
 function enterZone(key, { moveCamera = true } = {}) {
   const zone = built.get(key) || buildZone(ZONES.find((z) => z.key === key));
   if (active === zone) return;
-  if (active) active.root.visible = false;
+  if (active) {
+    active.root.visible = false;
+    // ゾーン固有の共有ユニフォーム(流氷の被覆など)は必ず戻す。
+    // 置きっぱなしにすると、次のゾーンが前のゾーンの影を引きずる
+    if (active.onLeave) active.onLeave();
+  }
   active = zone;
   active.root.visible = true;
+  if (active.onEnter) active.onEnter();
 
   // 地形・水の色・光をゾーンのものへ
   setTerrain(zone.def.terrain);
@@ -115,6 +122,15 @@ const ui = setupUI({
 });
 
 enterZone(GREAT_TANK.key);
+
+// ?debug=1 のときだけ、外からカメラを置ける口を開ける。
+// ヘッドレスの検証で「この位置からこの方向を見た絵」を撮るのに要る。
+// マウスドラッグで代用すると、直したい一点を毎回同じ画角で撮れない。
+if (new URLSearchParams(location.search).has('debug')) {
+  window.__dive = diveCam;
+  window.__three = THREE;
+  window.__zone = () => active;
+}
 
 // ================= タップ =================
 let downPos = null;

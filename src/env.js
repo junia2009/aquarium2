@@ -7,6 +7,15 @@ export const WORLD = {
   half: 28,       // 生物の遊泳範囲(半径)
 };
 
+// 氷のないゾーン用の空の被覆テクスチャ。
+// sampler2D を null のままにすると、実装によっては警告が出たり
+// 黒(＝全面が氷)として読まれたりするので、必ず何かを差しておく。
+function emptyCover() {
+  const t = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
+  t.needsUpdate = true;
+  return t;
+}
+
 // ============ 全マテリアル共有ユニフォーム ============
 // 同じオブジェクト参照を各マテリアルに渡すことで、一括更新される
 export const U = {
@@ -29,7 +38,25 @@ export const U = {
   uLampI:      { value: 0.0 },                        // 0=消灯(既存ゾーン)
   uLampCos:    { value: Math.cos(0.42) },             // 光錐の半頂角のcos
   uLampReach:  { value: 26.0 },                       // 届く距離
+
+  // ---- 流氷の覆い(流氷ゾーン用) ----
+  // 海が氷の板で蓋をされていると、太陽光はその割れ目(リード)からしか
+  // 入らない。氷の下は薄暗く、リードの真下だけが眩しい——氷の海の
+  // 明暗はほぼこれだけで決まる。
+  // 被覆率をXZ平面のテクスチャに焼いておき、sunReach() が全マテリアルで
+  // 参照する。uIceOn = 0 のゾーンでは一切効かない。
+  uIceTex:     { value: emptyCover() },                // R = 氷の被覆(0..1)
+  uIceOn:      { value: 0.0 },
+  uIceExtent:  { value: 160.0 },                      // テクスチャが覆うXZの一辺(m)
 };
+
+// 氷のないゾーン用の既定テクスチャ(被覆0)。sampler2D は未バインドだと
+// 実装によって警告や黒読みになるので、必ず何かを差しておく
+export function setIceCover(tex, extent) {
+  U.uIceTex.value = tex;
+  U.uIceOn.value = tex ? 1.0 : 0.0;
+  if (extent) U.uIceExtent.value = extent;
+}
 
 export function baseUniforms() {
   // 参照共有: value オブジェクトごと共有するのがポイント
@@ -49,5 +76,8 @@ export function baseUniforms() {
     uLampI: U.uLampI,
     uLampCos: U.uLampCos,
     uLampReach: U.uLampReach,
+    uIceTex: U.uIceTex,
+    uIceOn: U.uIceOn,
+    uIceExtent: U.uIceExtent,
   };
 }
