@@ -6,7 +6,8 @@ import * as THREE from 'three';
 // 頂点属性:
 //   aPart  : 0=体, 1=尾びれ, 2=背びれ, 3=胸びれ左, 4=胸びれ右
 //   aBodyUV: x=体軸方向 0(鼻)→1(尾), y=断面角(0=腹 1=背)
-//   aHeight: 体の中心からの実際の高さ(H で割った値)
+//   aHeight: 体の中心からの実際の高さ(H で割った値)。
+//            ただし shape:'flipper' の胸びれだけは弦の位置(0=前縁 1=後縁)
 //
 // aBodyUV.y は断面の「角度」なので、断面が円でないときは高さと一致しない。
 // 角ばった頭に横一文字の口を引くような場面では aHeight を使う。
@@ -327,6 +328,10 @@ export function buildFishGeometry(opts) {
         const thick0 = (spec.thick ?? 0.17) * chord0;
         const knobN = spec.knobs ?? 0;
         const knobAmp = (spec.knobAmp ?? 0.11) * chord0;
+        const chordProfile = spec.chordProfile ?? null;
+        // 後退の効き方。既定は二次で、先端ほど強く後ろへ流れる(鎌形)。
+        // 1 に近づけるほど前縁が直線になる
+        const sweepLin = spec.sweepLin ?? 0.18;
 
         // NACA4桁系の厚み分布。前縁が丸く、後縁が薄く閉じる
         const thickAt = (c) => {
@@ -340,7 +345,7 @@ export function buildFishGeometry(opts) {
           // station はほぼ等間隔に置く。sin で寄せると先端付近で station が
           // 詰まり、弦だけが先に閉じて切り落としたような先端になる
           const out = span * Math.pow(sp, 0.93);
-          const back = sweep * (0.18 * sp + 0.82 * sp * sp);
+          const back = sweep * (sweepLin * sp + (1 - sweepLin) * sp * sp);
           // 垂れ下がりは後退量ではなく張り出し量に対して効かせる。
           // 後退の小さいこのひれで sweep 基準にすると、ほとんど水平の棒になる
           const drop = -(spec.droop ?? 0.22) * span * Math.pow(sp, 1.6);
@@ -350,10 +355,13 @@ export function buildFishGeometry(opts) {
               * Math.sin(Math.PI * Math.pow(sp, 0.85))
             : 0;
           const knob = knobAmp * kPhase;
-          // 弦は3〜4割の位置がいちばん広く、先端は丸く閉じる
-          const chord = chord0
-            * (0.80 + 0.34 * Math.sin(Math.PI * Math.pow(sp, 0.85)))
-            * Math.pow(Math.max(1 - Math.pow(sp, 2.6), 0), 0.42);
+          // 弦の分布(平面形)。既定は鯨類の胸びれで、3〜4割の位置が
+          // いちばん広く先端は丸く閉じる。ペンギンの翼のように付け根が
+          // 最も広く先端まで一様に細る形は、chordProfile に表で渡す
+          const chord = chord0 * (chordProfile
+            ? sampleLinear(chordProfile, sp)
+            : (0.80 + 0.34 * Math.sin(Math.PI * Math.pow(sp, 0.85)))
+              * Math.pow(Math.max(1 - Math.pow(sp, 2.6), 0), 0.42));
           // 瘤は前へ張り出すだけでなく厚みも持つ。前後だけ動かすと上面が
           // 平らなままで、輪郭は波打つのに面はのっぺり光る
           const halfT = thick0 * (1 - 0.62 * sp) * 0.5 * (1 + 0.40 * kPhase);
@@ -370,6 +378,10 @@ export function buildFishGeometry(opts) {
                  y0 + drop + sgn * thickAt(c) * halfT,
                  leZ - c * chordK,
                  t + sp * 0.08, sgn > 0 ? 0.34 : 0.28, partId);
+            // このひれに限り aHeight を弦の位置(0=前縁 1=後縁)に差し替える。
+            // 本来の「体の中心からの高さ」はひれの上では意味を持たないし、
+            // これがないと縁取り(ペンギンの翼の黒い覆輪など)が描けない
+            height[height.length - 1] = c;
           }
         }
         for (let i = 0; i < pSegs; i++) {

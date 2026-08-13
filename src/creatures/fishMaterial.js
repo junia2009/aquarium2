@@ -17,6 +17,8 @@ uniform float uHeadAmp;    // 頭部の首振り
 uniform float uFishLen;
 uniform float uFlapFreq;   // 胸びれ
 uniform float uVertAxis;   // 0=左右うねり(魚類) 1=上下うねり(クジラ類)
+uniform float uWing;       // 1=ペンギンの羽ばたき(翼を肩から振る)
+uniform vec4 uWingRoot;    // 翼の付け根(|x|, y, z) と w=翼の張り出し
 attribute vec2 aBodyUV;
 attribute float aPart;
 attribute float aHeight;   // 体の中心からの実際の高さ(H比)
@@ -78,10 +80,38 @@ void main() {
   // 胸びれの羽ばたき
   if (aPart == 3.0 || aPart == 4.0) {
     float side = aPart == 4.0 ? 1.0 : -1.0;
-    float flap = sin(uTime * uFlapFreq * spd + phase * 1.7 + side * 1.57);
-    float dist = abs(p.x) / max(uFishLen * 0.2, 1e-3);
-    p.y += flap * dist * uFishLen * 0.08;
-    p.x += side * flap * dist * uFishLen * 0.03;
+    if (uWing > 0.5) {
+      // ペンギンの翼。骨が癒合していて曲がらないので、肩を軸に
+      // 板ごと振る。左右は同位相(魚のように交互に漕ぐのではない)。
+      float beat = sin(uTime * uFlapFreq * spd + phase);
+      // 肩へ移してから体軸(Z)まわりに回す。左右で符号を変えると
+      // 両翼の先が同時に上がる
+      vec3 root = vec3(uWingRoot.x * side, uWingRoot.y, uWingRoot.z);
+      vec3 d = p - root;
+      // 付け根の何割まで来たか。翼の内端は体の中に埋まっているので、
+      // そこまで一様に回すと、振り上げた瞬間に埋まっていた部分が
+      // 脇腹を突き破って白い線になって現れる(実際そうなった)。
+      // 肩に近いほど回転を殺せば、埋没部は動かず外だけが振れる——
+      // 肩の皮膚が付いていかないのは生き物でも同じ
+      float span = clamp(abs(d.x) / max(uWingRoot.w, 1e-3), 0.0, 1.0);
+      float ang = beat * 0.52 * smoothstep(0.0, 0.24, span);   // 上下におよそ±30度
+      float c = cos(ang * side), sn = sin(ang * side);
+      vec3 r = vec3(d.x * c - d.y * sn, d.x * sn + d.y * c, d.z);
+      // 翼をひねる(フェザリング)。打ち下ろしと打ち上げの両方で
+      // 前へ押せるのは、この迎え角の切り替えがあるから
+      float tw = -cos(uTime * uFlapFreq * spd + phase) * 0.30;
+      float tc = cos(tw * span), ts = sin(tw * span);
+      r = vec3(r.x, r.y * tc - r.z * ts, r.y * ts + r.z * tc);
+      p = root + r;
+      // 法線も同じだけ回す
+      n = vec3(n.x * c - n.y * sn, n.x * sn + n.y * c, n.z);
+      n = vec3(n.x, n.y * tc - n.z * ts, n.y * ts + n.z * tc);
+    } else {
+      float flap = sin(uTime * uFlapFreq * spd + phase * 1.7 + side * 1.57);
+      float dist = abs(p.x) / max(uFishLen * 0.2, 1e-3);
+      p.y += flap * dist * uFishLen * 0.08;
+      p.x += side * flap * dist * uFishLen * 0.03;
+    }
   }
 
   vec4 wp = modelMatrix
@@ -106,6 +136,7 @@ void main() {
 //           5=バンドウイルカ 6=シロイルカ 7=カマイルカ 8=ハダカイワシ
 const PATTERN_GLSL = /* glsl */ `
 uniform float uPattern;
+uniform float uSpecies;   // ペンギンの種(0..3)
 uniform float uTimeP;
 
 // v(高さ方向)は断面角のcosなので、同じvは左右両側に対応する。
@@ -412,6 +443,144 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, float
     // 目
     col = mix(col, vec3(0.02, 0.02, 0.03), eyeDot(u, v, 0.185, 0.50, 0.028));
     glossMul = 1.6;
+  } else if (uPattern < 9.5) {
+    // ---- ペンギン4種 ----
+    // 体はどれも同じ「黒い背・白い腹」の対比色(counter-shading)。
+    // 上から見れば海の暗さに、下から見れば水面の明るさに紛れる。
+    // 大事なのは、この境目がイルカのような濃淡のぼかしではなく、
+    // 羽の生え際でぱきっと切り替わる一本の線だということ。
+    // ぼかすと、たちまち小型の鯨に見えてしまう。
+    // 種を分けるのは頭の模様で、そこだけ uSpecies で描き分ける。
+    //   0=キング 1=ジェンツー 2=アデリー 3=ヒゲ
+    vec3 hood  = vec3(0.026, 0.028, 0.034);   // 頭巾。4種とも頭はほぼ真っ黒
+    vec3 back  = hood;
+    vec3 belly = vec3(0.92, 0.925, 0.92);
+    // キングだけ「背」が青みの濃い灰色を帯びる。頭は黒のままなので、
+    // 頭と背で色が違う——これがキングをキングに見せる要のひとつ
+    float isKing = 1.0 - min(abs(uSpecies - 0.0), 1.0);
+    back = mix(back, vec3(0.072, 0.082, 0.102), isKing);
+
+    // 背と腹の境目。喉のあたりでいちばん高く(白が顎の下まで上がる)、
+    // 脇腹をなだらかに下がって尾へ抜ける
+    float line = mix(0.60, 0.43, smoothstep(0.10, 0.55, u))
+               - 0.14 * smoothstep(0.62, 1.00, u);
+    col = mix(belly, back, smoothstep(line - 0.012, line + 0.012, v));
+    // 羽毛の生え際の細かい乱れ。定規で引いた線にしない
+    col = mix(col, back, smoothstep(0.012, 0.0, abs(v - line))
+                       * step(0.5, sin(u * 150.0 + v * 40.0)) * 0.5);
+
+    // ---- 頭 ----
+    // どの種も「黒い頭巾をかぶり、そこに種ごとの白または橙が入る」形。
+    // 頭巾の下端は喉のどこまで下りるかだけが種で違う。
+    if (u < 0.36) {
+      if (uSpecies < 0.5) {
+        // キング: 頭巾は顎の下まで。うしろの境は項から喉へ斜めに下りる
+        col = mix(col, hood, smoothstep(0.20 + 0.06 * v, 0.15 + 0.06 * v, u)
+                           * smoothstep(0.10, 0.16, v));
+        // 頬の橙斑。丸い点ではなく、耳のうしろで太く、喉へ向かって
+        // 細く垂れる涙形。丸くすると顔に貼ったシールにしか見えない。
+        // 色は緑に寄せないこと——青い水中光の下では、少しでも緑を
+        // 残した橙はたちまち黄土色に沈む
+        float cv = clamp((0.82 - v) / 0.62, 0.0, 1.4);        // 0=眼の上 1=喉
+        float taper = 0.040 * (1.0 - 0.84 * cv * cv);          // 下ほど細い
+        float axis = 0.172 - 0.040 * cv * cv;                  // 下ほど前へ寄る
+        float earSpot = smoothstep(taper, taper * 0.40, abs(u - axis))
+                      * smoothstep(-0.02, 0.07, cv) * smoothstep(1.22, 0.96, cv);
+        col = mix(col, vec3(1.00, 0.28, 0.01), earSpot);
+        // 上胸の黄。橙斑の下端から続き、境目を持たず白へ溶ける
+        float bib = smoothstep(0.38, 0.22, u) * smoothstep(0.28, 0.04, v)
+                  * smoothstep(0.13, 0.24, u);
+        col = mix(col, vec3(1.00, 0.62, 0.04), bib * 0.9);
+      } else if (uSpecies < 1.5) {
+        // ジェンツー: 頭巾は喉まで。目の上から後頭部へ、頭頂を横切る
+        // 白い鉢巻きが渡る。眼の上で三角に太くなり、てっぺんで細くつながる
+        col = mix(col, hood, smoothstep(0.27, 0.20, u) * smoothstep(0.16, 0.26, v));
+        float band = smoothstep(0.038, 0.010, abs(v - 0.95))
+                   * smoothstep(0.080, 0.125, u) * smoothstep(0.250, 0.190, u);
+        band += smoothstep(0.075, 0.030, length(vec2((u - 0.135) * 3.0, v - 0.80)));
+        col = mix(col, vec3(0.95, 0.955, 0.95), clamp(band, 0.0, 1.0));
+      } else if (uSpecies < 2.5) {
+        // アデリー: 頭巾が首の付け根まで一様に下り、顔に模様はない。
+        // 目のまわりの細い白い輪だけが黒の中に浮かぶ
+        col = mix(col, hood, smoothstep(0.27, 0.20, u));
+        float er = length(vec2((u - 0.135) * 3.0, v - 0.66));
+        col = mix(col, vec3(0.94, 0.95, 0.95),
+                  smoothstep(0.060, 0.048, er) * smoothstep(0.030, 0.042, er));
+      } else {
+        // ヒゲ: 頭巾は目より上の帽子だけで、顔と喉は白い。
+        // その帽子から顎の下へ、耳から耳へ細い黒線が渡る——これが名の由来
+        col = mix(col, belly, smoothstep(0.30, 0.23, u) * smoothstep(1.00, 0.78, v));
+        col = mix(col, hood, smoothstep(0.74, 0.84, v) * smoothstep(0.32, 0.26, u)
+                           + smoothstep(0.10, 0.04, u));
+        float strap = smoothstep(0.034, 0.014, abs(v - 0.26))
+                    * smoothstep(0.030, 0.065, u) * smoothstep(0.280, 0.225, u);
+        col = mix(col, hood, clamp(strap, 0.0, 1.0));
+      }
+    }
+
+    // ---- 嘴 ----
+    if (abs(part - 5.0) < 0.1) {
+      vec3 bill = vec3(0.038, 0.036, 0.034);
+      // 上下の合わせ目。断面が上下非対称(上嘴が厚い)なので、
+      // 見た目の中央は角度でいう 0.5 より少し上に来る
+      float lower = smoothstep(0.80, 0.62, v);
+      // キングは下嘴の側面に長い橙の板、ジェンツーは全体が橙赤で稜だけ黒、
+      // アデリーは羽毛に半ば埋もれた煉瓦色、ヒゲは真っ黒
+      if (uSpecies < 0.5) bill = mix(bill, vec3(1.00, 0.26, 0.02), lower);
+      else if (uSpecies < 1.5) bill = mix(bill, vec3(1.00, 0.22, 0.02), 1.0 - smoothstep(0.82, 0.96, v));
+      else if (uSpecies < 2.5) bill = mix(bill, vec3(0.42, 0.12, 0.09), lower * 0.6);
+      // 合わせ目の影
+      bill *= 1.0 - smoothstep(0.040, 0.0, abs(v - 0.54)) * 0.55;
+      col = bill;
+      glossMul = 2.4;   // 角質はよく光る
+    }
+    // ---- 脚と蹼 ----
+    else if (abs(part - 6.0) < 0.1) {
+      vec3 foot = vec3(0.075, 0.070, 0.075);                     // キング: 黒
+      if (uSpecies > 0.5 && uSpecies < 1.5) foot = vec3(0.95, 0.22, 0.03);  // ジェンツー: 橙
+      else if (uSpecies > 1.5) foot = vec3(0.70, 0.47, 0.44);    // アデリー・ヒゲ: 肉色
+      // 趾(あしゆび)の筋。蹼は趾のあいだに張った膜なので、
+      // 3本の骨のところだけ濃く、そのあいだは薄く光を透かす
+      float toe = pow(abs(sin(buv.y * 3.14159 * 3.0)), 4.0);
+      col = foot * (0.75 + 0.45 * (1.0 - toe) * buv.x);
+      glossMul = 1.2;
+    }
+    // ---- 翼 ----
+    // 上面は背と同じ黒、下面は白。ここは法線ではなくジオメトリが書いた
+    // v(上面0.34 / 下面0.28)で分ける。翼は羽ばたきで裏返るところまで
+    // 回るので、法線の上下で判定すると打ち上げの途中で色が反転する。
+    // hgt はこのひれだけ弦の位置(0=前縁 1=後縁)を運んでいる
+    else if (part > 2.5 && part < 4.5) {
+      float up = smoothstep(0.30, 0.325, v);
+      col = mix(vec3(0.93, 0.935, 0.93), back, up);
+      // 下面の白は縁まで届かない。前縁と後縁に黒い覆輪が回り、
+      // 先端では上下の黒がつながる。これが無いと、打ち上げのたびに
+      // 真っ白な板がひらめいて紙細工に見える
+      float edge = max(smoothstep(0.16, 0.02, hgt), smoothstep(0.80, 0.97, hgt));
+      float tip = smoothstep(0.325, 0.350, buv.x);
+      col = mix(col, back, (1.0 - up) * clamp(edge + tip, 0.0, 1.0) * 0.9);
+    }
+    // ---- 尾 ----
+    // 硬い黒い風切羽が十数枚、扇に並んだもの。一枚板として塗ると、
+    // 真上を向いた瞬間に光を受けきって灰色のプラ板になる。
+    // 羽軸のあいだに影を入れると、同じ明るさでも羽の束に見える
+    else if (abs(part - 1.0) < 0.1) {
+      float quill = pow(abs(sin(v * 3.14159 * 13.0)), 3.0);
+      col = mix(back * 0.55, back, quill);
+      col *= 1.0 - 0.25 * smoothstep(1.0, 1.20, buv.x);   // 先ほどすり切れて暗い
+      glossMul = 0.5;
+    }
+    // 目。頭の模様に埋もれないよう最後に置く。虹彩は暗褐色で、
+    // まわりに細い裸出部の輪がある
+    if (part < 0.5) {
+      col = mix(col, vec3(0.055, 0.040, 0.032), eyeDot(u, v, 0.128, 0.80, 0.024));
+      col = mix(col, vec3(0.015, 0.015, 0.018), eyeDot(u, v, 0.128, 0.80, 0.016));
+    }
+    // 羽毛は水を弾くので濡れた体はよく光る……のだが、広い鏡面ローブを
+    // 掛けると脇腹に一本の白い刀傷が走る(実際そうなった)。
+    // 生きた羽毛は無数の細かい羽枝でできていて、面としては鈍い。
+    // 鋭い煌めきはむしろ体表に付いた気泡の役目なので、ここは抑える
+    glossMul *= 0.10;
   } else {
     // ---- ハダカイワシ: 黒褐色の体に、腹面の発光器が青緑に灯る ----
     // 鱗が剥がれやすく、生きた個体は体側が銀色に光る。
@@ -470,7 +639,11 @@ void main() {
   // ひれは薄く透ける
   float finAlpha = vPart > 0.5 ? 0.75 : 1.0;
 
-  vec3 col = underwaterLight(albedo, n, vWorldPos, V, 48.0, 0.35 * glossMul);
+  // 鏡面ローブの鋭さも艶に合わせる。艶のない体に鋭いローブを掛けると、
+  // 回転体の上側面に沿って幅3画素の白い線が一本走る——鱗や濡れた皮膚なら
+  // それでいいが、羽毛や鮫肌には「鈍く広い照り」しか出ない
+  vec3 col = underwaterLight(albedo, n, vWorldPos, V,
+                             mix(11.0, 48.0, clamp(glossMul, 0.0, 1.0)), 0.35 * glossMul);
   // 体表に落ちる揺らめく光
   col += causticsLight(vWorldPos, n, 0.55) * albedo * 2.0;
   // 逆光時のひれの透過。尾びれは付け根から徐々に薄くなるので、
@@ -493,7 +666,7 @@ void main() {
 }
 `;
 
-export function createFishMaterial({ pattern, len, swim, vertAxis = 0 }) {
+export function createFishMaterial({ pattern, len, swim, vertAxis = 0, wing = null, species = 0 }) {
   return new THREE.ShaderMaterial({
     uniforms: {
       ...baseUniforms(),
@@ -506,6 +679,9 @@ export function createFishMaterial({ pattern, len, swim, vertAxis = 0 }) {
       uHeadAmp: { value: swim.headAmp ?? 0.1 },
       uFlapFreq: { value: swim.flapFreq ?? 5 },
       uVertAxis: { value: vertAxis },
+      uWing: { value: wing ? 1 : 0 },
+      uWingRoot: { value: wing ? wing.clone() : new THREE.Vector4() },
+      uSpecies: { value: species },
     },
     vertexShader: FISH_VERTEX,
     fragmentShader: FISH_FRAGMENT,
