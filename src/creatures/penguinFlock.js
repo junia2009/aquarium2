@@ -329,11 +329,12 @@ export class PenguinFlock {
    * 足先が氷にめり込む
    */
   ground(m, load) {
-    const w = m.waddle || 0;
+    const w = m.waddle || 0, y = m.yaw || 0;
     const g = this.gait;
     const sc = m.scale;
     const cw = Math.cos(w), sw = Math.sin(w);
-    let lift = -1e9, sway = 0;
+    const cy = Math.cos(y), sy = Math.sin(y);
+    let lift = -1e9, sway = 0, surge = 0;
     const legs = [
       [m.hipL || 0, Math.max(-(m.swing || 0), 0), -this.standHalfW * sc, load ? load[0] : 0.5],
       [m.hipR || 0, Math.max(m.swing || 0, 0), this.standHalfW * sc, load ? load[1] : 0.5],
@@ -344,12 +345,17 @@ export class PenguinFlock {
       // 支持脚が垂直になる一歩の中間で体はいちばん高くなり、踏み替えで
       // いちばん低くなる——倒立振り子そのもの
       lift = Math.max(lift, d * cw - sx * sw);
-      // 体を倒すとき、回転の中心は体の真ん中ではなく接地した足。
-      // 高さだけ直して横を放っておくと、倒し込むたびに支持足が
-      // 6cmも横滑りする。体のほうを足の上へ送らなければならない。
+      // 体を倒すときも、ひねるときも、回転の中心は体の真ん中ではなく
+      // 接地した足。放っておくと倒すたびに支持足が6cm横滑りし、
+      // ひねるたびに1cm前後する。体のほうを足の上へ送らなければならない。
       // 荷重で混ぜるのは、踏み替えで飛ばないようにするため
       sway += (sx * (1 - cw) - d * sw) * wt;
     }
+    // ひねりのほうは打ち消せない。左右の足は前後にずれた位置に着いて
+    // いるので、体を鉛直軸まわりに回せば、どちらかの足は必ずその場で
+    // ひねられる。実際の足も氷の上でそうやって捻れているので、
+    // 打ち消そうとするかわりに振れ幅のほうを抑えてある
+    void cy; void sy;
     return { lift, sway };
   }
 
@@ -1014,12 +1020,12 @@ export class PenguinFlock {
     const wantRoll = 0.14 * (load[0] - load[1]);
     m.waddle += (wantRoll - m.waddle) * (1 - Math.exp(-25 * dt));
     // 前へ出ている脚のほうへ骨盤が回る
-    m.yaw += ((m.hipR - m.hipL) * 0.13 - m.yaw) * (1 - Math.exp(-12 * dt));
+    m.yaw += ((m.hipR - m.hipL) * 0.09 - m.yaw) * (1 - Math.exp(-12 * dt));
 
     // 前進。速さは歩幅と歩調の結果であって、独立の数字ではない
     m.pos.x += Math.sin(m.heading) * m.walkSpeed * dt;
     m.pos.z += Math.cos(m.heading) * m.walkSpeed * dt;
-    // 倒し込みのぶん、体を支持足の上へ送る。重心は直進せず、
+    // 倒し込みとひねりのぶん、体を支持足の上へ送る。重心は直進せず、
     // 左右へ数センチずつジグザグに振れながら進む
     const gr = this.ground(m, load);
     const dLat = gr.sway - (m.sway || 0);
