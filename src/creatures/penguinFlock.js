@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { baseUniforms, WORLD, U } from '../env.js';
-import { PENGUIN_KINDS, buildPenguinGeometry } from './penguin.js';
+import { PENGUIN_KINDS, buildPenguinGeometry, STAND_PITCH, STAND_FOOT } from './penguin.js';
 import { createFishMaterial } from './fishMaterial.js';
 import { wander1 } from '../noise.js';
 import { clampToTerrain } from '../collision.js';
@@ -193,13 +193,20 @@ export class PenguinFlock {
       wing: geo.userData.wingRoot,
       neck: geo.userData.neckPivot,
       foot: geo.userData.footPivot,
+      tail: geo.userData.tailPivot,
       // 体はほとんど曲げない。翼で進む鳥なので、うねりは硬直を避けるぶんだけ
       swim: { freq: 1.0, amp: 0.008, waveNum: 0.35, headAmp: 0.05, flapFreq: kind.beatFreq * 6.28 },
     });
     this.mesh = new THREE.InstancedMesh(geo, this.mat, count);
     this.mesh.frustumCulled = false;
-    // 尾の先までの距離。立ち姿の高さをこれから出す
-    this.tailDrop = geo.userData.tailDrop;
+    // 立ち姿の実測値(→ penguin.js の solveStand)。
+    //   standDrop  体の原点から足裏まで。甲板からの浮かせ量そのもの
+    //   standHalfW 接地面の左右の広がり。よちよち歩きで傾けたぶんの補正に使う
+    //   standBend  尾をどれだけ後ろへ蹴り出せば足が接地するか
+    this.standDrop = geo.userData.standDrop;
+    this.standHalfW = geo.userData.standHalfW;
+    this.standFwd = geo.userData.standFwd;
+    this.standBend = geo.userData.standBend;
 
     // aInfo は羽ばたき用に意味が変わる:
     //   x = 羽ばたきの位相(CPUが積分する) / y = 振幅(0で滑空)
@@ -218,6 +225,10 @@ export class PenguinFlock {
     this.pose = new Float32Array(count * 4);
     this.poseAttr = new THREE.InstancedBufferAttribute(this.pose, 4);
     geo.setAttribute('aPose', this.poseAttr);
+    // 関節が4つ(翼・首・足首・尾)になって vec4 に収まらなくなったぶん
+    this.pose2 = new Float32Array(count * 4);
+    this.pose2Attr = new THREE.InstancedBufferAttribute(this.pose2, 4);
+    geo.setAttribute('aPose2', this.pose2Attr);
     parent.add(this.mesh);
 
     this.members = [];
@@ -257,6 +268,7 @@ export class PenguinFlock {
         wingSweep: 0,     // 翼を体側へ畳む量
         neck: 0,          // 首の前傾
         feet: 0,          // 足の前倒し
+        tail: 0,          // 尾の蹴り出し
         waddle: 0,        // よちよち歩きの左右の振れ
         // --- 立ち止まり ---
         hoverT: 0,
@@ -271,6 +283,33 @@ export class PenguinFlock {
   /** 図鑑からの追跡先。群れの平均ではなく先頭の個体を返す。
    *  散らばった群れの平均は、たいてい誰もいない空間を指してしまう */
   get lead() { return this.members[0].pos; }
+
+  /**
+   * 立っている個体を甲板からどれだけ浮かせるか。
+   *
+   * 素の standDrop は体をまっすぐ立てたときの足裏までの深さ。
+   * よちよち歩きで体を左右へ倒すと、倒したぶん足裏の外側の角が
+   * 下がるので、そのぶんを足す。これを忘れると、一歩ごとに
+   * 足先が氷にめり込む
+   */
+  liftAt(m) {
+    const w = m.waddle || 0;
+    return this.standDrop * Math.cos(w) + this.standHalfW * Math.abs(Math.sin(w));
+  }
+
+  /**
+   * 足が乗っている甲板の高さ。
+   *
+   * 足は体の真下ではなく、体長の2割ほど前にある。雪の吹き溜まりで
+   * 甲板は数十センチうねっているので、体の位置で高さを引くと
+   * 斜面の上で足だけが浮いたり埋まったりする
+   */
+  deckUnderFeet(m) {
+    if (!this.iceField) return WORLD.surfaceY;
+    const f = this.standFwd;
+    return this.iceField.deck(m.pos.x + Math.sin(m.heading) * f,
+                              m.pos.z + Math.cos(m.heading) * f);
+  }
 
   /** その位置で泳げる上限(氷の下面か水面) */
   ceilingAt(x, z) {
@@ -450,8 +489,9 @@ export class PenguinFlock {
       // 水中の姿勢。泳いでいるときは翼を横へ張り、首はまっすぐ。
       // 立ち止まっているときだけ首を少し上げてあたりを見る
       const wantSweep = m.state === 'hover' ? 0.22 : 0.0;
-      // 水中では足は尾のうしろへ畳んで舵にする
+      // 水中では脚を尾のうしろへ伸ばし、尾ともども一直線の舵にする
       m.feet += (0 - m.feet) * (1 - Math.exp(-4 * dt));
+      m.tail += (0 - m.tail) * (1 - Math.exp(-4 * dt));
       m.waddle *= Math.exp(-5 * dt);
       const wantNeck = m.state === 'hover'
         ? -0.20 + 0.28 * Math.sin(m.scull * 1.1 + m.seed)   // 見回す
@@ -606,6 +646,7 @@ export class PenguinFlock {
     this.mesh.instanceMatrix.needsUpdate = true;
     this.infoAttr.needsUpdate = true;
     this.poseAttr.needsUpdate = true;
+    this.pose2Attr.needsUpdate = true;
     if (this.bubbles) this.bubbles.flush();
   }
 
@@ -669,6 +710,7 @@ export class PenguinFlock {
       // 左右に広げたままだと、飛んでいるのではなく落ちている絵になる
       m.wingSweep += (1.15 - m.wingSweep) * (1 - Math.exp(-9 * dt));
       m.neck += (0 - m.neck) * (1 - Math.exp(-8 * dt));
+      m.tail += (0 - m.tail) * (1 - Math.exp(-8 * dt));
 
       const deck = this.iceField ? this.iceField.deck(m.pos.x, m.pos.z) : -1e4;
       // 氷の上へ着地。跳び乗った勢いで少し滑ってから立ち上がる
@@ -722,15 +764,11 @@ export class PenguinFlock {
     // だが順序が逆で、曲がらないなら曲げられるようにすればいい。
     // 首を曲げられるようにした今、氷の上のペンギンは立っている。
     const deckAt = (x, z) => Math.max(this.iceField ? this.iceField.deck(x, z) : surf, surf);
-    // 立ち姿での体の中心の高さ。尾と脚が甲板に触れるところから逆算する
-    // 立ち姿はほぼ垂直。75度にしていたら「前へつんのめっている」形になった。
-    // ペンギンの脚は体の後ろに付いていて、尾を地面につけて三点で支えるので、
-    // 体はまっすぐ立つか、わずかに後ろへ反る
-    const standPitch = 1.50;                       // 86度
-    const lift = this.tailDrop * Math.sin(standPitch) + 0.02;
-    // 足を前へ倒す量。尾の向き(-z)から腹の向き(-y)へ90度回すと、
-    // 立ったとき足裏が水平になって前を向く
-    const FEET_DOWN = -1.62;
+    // 立ち姿の傾き・尾の曲げ・足首の角、そして体を浮かせる高さは
+    // すべてモデル側で実測してある(→ penguin.js の solveStand)。
+    // ここで式を書き直すと、必ずまた尾が刺さるか足が浮く
+    const standPitch = STAND_PITCH;
+    const FEET_DOWN = STAND_FOOT;
 
     if (m.iceStage === 'land') {
       m.slide *= Math.exp(-2.6 * dt);
@@ -740,18 +778,27 @@ export class PenguinFlock {
       m.pitch += (0 - m.pitch) * (1 - Math.exp(-6 * dt));
       m.wingSweep += (0.6 - m.wingSweep) * (1 - Math.exp(-5 * dt));
       m.waddle *= Math.exp(-4 * dt);
+      // 腹這いのあいだ尾はまっすぐ。曲げるのは立ち上がってから
+      m.tail *= Math.exp(-4 * dt);
       if (m.slide < 0.25) { m.iceStage = 'stand'; m.lookT = 0; }
       return this.poseAt(m, i);
     }
 
     if (m.iceStage === 'stand') {
       // 立ち上がる。翼は体側へ垂れ、首は前へ折れて嘴が水平に近くなる
-      m.pos.y += (deckAt(m.pos.x, m.pos.z) + lift - m.pos.y) * (1 - Math.exp(-4 * dt));
+      m.pos.y += (Math.max(this.deckUnderFeet(m), surf) + this.liftAt(m) - m.pos.y)
+               * (1 - Math.exp(-4 * dt));
       m.pitch += (standPitch - m.pitch) * (1 - Math.exp(-3.2 * dt));
-      m.wingSweep += (1.45 - m.wingSweep) * (1 - Math.exp(-3.0 * dt));
+      // 翼は畳みきらない。ぴたりと体側へ貼りつけると、脇腹と同じ黒が
+      // 重なって輪郭に溶け、翼がどこにあるのか分からなくなる。
+      // 実際のペンギンも、立っているとき翼をわずかに開いて風を通す
+      m.wingSweep += (1.24 - m.wingSweep) * (1 - Math.exp(-3.0 * dt));
       m.wingAmp += (0 - m.wingAmp) * (1 - Math.exp(-4 * dt));
       // 足を前へ倒して、体を支える板にする
       m.feet += (FEET_DOWN - m.feet) * (1 - Math.exp(-3.0 * dt));
+      // 尾を後ろへ蹴り出す。これをやらないと尾の先が甲板に刺さり、
+      // そのぶん体が持ち上がって足が宙に浮く
+      m.tail += (this.standBend - m.tail) * (1 - Math.exp(-3.0 * dt));
       // 立ち止まっていても完全には止まらない。重心を左右へ送って揺れる
       m.waddle += (Math.sin(m.lookT * 1.5 + m.seed) * 0.05 - m.waddle) * (1 - Math.exp(-3 * dt));
       // 首は立ち上がりに合わせて折る。ここを止めると嘴が空を指す
@@ -777,10 +824,12 @@ export class PenguinFlock {
       const ease = e * e * (3 - 2 * e);
       m.pitch = standPitch + (-0.75 - standPitch) * ease;
       m.neck += (0 - m.neck) * (1 - Math.exp(-5 * dt));
-      // 蹴り出しながら足を畳む
+      // 蹴り出しながら足を畳み、尾を伸ばして体を一直線にする。
+      // 曲げたまま入水すると、水中で尾が背中側へ折れたままになる
       m.feet += (0 - m.feet) * (1 - Math.exp(-4 * dt));
+      m.tail += (0 - m.tail) * (1 - Math.exp(-4 * dt));
       m.waddle *= Math.exp(-6 * dt);
-      m.pos.y = (m.lastDeck || surf) + lift * Math.cos(ease * 1.1);
+      m.pos.y = (m.lastDeck || surf) + this.standDrop * Math.cos(ease * 1.1);
       // 倒れるにつれて重心が縁の外へ出て、そのまま落ちる
       m.pos.x += Math.sin(m.heading) * 0.55 * ease * dt;
       m.pos.z += Math.cos(m.heading) * 0.55 * ease * dt;
@@ -824,16 +873,17 @@ export class PenguinFlock {
     m.pos.z += Math.cos(m.heading) * walk * dt;
     // 一歩ごとの上下の弾み。傾いて片足に乗るとき体が少し持ち上がる
     m.stepBob = Math.abs(Math.sin(m.stepPh)) * 0.018;
-    // 足はしっかり倒したまま
+    // 足と尾はしっかり倒したまま
     m.feet += (FEET_DOWN - m.feet) * (1 - Math.exp(-4 * dt));
+    m.tail += (this.standBend - m.tail) * (1 - Math.exp(-4 * dt));
     m.bank = 0;
     // 甲板の高さ場は格子の外側が大きな負の値なので、縁の1マス手前から
     // 一気に落ちる。そのまま足元の高さに使うと、飛び込む直前に体が
     // 30cm沈む。最後に踏んだ甲板の高さを覚えておいて、そこで踏み切る
-    const deckHere = this.iceField ? this.iceField.deck(m.pos.x, m.pos.z) : -1e4;
+    const deckHere = this.deckUnderFeet(m);
     const onDeck = deckHere > surf + 0.05;
     if (onDeck) m.lastDeck = deckHere;
-    m.pos.y = (m.lastDeck || surf) + lift + (m.stepBob || 0);
+    m.pos.y = (m.lastDeck || surf) + this.liftAt(m) + (m.stepBob || 0);
 
     // 半歩先の足元を見る。縁に着いてから倒れ始めたのでは遅く、
     // 体が宙に浮いたまま前傾することになる
@@ -877,5 +927,6 @@ export class PenguinFlock {
     this.pose[i * 4 + 1] = m.wingSweep;
     this.pose[i * 4 + 2] = m.neck;
     this.pose[i * 4 + 3] = m.feet;
+    this.pose2[i * 4 + 0] = m.tail;
   }
 }

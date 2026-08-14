@@ -227,9 +227,40 @@ function floeDraft(f, u, ang) {
  * 流氷の天蓋。1つのマージ済みメッシュとして作る。
  * @returns { mesh, floes, coverTexture, leadSpots }
  */
+// 板の上面(甲板)の高さ。描いているメッシュと、そこに立たせるための
+// 高さ場は、必ずこの1本の式から出す。
+//
+// 前は高さ場のほうだけ雪の起伏を落として平均で焼いていた。
+// 板の上面はここの吹き溜まりで20〜30cmうねるので、そのぶんペンギンが
+// 甲板にめり込んだ。「立っているのに膝から下が氷に埋まっている」という
+// 絵になっていて、原因が生き物側にあるとしか見えなかった。
+//
+// メッシュは RINGS×SEGS の格子を線形補間して描いているので、
+// 高さ場のほうも同じ格子の上で補間する。細かく評価すると、
+// メッシュには無い山を拾って今度は浮く
+const RINGS = 9, SEGS = 44;
+function deckAt(f, u, ang) {
+  const free = f.thick * 0.10;
+  const node = (i, j) => {
+    const uu = i / RINGS, aa = ((j % SEGS) / SEGS) * Math.PI * 2;
+    // 雪の吹き溜まり。乾いた雪が風で運ばれて積もるので、板の乾舷その
+    // ものより厚くなる。ここを削ると水面と面一になり、上から見たとき
+    // 「氷の板」ではなく「水に浮いた紙」に見える
+    const snow = free * (1.2 + 1.7 * noise3(Math.cos(aa) * uu * 3 + f.seed, Math.sin(aa) * uu * 3, 5))
+               * (1 - Math.pow(uu, 3));
+    return WORLD.surfaceY + free * 0.3 + snow;
+  };
+  const fu = Math.min(Math.max(u, 0), 1) * RINGS;
+  const i0 = Math.min(Math.floor(fu), RINGS - 1), tu = fu - i0;
+  let fa = (ang / (Math.PI * 2)) * SEGS;
+  fa = ((fa % SEGS) + SEGS) % SEGS;
+  const j0 = Math.floor(fa), ta = fa - j0;
+  return (node(i0, j0) * (1 - ta) + node(i0, j0 + 1) * ta) * (1 - tu)
+       + (node(i0 + 1, j0) * (1 - ta) + node(i0 + 1, j0 + 1) * ta) * tu;
+}
+
 export function createIceCanopy(scene, { seed = 1 } = {}) {
   const floes = makeFloes(seed);
-  const RINGS = 9, SEGS = 44;
 
   const pos = [], nrm = [], idx = [];
   const thickA = [], edgeA = [], seedA = [];
@@ -271,15 +302,10 @@ export function createIceCanopy(scene, { seed = 1 } = {}) {
       for (let j = 0; j < SEGS; j++) {
         const ang = (j / SEGS) * Math.PI * 2;
         const rr = floeRadius(f, ang) * u;
-        // 雪の吹き溜まり。縁では風に削られて薄い
-        // 雪の吹き溜まり。乾いた雪が風で運ばれて積もるので、
-        // 板の乾舷そのものより厚くなる。ここを削ると水面と面一になり、
-        // 上から見たとき「氷の板」ではなく「水に浮いた紙」に見える
-        const snow = free * (1.2 + 1.7 * noise3(Math.cos(ang) * u * 3 + f.seed, Math.sin(ang) * u * 3, 5))
-                   * (1 - Math.pow(u, 3));
-        pos.push(f.x + Math.cos(ang) * rr, Y + free * 0.3 + snow, f.z + Math.sin(ang) * rr);
+        const top = deckAt(f, u, ang);
+        pos.push(f.x + Math.cos(ang) * rr, top, f.z + Math.sin(ang) * rr);
         nrm.push(0, 1, 0);
-        thickA.push(free + snow);
+        thickA.push(top - Y + free * 0.7);
         edgeA.push(u);
         seedA.push(f.seed);
       }
@@ -520,7 +546,6 @@ function bakeField(floes) {
 
   for (const f of floes) {
     const draft = f.thick * 0.90;
-    const free = f.thick * 0.10;
     const i0 = Math.max(Math.floor((f.x - f.r + ICE_EXTENT / 2) / px) - 1, 0);
     const i1 = Math.min(Math.ceil((f.x + f.r + ICE_EXTENT / 2) / px) + 1, N - 1);
     const j0 = Math.max(Math.floor((f.z - f.r + ICE_EXTENT / 2) / px) - 1, 0);
@@ -537,7 +562,7 @@ function bakeField(floes) {
         const u = d / Math.max(rr, 1e-3);
         const k = j * N + i;
         under[k] = Math.min(under[k], Y - floeDraft(f, u, ang) * draft);
-        deck[k] = Math.max(deck[k], Y + free * 0.3 + free * 1.2 * (1 - Math.pow(u, 3)));
+        deck[k] = Math.max(deck[k], deckAt(f, u, ang));
       }
     }
   }
@@ -553,14 +578,32 @@ function bakeField(floes) {
     const b = arr[j1 * N + i] * (1 - tx) + arr[j1 * N + i1] * tx;
     return a * (1 - tz) + b * tz;
   };
+  // 甲板だけは、氷の無い升目に -1e4 が入っている。ふつうに混ぜると
+  // 板の縁の1升手前で高さが水面の下まで引きずり降ろされ、そこに立った
+  // ペンギンが氷に埋まる。氷のある升目だけで重みを取り直す
+  const sampleDeck = (x, z) => {
+    const fx = (x + ICE_EXTENT / 2) / px - 0.5;
+    const fz = (z + ICE_EXTENT / 2) / px - 0.5;
+    if (fx < 0 || fz < 0 || fx > N - 1 || fz > N - 1) return -1e4;
+    const i = Math.floor(fx), j = Math.floor(fz);
+    const tx = fx - i, tz = fz - j;
+    const i1 = Math.min(i + 1, N - 1), j1 = Math.min(j + 1, N - 1);
+    let acc = 0, wsum = 0;
+    const add = (k, w) => { if (deck[k] > -100) { acc += deck[k] * w; wsum += w; } };
+    add(j * N + i, (1 - tx) * (1 - tz));
+    add(j * N + i1, tx * (1 - tz));
+    add(j1 * N + i, (1 - tx) * tz);
+    add(j1 * N + i1, tx * tz);
+    return wsum > 1e-4 ? acc / wsum : -1e4;
+  };
 
   return {
     /** その位置で泳げる上限(氷の下面、氷がなければ水面) */
     under: (x, z) => sample(under, x, z, Y),
     /** 氷の甲板の高さ。氷がなければ大きな負の数 */
-    deck: (x, z) => sample(deck, x, z, -1e4),
+    deck: sampleDeck,
     /** その位置に氷があるか(縁のぼけを避けたいので甲板で判定) */
-    hasIce: (x, z) => sample(deck, x, z, -1e4) > -100,
+    hasIce: (x, z) => sampleDeck(x, z) > -100,
   };
 }
 

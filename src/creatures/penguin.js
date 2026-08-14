@@ -3,13 +3,20 @@ import { buildFishGeometry } from './fishGeometry.js';
 
 // ============ ペンギン ============
 //
-// 水中を「飛ぶ」鳥。ここまでの3ゾーンの生き物とは推進の仕組みが根本から違う。
-//   ・魚は体をくねらせ(進行波)、イルカは尾を上下に振る。
-//     ペンギンは体をほとんど曲げず、板状の翼を打ち下ろして進む。
-//   ・その翼には関節がない。骨が癒合して一枚の硬い櫂になっていて、
-//     曲げるのではなく肩から根元ごと振る。
-//   ・脚は尾のうしろへ畳んで舵にする。水中では歩く道具ではない。
-// だから遊泳シェーダも、体の波をほぼ切って翼の回転だけで進ませる。
+// ペンギンは鳥である。
+// 泳ぐ姿だけを見て作ると、どうしても「ひれの生えた紡錘形」——つまり魚か
+// 小型の鯨になる。実際そうなった。鳥として通るために要るのは3つで、
+// どれも欠けると一目で嘘だと分かる。
+//
+//   1. 翼。骨が癒合した一枚の硬い櫂で、関節がない。曲げるのではなく
+//      肩から根元ごと振る。空を飛ぶ鳥とまったく同じ動作を水中でやる
+//   2. 脚。羽毛の切れた先に、鱗に覆われた裸の跗蹠(ふしょ)と3本の趾が
+//      出る。爪がある。この一節があるかないかが、鳥か海獣かを分ける
+//   3. 尾。羽軸の詰まった硬い風切羽が扇に並んだもの。関節で振れる。
+//      立つときはこれを後ろへ蹴り出して、足と三点で体を支える
+//
+// この3つのために、遊泳シェーダは体の波をほぼ切って、翼・首・尾・足首の
+// 4つの関節を別々に回している(→ fishMaterial.js)。
 //
 // 4種は頭の模様で見分ける。体型はどれも同じ紡錘形なので、
 // 大きさ・嘴の長さ・顔の描き分けがそのまま「種の違い」になる。
@@ -56,6 +63,40 @@ const WING_LOW = -0.05;      // 負 = 体軸より上。肩は背寄りにある
 // 中ほどが膨らむ既定の分布のままだと、櫂ではなく飛行機の主翼になる
 const WING_CHORD = [1.00, 1.02, 1.00, 0.96, 0.90, 0.83, 0.75, 0.66, 0.56, 0.40, 0.05];
 
+// ---- 尾の関節 ----
+// 尾は胴から一直線に後ろへ伸びている。泳ぐときはそれでいいが、
+// そのまま立たせると、体を起こしたぶん尾の先が真下へ降りて甲板に刺さり、
+// 足のほうが宙に浮く。首と同じで、曲がらないなら曲げられるようにすればいい。
+//   TAIL_PIVOT_T   尾を振る軸の位置(体長比)。尾骨の付け根
+//   TAIL_FROM/TO   曲げの配分。ここより前は動かない
+// 軸は体軸のわずかに背側に置く。尾骨は背側を通っているので、
+// 腹側に置くと曲げたとき総排出腔のあたりが不自然に膨らむ
+const TAIL_PIVOT_T = 0.87;
+const TAIL_FROM = 0.86;
+const TAIL_TO = 1.02;
+
+// ---- 脚 ----
+// 跗蹠の根元(羽毛の下)と足首。足首から先だけが関節で前へ倒れる。
+// ANKLE_T を体のいちばん後ろの下端まで持っていかないと、立たせたとき
+// 尻のほうが下まで垂れて足が地面に届かない
+const HIP_T = 0.74;
+const ANKLE_T = 0.95;
+// 3本の前趾。開き(ラジアン、外向きが正)と長さの比。
+// 中趾がいちばん長く、内趾がいちばん短い。3本を同じ長さにすると
+// 蹼の後縁が円弧になって、鳥の足ではなく団扇になる
+const TOE_DIR = [-0.34, 0.00, 0.36];
+const TOE_LEN = [0.84, 1.00, 0.93];
+
+// 立ち姿の体の傾き。接地の高さをジオメトリから逆算するのに要るので、
+// 群れではなくモデル側に置いて共有する。
+// 86度——ほぼ垂直。ペンギンの脚は体の後ろに付いていて、尾を地面に
+// つけて三点で支えるので、体はまっすぐ立つ
+export const STAND_PITCH = 1.50;
+// 足首を回す角。体軸まわりにしか回せないので、「足裏が水平になって
+// 趾が前を向く」角度は体の傾きから一意に決まる。目分量で入れると
+// 足が斜めに浮くか、裏返る
+export const STAND_FOOT = STAND_PITCH - Math.PI;
+
 /**
  * 種ごとの寸法。total は嘴の先から尾柄まで(尾びれの張り出しはこの外)。
  * height/width は胴の最大「半」深さ・半幅なので、見た目の胴回りはこの倍。
@@ -75,7 +116,9 @@ export const PENGUIN_KINDS = {
     // キングの嘴は細長く、先端だけがわずかに下へ落ちる。
     // 下嘴の側面には長い橙色の板(嘴板)がある
     beakH: 0.0125, beakW: 0.0090, beakDroop: 0.008,
-    flipper: { width: 0.335, len: 0.145, chord: 0.078, thick: 0.16 },
+    // キングの翼は現生種でいちばん長い。体長の4割近くある
+    flipper: { width: 0.400, len: 0.150, chord: 0.100, thick: 0.16 },
+    tail: { len: 0.085, height: 0.30 },   // 尾は短い
     beatFreq: 1.55,   // 大きい種ほどゆっくり打つ
     speed: 2.4,
     // 息継ぎまでの潜水時間(秒)。実物は数分潜れるが、
@@ -98,7 +141,10 @@ export const PENGUIN_KINDS = {
     key: 'gentoo', species: 1, name: 'ジェンツーペンギン',
     total: 0.80, beak: 0.055, height: 0.089, width: 0.073,
     beakH: 0.0130, beakW: 0.0100, beakDroop: 0.004,
-    flipper: { width: 0.330, len: 0.140, chord: 0.080, thick: 0.16 },
+    flipper: { width: 0.390, len: 0.145, chord: 0.102, thick: 0.16 },
+    // ジェンツーの尾は現生ペンギンでいちばん長い。歩くと氷を掃いていく。
+    // この一本の刷毛が、この種をこの種に見せている
+    tail: { len: 0.170, height: 0.38 },
     beatFreq: 2.05,
     speed: 3.1,       // 現生のペンギンでいちばん速い
     dive: 20,
@@ -118,7 +164,8 @@ export const PENGUIN_KINDS = {
     total: 0.72, beak: 0.042, height: 0.077, width: 0.063,
     // アデリーの嘴は半ば羽毛に埋もれていて、露出部が短く太い
     beakH: 0.0125, beakW: 0.0100, beakDroop: 0.002,
-    flipper: { width: 0.320, len: 0.135, chord: 0.082, thick: 0.16 },
+    flipper: { width: 0.375, len: 0.140, chord: 0.104, thick: 0.16 },
+    tail: { len: 0.115, height: 0.34 },
     beatFreq: 2.25,
     speed: 2.6,
     dive: 17,
@@ -137,7 +184,8 @@ export const PENGUIN_KINDS = {
     key: 'chinstrap', species: 3, name: 'ヒゲペンギン',
     total: 0.74, beak: 0.042, height: 0.072, width: 0.059,
     beakH: 0.0125, beakW: 0.0098, beakDroop: 0.003,
-    flipper: { width: 0.325, len: 0.138, chord: 0.080, thick: 0.16 },
+    flipper: { width: 0.380, len: 0.142, chord: 0.102, thick: 0.16 },
+    tail: { len: 0.120, height: 0.34 },
     beatFreq: 2.20,
     speed: 2.7,
     dive: 18,
@@ -166,8 +214,10 @@ function mergeInto(dst, src) {
   for (const i of src.idx) dst.idx.push(i + base);
 }
 
-// リング列から面を張る(位置は呼び出し側が決める)
-function loft(rings, seg, pointAt, uvAt, partId, closed = true) {
+// リング列から面を張る(位置は呼び出し側が決める)。
+// hVal は aHeight に入れる値。脚では「跗蹠(0)か足(1)か」の区別に使い、
+// シェーダはこれを見て足首から先だけを回す
+function loft(rings, seg, pointAt, uvAt, partId, hVal = 0) {
   const pos = [], uv = [], h = [], part = [], idx = [];
   for (let i = 0; i <= rings; i++) {
     for (let j = 0; j <= seg; j++) {
@@ -175,7 +225,7 @@ function loft(rings, seg, pointAt, uvAt, partId, closed = true) {
       pos.push(p[0], p[1], p[2]);
       const q = uvAt(i / rings, j / seg);
       uv.push(q[0], q[1]);
-      h.push(0);
+      h.push(hVal);
       part.push(partId);
     }
   }
@@ -221,42 +271,119 @@ function buildBeak(kind, zBase) {
   }, (t, s2) => [t * 0.14, Math.cos(s2 * Math.PI * 2) * 0.5 + 0.5], 5);
 }
 
-// ---- 脚と蹼(みずかき) ----
-// 水中では尾の下へ揃えて畳み、舵として使う。
-// 陸に上がるとこれを前へ倒して体を支える板になるので、
-// シェーダから足首を軸に回せるようにしてある(uFootPivot)。
+// ---- 脚: 跗蹠(ふしょ)と趾 ----
 //
-// 脚の付け根は尾の先ではなく、腹の後ろ寄り。ペンギンの脚は
-// 体のかなり後ろに付いていて、しかも大部分が体の中に隠れている。
-// これが「歩幅が取れず、体を左右に振って歩く」理由そのものなので、
-// 位置を尾の先までずらすと立ち姿の重心が合わなくなる。
+// 鳥の脚は、途中で羽毛が切れて鱗に覆われた裸の部分が出る。
+// 見えているのはいちばん先の一節——跗蹠と3本の前趾、そして爪だけで、
+// 大腿も脛も羽毛の下、体のなかに折り畳まれている。
+// この一節を省くと、どれだけ形を整えても鳥には見えない。
 //
-// 蹼が3本の趾(あしゆび)のあいだに張るので、後縁が2度えぐれた扇になる。
-function buildFeet(kind, zTail, yTail) {
+// 前は足を「尾の下から生えた蹼の板」として作っていた。それだと立たせた
+// とき足首が体のなかほどにあることになり、尻のほうが下まで垂れて
+// 足が宙に浮く。実際そうなっていた。跗蹠は体のいちばん後ろの下端
+// (ANKLE_T)まで届いていなければならない。
+//
+// 足首は球関節として作る。跗蹠の先を足首を中心とした半球で閉じ、
+// 足の踵をその球のなかから始めれば、いくら回しても継ぎ目が開かない。
+//
+//   aHeight = 0 : 跗蹠。体に固定されていて回らない
+//   aHeight = 1 : 足。足首を軸に前へ倒れる
+//
+// 向きに注意。立つと体がほぼ垂直になるので、体の腹側(-y)は「前」を、
+// 背側(+y)は「後ろ」を向く。足首を回すと表裏が入れ替わり、
+// モデル座標の +y 側が世界の下——つまり足裏になる。
+// だから趾の骨の盛り上がりは -y 側に、平らな足裏は +y 側に作る。
+function buildLeg(kind, geom) {
   const parts = { pos: [], uv: [], h: [], part: [], idx: [] };
   const L = kind.total;
+  const { zAt, ventralAt } = geom;
   // 実物の足は大きい。キングで13cmほどあり、これが体を支える面になる。
-  // 泳ぎだけを考えて小さくすると、立たせたとき支えが無くて棒が刺さって
-  // いるようにしか見えない
-  const FOOT = L * 0.125;          // 踵から趾の先まで
-  const TOE = L * 0.062;           // 外側の趾の張り出し
+  // 泳ぎだけを考えて小さくすると、立たせたとき支えが無くて
+  // 棒が刺さっているようにしか見えない
+  const FOOT = L * 0.118;          // 足首から趾の先まで
+  const TOE_R = L * 0.021;         // 趾の太さ
+  // 左右の脚は正中線の近くに寄せる。外へ開くほど、そこの腹の面が
+  // 丸みで持ち上がるぶん脚が早く羽毛から出て、鷺のような長い脚に見える
+  const legX = L * 0.023;          // 片側の中心からの距離
+  const rHip = L * 0.011, rAnkle = L * 0.024;
+  const rAt = (w) => rHip + (rAnkle - rHip) * w;
+
+  const zHip = zAt(HIP_T), zAnkle = zAt(ANKLE_T);
+  // 跗蹠は羽毛の下では腹の線に沿わせ、足首でそこから下へ抜ける。
+  // まっすぐな棒にすると腹の下に一本の桟が渡ってしまう
+  // 腹の線より内側を走らせ、足首の手前で一気に抜ける。
+  // 一様に降ろすと胴の下半分にずっと桟が渡っているように見えるので、
+  // 降下は三乗で最後に寄せる。羽毛が切れるのは足首の少し手前だけ
+  // 腹の面の高さは、正中線ではなく脚が通る x のところで測る。
+  // 断面は楕円なので、中心から離れるほど面は持ち上がる。ここを中心の
+  // 値で測ると、脚がその差のぶんだけ早く羽毛の外へ出てしまう
+  const hug = (w) => {
+    const t = HIP_T + (ANKLE_T - HIP_T) * w;
+    return ventralAt(t, legX) + rAt(w) * 1.35;
+  };
+  const yAnkle = ventralAt(ANKLE_T, 0) - rAnkle * 0.62;
+  const drop = yAnkle - hug(1);
+  const yAxis = (w) => hug(w) + drop * w * w * w;
+
   for (const side of [-1, 1]) {
-    const x0 = side * L * 0.026;
-    mergeInto(parts, loft(6, 12, (t, s) => {
-      // s: 内側の趾(0) → 外側の趾(1)。t: 踵(0) → 趾の先(1)
-      const spread = TOE * Math.pow(t, 0.62);
-      // 蹼のたわみ。趾は3本なので、あいだに2つの窪みができる
-      const web = 1 - 0.22 * Math.pow(Math.sin(s * Math.PI * 3.0), 2.0) * Math.pow(t, 1.3);
-      const lateral = (s - 0.15) * spread * web;     // 内側の趾はほぼ体軸に沿う
+    const x0 = side * legX;
+
+    // --- 跗蹠 + 足首の球 ---
+    // t の前半で棒、後半で足首を中心とした半球を閉じる
+    mergeInto(parts, loft(12, 10, (t, s) => {
+      const a = s * Math.PI * 2;
+      let cx, cy, cz, r;
+      if (t <= 0.72) {
+        const w = t / 0.72;
+        cx = x0; cy = yAxis(w); cz = zHip + (zAnkle - zHip) * w;
+        r = rAt(w);
+      } else {
+        // 足首の球。中心は動かさず、半径だけを落として閉じる
+        const b = ((t - 0.72) / 0.28) * Math.PI * 0.5;
+        cx = x0; cy = yAnkle; cz = zAnkle - rAnkle * Math.sin(b);
+        r = rAnkle * Math.cos(b);
+      }
+      return [cx + Math.sin(a) * r, cy + Math.cos(a) * r * 0.94, cz];
+    }, (t, s) => [t, s], 6, 0));
+
+    // --- 足: 3本の前趾と蹼 ---
+    // 薄い膜を1枚張ると紙細工に見えるので、閉じた薄い立体にして、
+    // 趾の骨が通るところだけ背側に厚みを盛る。蹼はそのあいだで薄い
+    // 足裏は足首の球より下に出す。球のほうが下に残ると、踵の玉で
+    // 立っていることになって足裏が地面から浮く
+    const yFoot = yAnkle + rAnkle * 0.78;
+    mergeInto(parts, loft(10, 26, (t, q) => {
+      // q は断面を一周する。前半が足裏(+y)、後半が趾の背(-y)
+      const across = q <= 0.5 ? q * 2 : (1 - q) * 2;   // 0=内側の縁 1=外側の縁
+      const sole = q <= 0.5;
+      // 趾は f = 0,1,2 の3本。縁は趾の外側へ少しはみ出させる。
+      // 趾の中心を縁に置くと、上面と下面の輪が閉じず穴が開く
+      const f = -0.42 + across * 2.84;
+      const k = Math.min(Math.max(Math.floor(f), 0), 1);
+      const ang = TOE_DIR[k] + (TOE_DIR[k + 1] - TOE_DIR[k]) * (f - k);
+      const tl = TOE_LEN[k] + (TOE_LEN[k + 1] - TOE_LEN[k]) * (f - k);
+      // 趾のあいだは蹼。後縁が2度えぐれた扇になる
+      const ext = FOOT * tl * (1 - 0.19 * Math.abs(Math.sin(f * Math.PI)));
+      const e = ext * (0.08 + 0.92 * t);
+      // 趾の骨。3本のところだけ背が盛り上がる
+      const ridge = Math.pow(Math.abs(Math.cos(f * Math.PI)), 2.5);
+      const taper = Math.pow(1 - t * 0.62, 0.75);
+      // 爪。趾の先で厚みを尖らせ、鉤状に下へ(モデルの +y へ)曲げる
+      const ct = Math.max(0, (t - 0.86) / 0.14);
+      const claw = ridge * ct * ct;
+      // 縁で上面と下面をぴたりと閉じる
+      const shut = Math.min(Math.sin(across * Math.PI) * 6, 1);
+      const th = shut * (sole
+        ? TOE_R * 0.17 * taper                                  // 足裏は平ら
+        : -TOE_R * (0.18 + 0.82 * ridge) * taper * (1 - claw * 0.75));
       return [
-        x0 + side * lateral,
-        // 外へ行くほどわずかに下がる。真っ平らに寝かせると陰影が付かず消える
-        yTail - L * 0.010 * t - Math.abs(lateral) * 0.28,
-        zTail - t * FOOT,
+        x0 + side * Math.sin(ang) * e,
+        yFoot + th + claw * TOE_R * 0.45,
+        zAnkle - Math.cos(ang) * e,
       ];
-    }, (t, s) => [t, s], 6));
+    }, (t, q) => [t, q <= 0.5 ? q * 2 : (1 - q) * 2], 6, 1));
   }
-  return parts;
+  return { parts, zAnkle, yAnkle };
 }
 
 /**
@@ -276,8 +403,10 @@ export function buildPenguinGeometry(kind) {
     smooth: true,
     rings: 40, radial: 26,
     nose: { rings: 6, len: noseFrac, flat: 2.4 },
-    // 尾は短く硬い楔。羽軸の詰まった板で、水平に少しだけ広がる
-    tail: { len: 0.090, height: 0.20, fork: 0.0, horizontal: true },
+    // 尾。硬い風切羽が十数枚、水平の扇に並んだもの。
+    // 長さは種でまるで違い、ジェンツーのそれは氷を掃くほど長い。
+    // 魚の尾びれのように上下へ広げると即座に魚になるので、必ず水平に
+    tail: { len: kind.tail.len, height: kind.tail.height, fork: 0.0, horizontal: true },
     dorsal: null,
     // 翼。骨が癒合した一枚の硬い櫂なので、クジラの胸びれと同じ立体の
     // 作り方をしつつ、瘤をなくし、平面形を付け根最大の一様テーパーにする
@@ -311,12 +440,19 @@ export function buildPenguinGeometry(kind) {
   // 嘴の付け根に細い円錐の首が見えてしまう
   const zNose = bodyLen / 2;
   mergeInto(dst, buildBeak(kind, zNose + noseFrac * bodyLen * 0.80));
-  // 脚は腹の後ろ寄り(体長の8割の位置)の下面から後ろへ。
-  // ここが足首になり、陸ではここを軸に足を前へ倒す
-  const FOOT_T = 0.80;
-  const ankleZ = zNose - FOOT_T * bodyLen;
-  const ankleY = (s(Y_PROFILE, FOOT_T) - s(H_PROFILE, FOOT_T) * 0.92) * H;
-  mergeInto(dst, buildFeet(kind, ankleZ, ankleY));
+
+  // 体の station(t)を実寸へ直す関数。尾びれのぶん胴が少し詰まるので、
+  // buildFishGeometry と同じ式を使わないと脚が数センチずれる
+  const bodySpan = bodyLen - kind.tail.len * bodyLen * 0.15;
+  const zAt = (t) => zNose - t * bodySpan;
+  // 体の腹側の面。x を渡すと、その断面位置での高さを返す(断面は楕円)
+  const ventralAt = (t, x = 0) => {
+    const hw = Math.max(s(W_PROFILE, t) * W, 1e-4);
+    const k = Math.sqrt(Math.max(1 - Math.pow(Math.min(Math.abs(x) / hw, 1), 2), 0));
+    return (s(Y_PROFILE, t) - s(H_PROFILE, t) * k) * H;
+  };
+  const leg = buildLeg(kind, { zAt, ventralAt });
+  mergeInto(dst, leg.parts);
 
   const geo = new THREE.BufferGeometry();
   geo.setIndex(dst.idx);
@@ -344,12 +480,98 @@ export function buildPenguinGeometry(kind) {
     (s(Y_PROFILE, NECK_T) + s(H_PROFILE, NECK_T) * 0.45) * H,
     zNose - NECK_T * bodyLen
   );
-  // 立たせたときに甲板へ触れるのは尾の先。目分量の式で出すと必ず
-  // 埋まるか浮くので、境界箱から実測する
-  geo.computeBoundingBox();
-  geo.userData.tailDrop = -geo.boundingBox.min.z;
+  // 尾の付け根(y, z)と曲げの配分。シェーダはここを軸に尾を後ろへ蹴り出す
+  geo.userData.tailPivot = new THREE.Vector4(
+    (s(Y_PROFILE, TAIL_PIVOT_T) + s(H_PROFILE, TAIL_PIVOT_T) * 0.30) * H,
+    zAt(TAIL_PIVOT_T), TAIL_FROM, TAIL_TO
+  );
   // 足首(y, z)。陸ではここを軸に足を前へ倒して、体を支える板にする
-  geo.userData.footPivot = new THREE.Vector2(ankleY, ankleZ);
+  geo.userData.footPivot = new THREE.Vector2(leg.yAnkle, leg.zAnkle);
+  Object.assign(geo.userData, solveStand(dst, geo.userData, kind));
   geo.userData.length = kind.total;
   return geo;
+}
+
+/**
+ * 立ち姿の接地を、ジオメトリから解く。
+ *
+ * 「体をこれだけ起こして、尾をこれだけ曲げて、足をこう倒せば立つはず」
+ * と式で書くと必ず外れる。二度やって二度とも外れた——一度目は尾が甲板に
+ * 刺さり、二度目は足が宿に浮いた。だから頂点をシェーダとまったく同じだけ
+ * CPU で動かして、実際にいちばん下に来るものを測る。
+ *
+ * 返すもの:
+ *   standBend  尾の曲げ角。足裏より下に残るものが無くなるまで曲げる
+ *   standDrop  体の原点から足裏までの深さ。甲板からの浮かせ量そのもの
+ *   standHalfW 接地点の左右の広がり。よちよち歩きで傾けたときの補正に使う
+ *   standFwd   接地点が体の真下からどれだけ前にあるか
+ *   standClear 足裏より上に残った余裕(負なら何かが甲板を突き抜けている)
+ */
+function solveStand(dst, ud, kind) {
+  const cp = Math.cos(STAND_PITCH), sp = Math.sin(STAND_PITCH);
+  const fc = Math.cos(STAND_FOOT), fs = Math.sin(STAND_FOOT);
+  const tp = ud.tailPivot, fp = ud.footPivot;
+  // モデル座標の点が、立ち姿で甲板からどれだけ下に来るか
+  const depth = (y, z) => -(y * cp + z * sp);
+
+  // --- 足裏 ---
+  const sole = [];
+  // --- 尾を曲げれば持ち上がるもの(胴と尾) ---
+  // 翼は畳んでも肩から体長の3割ほどしか下りず、甲板には遠く届かない。
+  // 掃引の再現が要るだけの見返りが無いので外してある
+  const bendable = [];
+  // --- 何をしても動かないもの(嘴と跗蹠) ---
+  // これを曲げの探索に混ぜてはいけない。跗蹠の先の踵は足裏のすぐ上に
+  // あるので、混ぜると「いくら尾を曲げても余裕が出ない」ことになって
+  // 探索が上限まで走り、尾が背中へ跳ね上がる(実際そうなった)
+  const fixed = [];
+  for (let i = 0; i < dst.part.length; i++) {
+    const part = dst.part[i];
+    if (part > 2.5 && part < 4.5) continue;
+    const x = dst.pos[i * 3], y = dst.pos[i * 3 + 1], z = dst.pos[i * 3 + 2];
+    if (part > 5.5 && dst.h[i] > 0.5) {
+      // 足首を軸に前へ倒す
+      const dy = y - fp.x, dz = z - fp.y;
+      sole.push([Math.abs(x), fp.x + dy * fc - dz * fs, fp.y + dy * fs + dz * fc]);
+    } else if (part < 0.5 || Math.abs(part - 1) < 0.5) {
+      const u = dst.uv[i * 2];
+      const e = Math.min(Math.max((u - tp.z) / (tp.w - tp.z), 0), 1);
+      bendable.push([y, z, e * e * (3 - 2 * e)]);
+    } else {
+      fixed.push([y, z]);
+    }
+  }
+
+  let standDrop = -Infinity, standHalfW = 0, standFwd = 0, nContact = 0;
+  for (const p of sole) standDrop = Math.max(standDrop, depth(p[1], p[2]));
+  for (const p of sole) {
+    if (depth(p[1], p[2]) <= standDrop - kind.total * 0.02) continue;
+    standHalfW = Math.max(standHalfW, p[0]);
+    // 接地点は体の真下ではなく、少し前にある。甲板の高さを体の位置で
+    // 引くと、雪の斜面の上で足が数センチ浮いたり埋まったりする
+    standFwd += -p[1] * sp + p[2] * cp;
+    nContact++;
+  }
+  if (nContact) standFwd /= nContact;
+
+  // 尾を少しずつ曲げて、足裏より下に残るものが無くなる角度を探す。
+  // 曲げ足りないと尾が甲板に刺さり、曲げすぎると尾が背中へ跳ね上がる。
+  // 尾の長さは種で倍以上違うので、ここを定数にはできない
+  const want = kind.total * 0.006;
+  let standBend = 0.85, standClear = -1;      // 最低でもこれだけは曲げる
+  for (let a = 0.85; a <= 1.75; a += 0.01) {
+    let deepest = -Infinity;
+    for (const [y, z, w] of bendable) {
+      const ta = a * w;
+      const c = Math.cos(ta), sn = Math.sin(ta);
+      const dy = y - tp.x, dz = z - tp.y;
+      deepest = Math.max(deepest, depth(tp.x + dy * c - dz * sn, tp.y + dy * sn + dz * c));
+    }
+    standBend = a;
+    standClear = standDrop - deepest;
+    if (standClear >= want) break;
+  }
+  // 動かないものも含めた本当の余裕。負なら甲板を突き抜けている
+  for (const [y, z] of fixed) standClear = Math.min(standClear, standDrop - depth(y, z));
+  return { standBend, standDrop, standHalfW, standFwd, standClear };
 }

@@ -21,14 +21,19 @@ uniform float uWing;       // 1=ペンギンの羽ばたき(翼を肩から振�
 uniform vec4 uWingRoot;    // 翼の付け根(|x|, y, z) と w=翼の張り出し
 uniform vec2 uNeckPivot;   // 首の付け根(y, z)。頭はここを軸に前へ倒れる
 uniform vec2 uFootPivot;   // 足首(y, z)。陸では足をここから前へ倒す
+uniform vec4 uTailPivot;   // 尾の付け根(y, z) と 曲げの配分(始まり, 終わり)
 attribute vec2 aBodyUV;
 attribute float aPart;
 attribute float aHeight;   // 体の中心からの実際の高さ(H比)
+                           // ただし翼では弦の位置、脚では跗蹠(0)か足(1)か
 #ifdef USE_INSTANCING
 attribute vec4 aInfo;      // x:位相 y:速度倍率 z:サイズ w:色ゆらぎ
 // ペンギンの姿勢。泳ぎ以外の格好はここで作る
 //   x: 翼の上下オフセット / y: 翼の後退(体側へ畳む) / z: 首の前傾 / w: 足の前倒し
 attribute vec4 aPose;
+// 関節がひとつ増えて vec4 に収まらなくなったぶん
+//   x: 尾の曲げ(立つとき後ろへ蹴り出す)
+attribute vec4 aPose2;
 #endif
 varying vec2 vBodyUV;
 varying vec3 vWorldPos;
@@ -68,6 +73,7 @@ void main() {
   float wingSweep = 0.0;   // 翼の後退。体側へ畳むと立ち姿・弾道姿勢になる
   float neckBend = 0.0;    // 首の前傾
   float footSwing = 0.0;   // 足の前倒し。陸では足裏を前へ向けて体を支える
+  float tailBend = 0.0;    // 尾の蹴り出し。立つとき後ろへ曲げて足を接地させる
   float bodyPhase = phase;
   float bodySpd = spd;
   if (uWing > 0.5) {
@@ -78,6 +84,7 @@ void main() {
     wingSweep = aPose.y;
     neckBend = aPose.z;
     footSwing = aPose.w;
+    tailBend = aPose2.x;
 #endif
     bodyPhase = tint * 6.2831853;
     bodySpd = 1.0;
@@ -183,12 +190,32 @@ void main() {
     n = vec3(n.x, n.y * nc - n.z * ns, n.y * ns + n.z * nc);
   }
 
+  // ---- 尾を後ろへ蹴り出す ----
+  // 泳ぐペンギンの尾は胴からまっすぐ後ろへ伸びている。そのまま体を
+  // 起こして立たせると、尾の先が真下へ降りて甲板に刺さり、そのぶん体が
+  // 持ち上がって足が宙に浮く。実際そうなっていた。
+  // 尾骨の付け根を軸に後ろへ曲げれば、尾は体のうしろへ回り、
+  // 接地するのは足裏になる。曲げた尾はそのまま三点目の支えになる。
+  if (uWing > 0.5 && abs(tailBend) > 0.002 && (aPart < 0.5 || abs(aPart - 1.0) < 0.5)) {
+    // 尻のほうから徐々に配分する。一点で折ると総排出腔のあたりに
+    // 折り目が立って、尾を差し込んだように見える
+    float twg = smoothstep(uTailPivot.z, uTailPivot.w, aBodyUV.x);
+    float ta = tailBend * twg;
+    vec3 tv = vec3(0.0, uTailPivot.x, uTailPivot.y);
+    vec3 dt = p - tv;
+    float tcc = cos(ta), tss = sin(ta);
+    p = tv + vec3(dt.x, dt.y * tcc - dt.z * tss, dt.y * tss + dt.z * tcc);
+    n = vec3(n.x, n.y * tcc - n.z * tss, n.y * tss + n.z * tcc);
+  }
+
   // ---- 足を前へ倒す ----
-  // 泳ぐときは尾の下へ後ろ向きに畳んで舵にしているが、陸ではこれを
+  // 泳ぐときは跗蹠ごと尾のうしろへ伸ばして舵にしているが、陸ではこれを
   // 足首で前へ倒し、足裏を地面に向けて体を支える板にする。
   // 倒さないまま立たせると、体の真下に細い棒が刺さっているだけになり、
-  // どう見ても自立していない
-  if (uWing > 0.5 && aPart > 5.5 && abs(footSwing) > 0.002) {
+  // どう見ても自立していない。
+  // 回るのは足首から先(aHeight=1)だけ。跗蹠は体に固定されている——
+  // ここを一緒に回すと、脚ごと前へ跳ね上がって膝が逆に折れる
+  if (uWing > 0.5 && aPart > 5.5 && aHeight > 0.5 && abs(footSwing) > 0.002) {
     vec3 fp = vec3(0.0, uFootPivot.x, uFootPivot.y);
     vec3 df = p - fp;
     float fc = cos(footSwing), fs = sin(footSwing);
@@ -616,15 +643,29 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, float
       col = bill;
       glossMul = 2.4;   // 角質はよく光る
     }
-    // ---- 脚と蹼 ----
+    // ---- 脚: 跗蹠(ふしょ)と趾 ----
+    // 鳥の脚は鱗に覆われている。ここをのっぺり塗ると樹脂の棒になり、
+    // せっかく脚を生やしても鳥に見えない。鱗の目と爪でそれらしくする。
+    //   hgt = 0 : 跗蹠(裸出した脛の先)  hgt = 1 : 足(3本の趾と蹼)
     else if (abs(part - 6.0) < 0.1) {
       vec3 foot = vec3(0.075, 0.070, 0.075);                     // キング: 黒
       if (uSpecies > 0.5 && uSpecies < 1.5) foot = vec3(0.95, 0.22, 0.03);  // ジェンツー: 橙
       else if (uSpecies > 1.5) foot = vec3(0.70, 0.47, 0.44);    // アデリー・ヒゲ: 肉色
-      // 趾(あしゆび)の筋。蹼は趾のあいだに張った膜なので、
-      // 3本の骨のところだけ濃く、そのあいだは薄く光を透かす
-      float toe = pow(abs(sin(buv.y * 3.14159 * 3.0)), 4.0);
-      col = foot * (0.75 + 0.45 * (1.0 - toe) * buv.x);
+      if (hgt < 0.5) {
+        // 跗蹠。細かい鱗が輪になって並ぶ。根元は羽毛の下なので暗い
+        float ring = pow(abs(sin(buv.x * 3.14159 * 24.0)), 0.7);
+        float band = pow(abs(sin(buv.y * 3.14159 * 6.0)), 0.7);
+        col = foot * (0.74 + 0.18 * ring * band) * (0.50 + 0.60 * buv.x);
+      } else {
+        // 足。蹼は趾のあいだに張った膜なので、3本の骨のところだけ濃く、
+        // そのあいだは薄く光を透かす
+        float f = -0.42 + buv.y * 2.84;
+        float toe = pow(abs(cos(f * 3.14159)), 3.0);
+        col = foot * (0.62 + 0.46 * toe) * (0.78 + 0.34 * buv.x);
+        // 爪。趾の先だけ黒い角質になる。鳥の足はここで終わる
+        col = mix(col, vec3(0.10, 0.085, 0.075),
+                  smoothstep(0.87, 0.95, buv.x) * smoothstep(0.40, 0.82, toe));
+      }
       glossMul = 1.2;
     }
     // ---- 翼 ----
@@ -648,13 +689,25 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, float
     // 羽軸のあいだに影を入れると、同じ明るさでも羽の束に見える
     else if (abs(part - 1.0) < 0.1) {
       float quill = pow(abs(sin(v * 3.14159 * 13.0)), 3.0);
-      col = mix(back * 0.55, back, quill);
+      col = mix(back * 0.34, back * 0.86, quill);
+      // 後端へ行くほど一枚ずつに分かれる。付け根では束になっていて
+      // 隙間が見えないが、先では羽と羽のあいだが透ける
+      col *= 1.0 - 0.45 * smoothstep(1.0, 1.16, buv.x) * (1.0 - quill);
       col *= 1.0 - 0.25 * smoothstep(1.0, 1.20, buv.x);   // 先ほどすり切れて暗い
-      glossMul = 0.5;
+      glossMul = 0.25;
     }
-    // 目。頭の模様に埋もれないよう最後に置く。虹彩は暗褐色で、
-    // まわりに細い裸出部の輪がある
     if (part < 0.5) {
+      // ---- 羽毛 ----
+      // ペンギンの羽は小さく硬く、瓦のように重なって体を覆っている。
+      // 面をなめらかに塗ったままだと、どれだけ形を合わせてもゴムの人形に
+      // 見える。粗さの目を入れるだけで、同じ形が鳥の皮膚に寄る
+      col *= 0.93 + 0.14 * fbm(vec2(u * 130.0, v * 52.0));
+      // 羽の列。黒い背でだけ見え、白い腹では消える
+      float rows = sin(v * 190.0 + sin(u * 44.0) * 1.6 + u * 26.0);
+      col *= 1.0 - 0.07 * smoothstep(0.1, 0.9, rows)
+                 * smoothstep(line - 0.02, line + 0.16, v);
+      // 目。頭の模様に埋もれないよう最後に置く。虹彩は暗褐色で、
+      // まわりに細い裸出部の輪がある
       col = mix(col, vec3(0.055, 0.040, 0.032), eyeDot(u, v, 0.128, 0.80, 0.024));
       col = mix(col, vec3(0.015, 0.015, 0.018), eyeDot(u, v, 0.128, 0.80, 0.016));
     }
@@ -748,7 +801,7 @@ void main() {
 }
 `;
 
-export function createFishMaterial({ pattern, len, swim, vertAxis = 0, wing = null, species = 0, neck = null, foot = null }) {
+export function createFishMaterial({ pattern, len, swim, vertAxis = 0, wing = null, species = 0, neck = null, foot = null, tail = null }) {
   return new THREE.ShaderMaterial({
     uniforms: {
       ...baseUniforms(),
@@ -765,6 +818,7 @@ export function createFishMaterial({ pattern, len, swim, vertAxis = 0, wing = nu
       uWingRoot: { value: wing ? wing.clone() : new THREE.Vector4() },
       uNeckPivot: { value: neck ? neck.clone() : new THREE.Vector2() },
       uFootPivot: { value: foot ? foot.clone() : new THREE.Vector2() },
+      uTailPivot: { value: tail ? tail.clone() : new THREE.Vector4() },
       uSpecies: { value: species },
     },
     vertexShader: FISH_VERTEX,
