@@ -254,6 +254,28 @@ export class PenguinFlock {
     geo.setAttribute('aPose2', this.pose2Attr);
     parent.add(this.mesh);
 
+    // ---- 群れの重心 ----
+    // ペンギンは群れで海に出る。餌場へは隊列で泳ぎ、潜水も浮上も
+    // そろえる。個体ごとに勝手な深さで勝手に息継ぎへ行かせると、
+    // 同じ種が水槽じゅうに散らばって、どこを見ればいいのか分からない
+    // 絵になる——実際そうなっていた。
+    //
+    // 重心をひとつ置いて、そこを泳がせる。個体はそれに寄り、向きを
+    // そろえる。息継ぎも上陸も重心が決めて、全員で行く。
+    this.pod = {
+      pos: center.clone(),
+      heading: Math.random() * Math.PI * 2,
+      // 遊泳層のなかでの上下。0=層の底 1=層の天井
+      level: 0.5,
+      breath: kind.dive * (0.25 + Math.random() * 0.5),
+      target: null,
+      plan: 'porpoise',
+      seed: Math.random() * 40,
+    };
+    // 群れの広がり。結束の強い種ほど密にかたまる。
+    // アデリーはひとかたまり、キングはばらけて泳ぐ
+    this.spread = Math.min(1.4 + 2.4 / Math.max(kind.cohesion, 0.5), 5.5);
+
     this.members = [];
     for (let i = 0; i < count; i++) {
       const a = (i / count) * Math.PI * 2 + Math.random();
@@ -444,11 +466,14 @@ export class PenguinFlock {
    * @returns 気にした個体がいれば true
    */
   curiousAlongRay(ray, slack = 1.0) {
+    // 泳いでいても、漂っていても、息継ぎへ向かう途中でも寄ってくる。
+    // 群れは一斉に動くようになったので、「泳いでいる個体だけ」に絞ると、
+    // 群れが息継ぎに向かっているあいだタップがまるごと効かなくなる。
+    // 実際のペンギンも、潜水者を見つけると用事を中断して見に来る
+    const open = (m) => m.state === 'swim' || m.state === 'hover' || m.state === 'approach';
     let best = null, bestT = 1e9;
     for (const m of this.members) {
-      // 泳いでいる個体でも、立ち止まって漂っている個体でも寄ってくる。
-      // むしろ漂っているときのほうが気づきやすい
-      if (m.state !== 'swim' && m.state !== 'hover') continue;
+      if (!open(m)) continue;
       // 体を回転楕円体とみなして視線との交差を解く。
       // 「視線にいちばん近い個体」を選ぶと、はるか後ろの1羽が
       // 手前の1羽を差し置いて選ばれることがある
@@ -467,7 +492,7 @@ export class PenguinFlock {
     const py = ray.origin.y + ray.direction.y * 1.4;
     const pz = ray.origin.z + ray.direction.z * 1.4;
     for (const m of this.members) {
-      if (m.state !== 'swim' && m.state !== 'hover') continue;
+      if (!open(m)) continue;
       if (m !== best && m.pos.distanceTo(best.pos) > 6) continue;
       // 漂っていた個体は泳ぎに戻ってから寄ってくる
       m.state = 'swim';
@@ -481,45 +506,150 @@ export class PenguinFlock {
     return true;
   }
 
-  /** いま息継ぎに行くならどこへ、を決める。
-   *  ・たいていは開水面へ出て、水面すれすれをポーポイジングする
-   *  ・ときどき氷へ跳び乗る(上陸点が近くにあるときだけ) */
-  planSurfacing(m) {
+  /**
+   * 息継ぎに行く。群れ全体でひとつの行き先を選び、全員で向かう。
+   *
+   *   ・たいていは開水面へ出て、水面すれすれをポーポイジングする。
+   *     隊列で水面を切っていく「点線のような列」が、海のペンギンの姿
+   *   ・ときどき氷へ跳び乗る(上陸点が近くにあるときだけ)
+   *
+   * 行き先を個体ごとに選ばせると、同じ群れが四方へ散る。
+   * 実際のペンギンは潜るのも浮くのもそろっていて、群れ全体が
+   * 一斉に消えて一斉に出てくる。
+   */
+  planSurfacing() {
+    const p = this.pod;
     const wantIce = Math.random() < this.kind.haulOutChance && this.haulOuts.length;
+    let best = null, bestD = 1e9;
     if (wantIce) {
-      // いちばん近い上陸点。ただし遠すぎるものは選ばない
-      let best = null, bestD = 1e9;
       for (const h of this.haulOuts) {
-        const d = Math.hypot(h.fromX - m.pos.x, h.fromZ - m.pos.z);
+        const d = Math.hypot(h.fromX - p.pos.x, h.fromZ - p.pos.z);
         if (d < bestD) { bestD = d; best = h; }
       }
-      if (best && bestD < 34) {
-        m.plan = 'haulOut';
-        m.target = best;
-        m.aimX = best.fromX; m.aimZ = best.fromZ;
-        m.state = 'approach';
-        return;
+    }
+    if (best && bestD < 34) {
+      p.plan = 'haulOut';
+      p.target = best;
+    } else {
+      // 開水面へ。氷の下で浮上しても息はできない
+      best = null; bestD = 1e9;
+      for (const s of this.openSpots) {
+        const d = Math.hypot(s.x - p.pos.x, s.z - p.pos.z);
+        if (d < bestD) { bestD = d; best = s; }
       }
+      p.plan = 'porpoise';
+      p.target = best ? { x: best.x, z: best.z, fromX: best.x, fromZ: best.z } : null;
     }
-    // 開水面へ。氷の下で浮上しても息はできない
-    let best = null, bestD = 1e9;
-    for (const s of this.openSpots) {
-      const d = Math.hypot(s.x - m.pos.x, s.z - m.pos.z);
-      if (d < bestD) { bestD = d; best = s; }
+    if (!p.target) { p.breath = this.kind.dive * 0.4; return; }
+
+    const arcs = this.kind.arcs[0]
+      + Math.floor(Math.random() * (this.kind.arcs[1] - this.kind.arcs[0] + 1));
+    for (const m of this.members) {
+      if (m.state !== 'swim' && m.state !== 'hover') continue;
+      m.plan = p.plan;
+      m.arcs = arcs;
+      if (p.plan === 'haulOut') {
+        // 同じ板を目指すが、着地点は少しずつずらす。同じ一点に跳ぶと
+        // 全員が重なって立つことになる
+        const a = Math.random() * Math.PI * 2, r = Math.random() * 1.3;
+        m.target = { ...p.target, x: p.target.x + Math.cos(a) * r, z: p.target.z + Math.sin(a) * r };
+      } else {
+        m.target = p.target;
+      }
+      m.aimX = m.target.fromX; m.aimZ = m.target.fromZ;
+      m.state = 'approach';
     }
-    m.plan = 'porpoise';
-    m.target = best;
-    m.aimX = best ? best.x : m.pos.x;
-    m.aimZ = best ? best.z : m.pos.z;
-    m.arcs = this.kind.arcs[0]
-           + Math.floor(Math.random() * (this.kind.arcs[1] - this.kind.arcs[0] + 1));
-    m.state = 'approach';
+  }
+
+  /**
+   * 群れの重心を進める。
+   *
+   * ふだんは餌場をゆるく蛇行し、息継ぎのときは行き先へ向かう。
+   * 個体はこれに寄って泳ぐので、重心の動きがそのまま群れの動きになる。
+   */
+  updatePod(dt, t) {
+    const p = this.pod, k = this.kind;
+    const surf = WORLD.surfaceY;
+    // まだ水中にいる仲間がいるあいだは、重心も付いていく
+    let inWater = 0;
+    for (const m of this.members) if (m.state === 'swim' || m.state === 'hover') inWater++;
+
+    if (p.target) {
+      // 息継ぎの往復が済んだら次の潜水へ。氷の上で休んでいる仲間は
+      // 別の時計で動いているので、ここでは待たない
+      let running = 0;
+      for (const m of this.members) if (m.state === 'approach' || m.state === 'air') running++;
+      if (running === 0) {
+        p.target = null;
+        p.breath = k.dive * (0.85 + Math.random() * 0.4);
+      }
+    } else {
+      p.breath -= dt;
+      if (p.breath <= 0 && inWater > 0) this.planSurfacing();
+    }
+
+    // 針路。息継ぎ地点があればそこへ、無ければ持ち場のなかを蛇行する
+    let want;
+    if (p.target) {
+      want = Math.atan2(p.target.fromX - p.pos.x, p.target.fromZ - p.pos.z);
+    } else {
+      const dx = p.pos.x - this.center.x, dz = p.pos.z - this.center.z;
+      const away = Math.hypot(dx, dz);
+      want = p.heading + wander1(t * 0.13 + p.seed, p.seed) * 1.2;
+      // 持ち場から出そうになったら戻る。群れごとに海域を分けておかないと、
+      // 4種が同じところで団子になる
+      if (away > this.radius) want = Math.atan2(-dx, -dz);
+    }
+    let diff = want - p.heading;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    p.heading += THREE.MathUtils.clamp(diff * 1.4, -k.turnRate * 0.5, k.turnRate * 0.5) * dt;
+
+    const podSpeed = k.speed * (p.target ? 0.85 : 0.45);
+    p.pos.x += Math.sin(p.heading) * podSpeed * dt;
+    p.pos.z += Math.cos(p.heading) * podSpeed * dt;
+    // 重心が実際の群れから離れないよう、ゆるく引き戻す。
+    // これが無いと、上陸などで足並みが乱れたとき重心だけが先へ行って、
+    // 誰もいない場所を目指して全員が追いかけることになる
+    if (inWater > 0) {
+      let cx = 0, cz = 0;
+      for (const m of this.members) {
+        if (m.state !== 'swim' && m.state !== 'hover') continue;
+        cx += m.pos.x; cz += m.pos.z;
+      }
+      const f = 1 - Math.exp(-0.5 * dt);
+      p.pos.x += (cx / inWater - p.pos.x) * f;
+      p.pos.z += (cz / inWater - p.pos.z) * f;
+    }
+
+    // 深さ。遊泳層のなかをゆっくり上下する。息継ぎへ向かうときは浅く
+    const wantLevel = p.target ? 0.95 : 0.5 + 0.45 * wander1(t * 0.07 + p.seed * 2, p.seed);
+    p.level += (wantLevel - p.level) * (1 - Math.exp(-0.6 * dt));
+    const floor = sandHeight(p.pos.x, p.pos.z) + 1.0;
+    const lo = floor + (surf - floor) * k.depth[0];
+    const hi = floor + (surf - floor) * k.depth[1];
+    p.pos.y = lo + (hi - lo) * p.level;
+  }
+
+  /**
+   * 誰かが先に入水したら、残りも続く。
+   *
+   * ペンギンが氷の縁で溜まってなかなか飛び込まないのは、いちばん最初に
+   * 入るのがいちばん危ないから。逆に一羽が入ると堰を切ったように続く。
+   */
+  rally() {
+    let i = 0;
+    for (const m of this.members) {
+      if (m.state !== 'onIce' || m.iceStage !== 'stand') continue;
+      m.rest = Math.min(m.rest, 0.6 + (i++) * 0.9 + Math.random() * 0.8);
+    }
   }
 
   update(dt) {
     this.time += dt;
     const t = this.time;
     const k = this.kind;
+    this.updatePod(dt, t);
     const others = this.neighbors || this.members;
     const cruise = k.speed;
     const surf = WORLD.surfaceY;
@@ -534,11 +664,14 @@ export class PenguinFlock {
       }
 
       // ---- 息継ぎ ----
-      // 潜水時間を使い切ったら、開水面か氷の縁へ向かう。
-      // 氷の下でいくら浮上しても息はできない——このゾーンでは
-      // 「どこで浮上するか」が生死を分ける
+      // どこへ行くかは群れが決める(→ updatePod)。ここに残っているのは
+      // 取り残された個体のための保険で、群れとはぐれたまま延々と
+      // 潜り続けないようにするためのもの
       m.breath -= dt;
-      if (m.state === 'swim' && m.breath <= 0) this.planSurfacing(m);
+      if (m.state === 'swim' && m.breath <= 0 && !this.pod.target) {
+        this.pod.breath = 0;
+        m.breath = k.dive;
+      }
       // 息継ぎに向かったまま水面へ出られないことがある(狙った割れ目が
       // ふさがっている、途中で氷に阻まれる)。諦めて泳ぎに戻す道を
       // 用意しておかないと、その個体は永遠に助走し続ける
@@ -638,20 +771,30 @@ export class PenguinFlock {
         while (diff < -Math.PI) diff += Math.PI * 2;
         turn = diff * 2.6;
       } else {
-        // 群れの中心へゆるく寄りつつ、氷の下を蛇行する
-        turn = wander1(t * 0.22 + m.seed * 3, m.seed) * (0.5 + k.turnRate * 0.4);
-        // 群れの結束。アデリーはひとかたまりで動き、キングはばらける。
-        // 中心へ向かう力の強さがそのまま「群れの見え方」になる
-        const dx = m.pos.x - this.center.x, dz = m.pos.z - this.center.z;
+        // ---- 群れについていく ----
+        // 重心へ寄る力と、隊列をそろえる力の2つ。
+        // 「持ち場から出たら中心へ戻す」だけだと、囲いのなかを
+        // 銘々に泳ぐ雲になって群れには見えない。寄る先が動いていて、
+        // かつ向きがそろっていて、はじめて群れになる
+        // 銘々の蛇行。旋回の鋭い種でこれを大きくすると、群れにいるのに
+        // ひとりでうろうろしているように見えるので頭を押さえる
+        turn = wander1(t * 0.22 + m.seed * 3, m.seed)
+             * Math.min(0.3 + k.turnRate * 0.22, 0.8);
+        const dx = this.pod.pos.x - m.pos.x, dz = this.pod.pos.z - m.pos.z;
         const r = Math.hypot(dx, dz);
-        const hold = this.radius * (0.35 + 0.55 / Math.max(k.cohesion, 0.3));
-        if (r > hold) {
-          const toIn = Math.atan2(-dx, -dz);
-          let diff = toIn - m.heading;
+        // 群れの内側にいるあいだは自由。外へ出るほど強く引き戻される
+        const pull = THREE.MathUtils.clamp((r - this.spread * 0.45) / this.spread, 0, 1.5);
+        if (pull > 0) {
+          let diff = Math.atan2(dx, dz) - m.heading;
           while (diff > Math.PI) diff -= Math.PI * 2;
           while (diff < -Math.PI) diff += Math.PI * 2;
-          turn += diff * (0.7 + k.cohesion * 0.6);
+          turn += diff * pull * (0.9 + k.cohesion * 0.8);
         }
+        // 隊列。まわりと同じ向きへそろえる
+        let ad = this.pod.heading - m.heading;
+        while (ad > Math.PI) ad -= Math.PI * 2;
+        while (ad < -Math.PI) ad += Math.PI * 2;
+        turn += ad * (0.5 + k.cohesion * 0.5);
       }
       // 仲間との近接回避
       for (const o of others) {
@@ -681,8 +824,11 @@ export class PenguinFlock {
       // 暮らしているように見せる
       const bandLo = floor + (surf - floor) * k.depth[0];
       const bandHi = floor + (surf - floor) * k.depth[1];
-      let targetY = bandLo + (bandHi - bandLo)
-                  * (0.5 + 0.5 * wander1(t * 0.10 + m.seed, m.seed));
+      // 深さも群れでそろえる。銘々の深さで泳がせると、上から下まで
+      // まんべんなく散らばって層が見えなくなる
+      let targetY = THREE.MathUtils.clamp(
+        this.pod.pos.y + this.spread * 0.45 * wander1(t * 0.10 + m.seed, m.seed),
+        bandLo, bandHi);
       if (m.curiousT > 0) targetY = m.curY;
       // 立ち止まっているあいだは深さを変えない
       if (m.state === 'hover') targetY = m.pos.y + Math.sin(m.scull * 1.7) * 0.04;
@@ -930,7 +1076,10 @@ export class PenguinFlock {
       // その場でゆっくり向きを変える。棒立ちのままだと置物になる
       m.heading += Math.sin(m.lookT * 0.42 + m.seed * 2) * 0.5 * dt;
       m.rest -= dt;
-      if (m.rest <= 0) { m.iceStage = 'edge'; m.edgeT = 0; m.sway = 0; }
+      if (m.rest <= 0) {
+        m.iceStage = 'edge'; m.edgeT = 0; m.sway = 0;
+        this.rally();       // 一羽が動くと、残りも腰を上げる
+      }
       return this.poseAt(m, i);
     }
 

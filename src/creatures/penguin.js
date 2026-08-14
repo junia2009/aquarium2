@@ -178,11 +178,13 @@ export const PENGUIN_KINDS = {
     tail: { len: 0.085, height: 0.30 },   // 尾は短い
     beatFreq: 1.55,   // 大きい種ほどゆっくり打つ
     speed: 2.4,
-    // 息継ぎまでの潜水時間(秒)。実物は数分潜れるが、
-    // 見ていて何も起きないので水槽の尺に縮めてある
-    dive: 26,
-    // 息継ぎのとき氷へ跳び乗る割合。大きく重い種ほど跳び乗りにくい
-    haulOutChance: 0.16,
+    // 息継ぎまでの潜水時間(秒)。実物は数分潜れるが、見ていて何も
+    // 起きないので水槽の尺に縮めてある。とはいえ短くしすぎると、
+    // 群れが息継ぎに往復しているところしか見えなくなる
+    dive: 34,
+    // 息継ぎのとき氷へ跳び乗る割合。大きく重い種ほど跳び乗りにくい。
+    // 上がるときは群れごと上がるので、個体ごとに判じていた頃の半分でいい
+    haulOutChance: 0.10,
     // --- 習性 ---
     // キングは深海性。海底近くまで潜って長く留まり、群れはばらける。
     // 息継ぎは静かに浮上するだけで、ポーポイジングはあまりしない
@@ -204,15 +206,15 @@ export const PENGUIN_KINDS = {
     tail: { len: 0.170, height: 0.38 },
     beatFreq: 2.05,
     speed: 3.1,       // 現生のペンギンでいちばん速い
-    dive: 20,
-    haulOutChance: 0.30,
+    dive: 28,
+    haulOutChance: 0.18,
     // ジェンツーは最速。浅い層を鋭く曲がりながら走り、
     // 息継ぎは連続したポーポイジングで済ませる。立ち止まることは少ない
     depth: [0.40, 0.92],
-    cohesion: 1.0,
+    cohesion: 1.4,
     hoverChance: 0.10,
     hoverTime: [2.0, 3.5],
-    arcs: [4, 8],
+    arcs: [2, 5],
     standTime: [8, 15],
     turnRate: 3.4,
   },
@@ -225,16 +227,16 @@ export const PENGUIN_KINDS = {
     tail: { len: 0.115, height: 0.34 },
     beatFreq: 2.25,
     speed: 2.6,
-    dive: 17,
-    haulOutChance: 0.42,   // 氷の上でいちばんよく見かける種
+    dive: 26,
+    haulOutChance: 0.26,   // 氷の上でいちばんよく見かける種
     // アデリーは群れがいちばん密。ひとかたまりで動き、
     // 氷へもよく上がって長く立っている
     depth: [0.45, 0.95],
     cohesion: 2.1,
     hoverChance: 0.20,
     hoverTime: [2.5, 5.0],
-    arcs: [3, 6],
-    standTime: [16, 28],
+    arcs: [2, 4],
+    standTime: [10, 20],
     turnRate: 2.8,
   },
   chinstrap: {
@@ -245,14 +247,14 @@ export const PENGUIN_KINDS = {
     tail: { len: 0.120, height: 0.34 },
     beatFreq: 2.20,
     speed: 2.7,
-    dive: 18,
-    haulOutChance: 0.36,
+    dive: 27,
+    haulOutChance: 0.20,
     // ヒゲはよく漂う。水中で立ち止まってあたりを見回す時間が長い
     depth: [0.38, 0.90],
     cohesion: 1.2,
     hoverChance: 0.30,
     hoverTime: [3.0, 6.0],
-    arcs: [3, 5],
+    arcs: [2, 4],
     standTime: [12, 22],
     turnRate: 3.0,
   },
