@@ -34,6 +34,7 @@ export const GREAT_TANK = {
     exposure: 1.08,
   },
   camera: { pos: new THREE.Vector3(0, 7.5, 24), look: new THREE.Vector3(0, 7, 0) },
+  tap: 'クリック: 魚が驚く',
   species: GREAT_TANK_SPECIES,
 
   build(root, audio) {

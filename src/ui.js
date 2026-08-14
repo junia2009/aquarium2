@@ -12,6 +12,7 @@ export function setupUI({ zones, onFollow, onFree, onZone, audio }) {
   const fpsEl = document.getElementById('fps');
   const zoneBar = document.getElementById('zoneBar');
   const titleEl = document.querySelector('#hud-title h1');
+  const tapHintEl = document.getElementById('tapHint');
   const subEl = document.querySelector('#hud-title h1 span');
 
   let activeCard = null;
@@ -42,6 +43,9 @@ export function setupUI({ zones, onFollow, onFree, onZone, audio }) {
     for (const [k, b] of zoneBtns) b.classList.toggle('on', k === def.key);
     titleEl.childNodes[0].nodeValue = def.name + ' ';
     subEl.textContent = def.sub;
+    // タップで何が起きるかはゾーンごとに違う。
+    // 「魚が驚く」のまま深海や流氷へ行くと、書いてあることが起きない
+    if (tapHintEl) tapHintEl.textContent = def.tap || '';
     clearActive();
     cards.replaceChildren();
     for (const sp of def.species) {

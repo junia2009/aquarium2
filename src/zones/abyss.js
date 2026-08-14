@@ -77,6 +77,7 @@ export const ABYSS = {
     pos: new THREE.Vector3(4.5, 5.2, -1.0),
     look: new THREE.Vector3(12, 3.6, -13),
   },
+  tap: 'クリック: クラゲが警報発光 / ナマコが光る',
   species: ABYSS_SPECIES,
 
   build(root, audio) {

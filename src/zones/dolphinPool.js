@@ -42,6 +42,7 @@ export const DOLPHIN_POOL = {
     exposure: 1.0,
   },
   camera: { pos: new THREE.Vector3(0, 10.0, 16), look: new THREE.Vector3(0, 10.5, 0) },
+  tap: 'イルカはときどき水面へ跳びます',
   species: DOLPHIN_POOL_SPECIES,
 
   build(root, audio) {

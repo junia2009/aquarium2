@@ -42,6 +42,7 @@ export const ICE_SEA = {
   },
   // リードのすぐ下、光の柱を見上げる位置から始める
   camera: { pos: new THREE.Vector3(-2, 9.0, 14), look: new THREE.Vector3(2, 14.0, -2) },
+  tap: 'クリック: ペンギンが寄ってくる',
   species: ICE_SEA_SPECIES,
 
   build(root, audio) {
