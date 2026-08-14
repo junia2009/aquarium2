@@ -20,13 +20,14 @@ uniform float uVertAxis;   // 0=左右うねり(魚類) 1=上下うねり(クジ
 uniform float uWing;       // 1=ペンギンの羽ばたき(翼を肩から振る)
 uniform vec4 uWingRoot;    // 翼の付け根(|x|, y, z) と w=翼の張り出し
 uniform vec2 uNeckPivot;   // 首の付け根(y, z)。頭はここを軸に前へ倒れる
+uniform vec2 uFootPivot;   // 足首(y, z)。陸では足をここから前へ倒す
 attribute vec2 aBodyUV;
 attribute float aPart;
 attribute float aHeight;   // 体の中心からの実際の高さ(H比)
 #ifdef USE_INSTANCING
 attribute vec4 aInfo;      // x:位相 y:速度倍率 z:サイズ w:色ゆらぎ
 // ペンギンの姿勢。泳ぎ以外の格好はここで作る
-//   x: 翼の上下オフセット / y: 翼の後退(体側へ畳む) / z: 首の前傾 / w: 予備
+//   x: 翼の上下オフセット / y: 翼の後退(体側へ畳む) / z: 首の前傾 / w: 足の前倒し
 attribute vec4 aPose;
 #endif
 varying vec2 vBodyUV;
@@ -66,6 +67,7 @@ void main() {
   float wingLift = 0.0;    // 翼の上下オフセット
   float wingSweep = 0.0;   // 翼の後退。体側へ畳むと立ち姿・弾道姿勢になる
   float neckBend = 0.0;    // 首の前傾
+  float footSwing = 0.0;   // 足の前倒し。陸では足裏を前へ向けて体を支える
   float bodyPhase = phase;
   float bodySpd = spd;
   if (uWing > 0.5) {
@@ -75,6 +77,7 @@ void main() {
     wingLift = aPose.x;
     wingSweep = aPose.y;
     neckBend = aPose.z;
+    footSwing = aPose.w;
 #endif
     bodyPhase = tint * 6.2831853;
     bodySpd = 1.0;
@@ -178,6 +181,19 @@ void main() {
     float nc = cos(na), ns = sin(na);
     p = pv + vec3(dn.x, dn.y * nc - dn.z * ns, dn.y * ns + dn.z * nc);
     n = vec3(n.x, n.y * nc - n.z * ns, n.y * ns + n.z * nc);
+  }
+
+  // ---- 足を前へ倒す ----
+  // 泳ぐときは尾の下へ後ろ向きに畳んで舵にしているが、陸ではこれを
+  // 足首で前へ倒し、足裏を地面に向けて体を支える板にする。
+  // 倒さないまま立たせると、体の真下に細い棒が刺さっているだけになり、
+  // どう見ても自立していない
+  if (uWing > 0.5 && aPart > 5.5 && abs(footSwing) > 0.002) {
+    vec3 fp = vec3(0.0, uFootPivot.x, uFootPivot.y);
+    vec3 df = p - fp;
+    float fc = cos(footSwing), fs = sin(footSwing);
+    p = fp + vec3(df.x, df.y * fc - df.z * fs, df.y * fs + df.z * fc);
+    n = vec3(n.x, n.y * fc - n.z * fs, n.y * fs + n.z * fc);
   }
 
   vec4 wp = modelMatrix
@@ -732,7 +748,7 @@ void main() {
 }
 `;
 
-export function createFishMaterial({ pattern, len, swim, vertAxis = 0, wing = null, species = 0, neck = null }) {
+export function createFishMaterial({ pattern, len, swim, vertAxis = 0, wing = null, species = 0, neck = null, foot = null }) {
   return new THREE.ShaderMaterial({
     uniforms: {
       ...baseUniforms(),
@@ -748,6 +764,7 @@ export function createFishMaterial({ pattern, len, swim, vertAxis = 0, wing = nu
       uWing: { value: wing ? 1 : 0 },
       uWingRoot: { value: wing ? wing.clone() : new THREE.Vector4() },
       uNeckPivot: { value: neck ? neck.clone() : new THREE.Vector2() },
+      uFootPivot: { value: foot ? foot.clone() : new THREE.Vector2() },
       uSpecies: { value: species },
     },
     vertexShader: FISH_VERTEX,

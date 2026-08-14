@@ -26,6 +26,7 @@ const _up = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _m = new THREE.Matrix4();
 const _qb = new THREE.Matrix4();
+const _axis = new THREE.Vector3();
 
 const GRAVITY = 9.8;
 
@@ -191,6 +192,7 @@ export class PenguinFlock {
       species: kind.species,
       wing: geo.userData.wingRoot,
       neck: geo.userData.neckPivot,
+      foot: geo.userData.footPivot,
       // 体はほとんど曲げない。翼で進む鳥なので、うねりは硬直を避けるぶんだけ
       swim: { freq: 1.0, amp: 0.008, waveNum: 0.35, headAmp: 0.05, flapFreq: kind.beatFreq * 6.28 },
     });
@@ -254,6 +256,8 @@ export class PenguinFlock {
         wingLift: 0,      // 翼の上下オフセット
         wingSweep: 0,     // 翼を体側へ畳む量
         neck: 0,          // 首の前傾
+        feet: 0,          // 足の前倒し
+        waddle: 0,        // よちよち歩きの左右の振れ
         // --- 立ち止まり ---
         hoverT: 0,
         scull: 0,         // 漕ぎの位相
@@ -446,6 +450,9 @@ export class PenguinFlock {
       // 水中の姿勢。泳いでいるときは翼を横へ張り、首はまっすぐ。
       // 立ち止まっているときだけ首を少し上げてあたりを見る
       const wantSweep = m.state === 'hover' ? 0.22 : 0.0;
+      // 水中では足は尾のうしろへ畳んで舵にする
+      m.feet += (0 - m.feet) * (1 - Math.exp(-4 * dt));
+      m.waddle *= Math.exp(-5 * dt);
       const wantNeck = m.state === 'hover'
         ? -0.20 + 0.28 * Math.sin(m.scull * 1.1 + m.seed)   // 見回す
         : 0.0;
@@ -716,8 +723,14 @@ export class PenguinFlock {
     // 首を曲げられるようにした今、氷の上のペンギンは立っている。
     const deckAt = (x, z) => Math.max(this.iceField ? this.iceField.deck(x, z) : surf, surf);
     // 立ち姿での体の中心の高さ。尾と脚が甲板に触れるところから逆算する
-    const standPitch = 1.30;                       // 75度。やや後ろへ反って立つ
+    // 立ち姿はほぼ垂直。75度にしていたら「前へつんのめっている」形になった。
+    // ペンギンの脚は体の後ろに付いていて、尾を地面につけて三点で支えるので、
+    // 体はまっすぐ立つか、わずかに後ろへ反る
+    const standPitch = 1.50;                       // 86度
     const lift = this.tailDrop * Math.sin(standPitch) + 0.02;
+    // 足を前へ倒す量。尾の向き(-z)から腹の向き(-y)へ90度回すと、
+    // 立ったとき足裏が水平になって前を向く
+    const FEET_DOWN = -1.62;
 
     if (m.iceStage === 'land') {
       m.slide *= Math.exp(-2.6 * dt);
@@ -726,6 +739,7 @@ export class PenguinFlock {
       m.pos.y = deckAt(m.pos.x, m.pos.z) + m.body * 0.55;
       m.pitch += (0 - m.pitch) * (1 - Math.exp(-6 * dt));
       m.wingSweep += (0.6 - m.wingSweep) * (1 - Math.exp(-5 * dt));
+      m.waddle *= Math.exp(-4 * dt);
       if (m.slide < 0.25) { m.iceStage = 'stand'; m.lookT = 0; }
       return this.poseAt(m, i);
     }
@@ -736,6 +750,10 @@ export class PenguinFlock {
       m.pitch += (standPitch - m.pitch) * (1 - Math.exp(-3.2 * dt));
       m.wingSweep += (1.45 - m.wingSweep) * (1 - Math.exp(-3.0 * dt));
       m.wingAmp += (0 - m.wingAmp) * (1 - Math.exp(-4 * dt));
+      // 足を前へ倒して、体を支える板にする
+      m.feet += (FEET_DOWN - m.feet) * (1 - Math.exp(-3.0 * dt));
+      // 立ち止まっていても完全には止まらない。重心を左右へ送って揺れる
+      m.waddle += (Math.sin(m.lookT * 1.5 + m.seed) * 0.05 - m.waddle) * (1 - Math.exp(-3 * dt));
       // 首は立ち上がりに合わせて折る。ここを止めると嘴が空を指す
       m.lookT += dt;
       const look = 1.16 + 0.26 * Math.sin(m.lookT * 0.9 + m.seed)
@@ -759,6 +777,9 @@ export class PenguinFlock {
       const ease = e * e * (3 - 2 * e);
       m.pitch = standPitch + (-0.75 - standPitch) * ease;
       m.neck += (0 - m.neck) * (1 - Math.exp(-5 * dt));
+      // 蹴り出しながら足を畳む
+      m.feet += (0 - m.feet) * (1 - Math.exp(-4 * dt));
+      m.waddle *= Math.exp(-6 * dt);
       m.pos.y = (m.lastDeck || surf) + lift * Math.cos(ease * 1.1);
       // 倒れるにつれて重心が縁の外へ出て、そのまま落ちる
       m.pos.x += Math.sin(m.heading) * 0.55 * ease * dt;
@@ -775,7 +796,14 @@ export class PenguinFlock {
     }
 
     // ---- 縁まで歩く ----
-    // 立ったまま、よちよちと縁へ向かう
+    //
+    // ペンギンの歩きは「前へ進む」動作ではなく「左右に倒れ込む」動作。
+    // 脚が体のうしろに付いていて歩幅が取れないので、体を片側へ傾けて
+    // 反対の足を浮かせ、重心を振り子のように送る。これがよちよち歩きの正体で、
+    // 位置を等速で足すだけだと氷の上を滑っているようにしか見えない
+    // ——実際そう見えていた。
+    //
+    // だから左右の傾き(waddle)を主役にして、前進はその副産物として作る。
     m.edgeT += dt;
     const tx = m.target ? m.target.fromX : m.pos.x;
     const tz = m.target ? m.target.fromZ : m.pos.z;
@@ -783,19 +811,29 @@ export class PenguinFlock {
     let dh = want - m.heading;
     while (dh > Math.PI) dh -= Math.PI * 2;
     while (dh < -Math.PI) dh += Math.PI * 2;
-    m.heading += THREE.MathUtils.clamp(dh * 2.4, -2.0, 2.0) * dt;
-    // よちよち歩き。左右に体を振りながら進む
-    const walk = 0.75;
+    // 向きもその場でくるくる変えられない。歩きながら少しずつ回る
+    m.heading += THREE.MathUtils.clamp(dh * 1.1, -0.75, 0.75) * dt;
+
+    m.stepPh = (m.stepPh || 0) + dt * 1.75 * Math.PI;   // 片足あたり1.75歩/秒
+    // 左右の倒れ込み。±16度ほど傾く
+    m.waddle = Math.sin(m.stepPh) * 0.28;
+    // 足が着いた瞬間だけ前へ出る。傾きが両端に来たときが接地
+    const surge = 0.30 + 0.70 * Math.abs(Math.sin(m.stepPh));
+    const walk = 0.46 * surge;
     m.pos.x += Math.sin(m.heading) * walk * dt;
     m.pos.z += Math.cos(m.heading) * walk * dt;
-    m.bank = Math.sin(m.edgeT * 5.2) * 0.16;
+    // 一歩ごとの上下の弾み。傾いて片足に乗るとき体が少し持ち上がる
+    m.stepBob = Math.abs(Math.sin(m.stepPh)) * 0.018;
+    // 足はしっかり倒したまま
+    m.feet += (FEET_DOWN - m.feet) * (1 - Math.exp(-4 * dt));
+    m.bank = 0;
     // 甲板の高さ場は格子の外側が大きな負の値なので、縁の1マス手前から
     // 一気に落ちる。そのまま足元の高さに使うと、飛び込む直前に体が
     // 30cm沈む。最後に踏んだ甲板の高さを覚えておいて、そこで踏み切る
     const deckHere = this.iceField ? this.iceField.deck(m.pos.x, m.pos.z) : -1e4;
     const onDeck = deckHere > surf + 0.05;
     if (onDeck) m.lastDeck = deckHere;
-    m.pos.y = (m.lastDeck || surf) + lift;
+    m.pos.y = (m.lastDeck || surf) + lift + (m.stepBob || 0);
 
     // 半歩先の足元を見る。縁に着いてから倒れ始めたのでは遅く、
     // 体が宙に浮いたまま前傾することになる
@@ -821,6 +859,14 @@ export class PenguinFlock {
     _m.makeBasis(_right, _up, _fwd);
     _q.setFromAxisAngle(_fwd, m.bank);
     _m.premultiply(_qb.makeRotationFromQuaternion(_q));
+    // よちよち歩きの左右の倒れ込み。体軸ではなく「進行方向の水平軸」まわりに
+    // 倒す。体軸まわりに回すと、立っているときは縦軸まわりの回転になって
+    // ただ体をひねるだけになる
+    if (m.waddle) {
+      _axis.set(Math.sin(m.heading), 0, Math.cos(m.heading));
+      _q.setFromAxisAngle(_axis, m.waddle);
+      _m.premultiply(_qb.makeRotationFromQuaternion(_q));
+    }
     _m.setPosition(m.pos);
     const s = this.info[i * 4 + 2];
     _m.scale(_v.set(s, s, s));
@@ -830,5 +876,6 @@ export class PenguinFlock {
     this.pose[i * 4 + 0] = m.wingLift;
     this.pose[i * 4 + 1] = m.wingSweep;
     this.pose[i * 4 + 2] = m.neck;
+    this.pose[i * 4 + 3] = m.feet;
   }
 }

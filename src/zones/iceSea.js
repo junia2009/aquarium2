@@ -79,9 +79,17 @@ export const ICE_SEA = {
     const bubbles = new BubbleTrail(root);
     // 水面を割るしぶきはイルカと同じものを使う。物理は同じ
     const splash = new SplashField(root);
-    // 息継ぎに出られる場所。氷の下で浮上しても息はできない
-    const openSpots = ice.leadSpots.concat(ice.polynyas.map((p) => ({ x: p.x, z: p.z })));
-    const shared = { iceField: ice.field, bubbles, splash, openSpots, haulOuts: ice.haulOuts };
+    // カメラは原点から半径42mまでしか出られない(camera.js の maxR)。
+    // 流氷そのものは160m四方に敷いてあるが、息継ぎと上陸は
+    // 「見にいける範囲」で起きなければ意味がない。
+    // ここを絞らないと、たどり着けない板の上でペンギンが立っていることになる
+    const REACH = 34;
+    const near = (p) => Math.hypot(p.x, p.z) < REACH;
+    const openSpots = ice.leadSpots
+      .concat(ice.polynyas.map((p) => ({ x: p.x, z: p.z })))
+      .filter(near);
+    const haulOuts = ice.haulOuts.filter(near);
+    const shared = { iceField: ice.field, bubbles, splash, openSpots, haulOuts };
     const flocks = {
       king: new PenguinFlock(root, {
         kind: PENGUIN_KINDS.king, count: 5,

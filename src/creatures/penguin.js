@@ -222,18 +222,24 @@ function buildBeak(kind, zBase) {
 }
 
 // ---- 脚と蹼(みずかき) ----
-// 水中では尾の左右下に揃えて畳み、舵として使う。立ち姿の脚を付けると、
-// それだけで「陸の鳥が水に浮いている」絵になってしまう。
-// 蹼が3本の趾(あしゆび)のあいだに張るので、後縁が2度えぐれた扇になる。
+// 水中では尾の下へ揃えて畳み、舵として使う。
+// 陸に上がるとこれを前へ倒して体を支える板になるので、
+// シェーダから足首を軸に回せるようにしてある(uFootPivot)。
 //
-// 最初は尾のすぐ下に薄い板を寝かせただけで、どの向きから見ても
-// 尾に溶けて消えてしまった。尾より一段下げ、外へ少し開き、
-// 足裏をわずかに下へ向けて陰影が付くようにしてある。
+// 脚の付け根は尾の先ではなく、腹の後ろ寄り。ペンギンの脚は
+// 体のかなり後ろに付いていて、しかも大部分が体の中に隠れている。
+// これが「歩幅が取れず、体を左右に振って歩く」理由そのものなので、
+// 位置を尾の先までずらすと立ち姿の重心が合わなくなる。
+//
+// 蹼が3本の趾(あしゆび)のあいだに張るので、後縁が2度えぐれた扇になる。
 function buildFeet(kind, zTail, yTail) {
   const parts = { pos: [], uv: [], h: [], part: [], idx: [] };
   const L = kind.total;
-  const FOOT = L * 0.075;          // 踵から趾の先まで。尾より短い
-  const TOE = L * 0.048;           // 外側の趾の張り出し
+  // 実物の足は大きい。キングで13cmほどあり、これが体を支える面になる。
+  // 泳ぎだけを考えて小さくすると、立たせたとき支えが無くて棒が刺さって
+  // いるようにしか見えない
+  const FOOT = L * 0.125;          // 踵から趾の先まで
+  const TOE = L * 0.062;           // 外側の趾の張り出し
   for (const side of [-1, 1]) {
     const x0 = side * L * 0.026;
     mergeInto(parts, loft(6, 12, (t, s) => {
@@ -285,6 +291,14 @@ export function buildPenguinGeometry(kind) {
     },
   });
 
+  // プロファイルの線形サンプル。付け根の位置を出すのに使う
+  const s = (arr, t) => {
+    const x = Math.min(Math.max(t, 0), 1) * (arr.length - 1);
+    const i = Math.min(Math.floor(x), arr.length - 2);
+    const f = x - i;
+    return arr[i] * (1 - f) + arr[i + 1] * f;
+  };
+
   const dst = {
     pos: Array.from(body.attributes.position.array),
     uv: Array.from(body.attributes.aBodyUV.array),
@@ -297,9 +311,12 @@ export function buildPenguinGeometry(kind) {
   // 嘴の付け根に細い円錐の首が見えてしまう
   const zNose = bodyLen / 2;
   mergeInto(dst, buildBeak(kind, zNose + noseFrac * bodyLen * 0.80));
-  // 脚は尾柄の下から後ろへ。尾びれと同じ高さに置くと溶けるので一段下げる
-  const zTail = zNose - bodyLen;
-  mergeInto(dst, buildFeet(kind, zTail + bodyLen * 0.04, Y_PROFILE[10] * H - H * 0.16));
+  // 脚は腹の後ろ寄り(体長の8割の位置)の下面から後ろへ。
+  // ここが足首になり、陸ではここを軸に足を前へ倒す
+  const FOOT_T = 0.80;
+  const ankleZ = zNose - FOOT_T * bodyLen;
+  const ankleY = (s(Y_PROFILE, FOOT_T) - s(H_PROFILE, FOOT_T) * 0.92) * H;
+  mergeInto(dst, buildFeet(kind, ankleZ, ankleY));
 
   const geo = new THREE.BufferGeometry();
   geo.setIndex(dst.idx);
@@ -309,13 +326,7 @@ export function buildPenguinGeometry(kind) {
   geo.setAttribute('aPart', new THREE.Float32BufferAttribute(dst.part, 1));
   geo.computeVertexNormals();
 
-  // 翼の付け根。シェーダはここを軸に翼を振る
-  const s = (arr, t) => {
-    const x = Math.min(Math.max(t, 0), 1) * (arr.length - 1);
-    const i = Math.min(Math.floor(x), arr.length - 2);
-    const f = x - i;
-    return arr[i] * (1 - f) + arr[i + 1] * f;
-  };
+  // 翼の付け根。シェーダはここを軸に翼を振る。
   // w は翼の張り出し。シェーダはこれで「付け根から何割か」を測り、
   // 体に埋まった内端を動かさずにおく
   geo.userData.wingRoot = new THREE.Vector4(
@@ -337,6 +348,8 @@ export function buildPenguinGeometry(kind) {
   // 埋まるか浮くので、境界箱から実測する
   geo.computeBoundingBox();
   geo.userData.tailDrop = -geo.boundingBox.min.z;
+  // 足首(y, z)。陸ではここを軸に足を前へ倒して、体を支える板にする
+  geo.userData.footPivot = new THREE.Vector2(ankleY, ankleZ);
   geo.userData.length = kind.total;
   return geo;
 }
