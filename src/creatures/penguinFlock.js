@@ -207,6 +207,29 @@ export class PenguinFlock {
     this.standHalfW = geo.userData.standHalfW;
     this.standFwd = geo.userData.standFwd;
     this.standBend = geo.userData.standBend;
+    this.hipDrop = geo.userData.hipDrop;
+
+    // ---- 歩きの寸法 ----
+    // 全部、脚の長さから出す。速さを先に決めて足を後から付けると、
+    // どう動かしても氷を滑るだけになる(実際そうなっていた)。
+    //   R      振り子の腕。脚を振る軸から足裏まで
+    //   SWING  振り出しの片振幅。実測されている歩幅から逆算すると
+    //          コウテイで26度ほどになる
+    //   DUTY   一歩のうち接地している割合。歩行では両脚が同時に地面に
+    //          着いている時間があり、宙に浮く瞬間は無い
+    //   周期   脚を振り子と見たときの固有周期の1.6倍。ヒトも鳥も
+    //          だいたいこの比のところで歩く
+    const R = geo.userData.legReach;
+    const SWING = 0.48, DUTY = 0.68;
+    const strideT = 2 * Math.PI / (1.6 * Math.sqrt(9.8 / R));
+    // 接地しているあいだに体が進む距離。これが一歩ぶん
+    const step = 2 * R * Math.sin(SWING);
+    this.gait = {
+      R, swing: SWING, duty: DUTY, strideT,
+      step,
+      // 速さは歩幅と歩調の結果。ここを独立に決めた瞬間に足が滑る
+      speed: step / (DUTY * strideT),
+    };
 
     // aInfo は羽ばたき用に意味が変わる:
     //   x = 羽ばたきの位相(CPUが積分する) / y = 振幅(0で滑空)
@@ -234,6 +257,9 @@ export class PenguinFlock {
     this.members = [];
     for (let i = 0; i < count; i++) {
       const a = (i / count) * Math.PI * 2 + Math.random();
+      // 個体ごとの体格倍率。立ち高さも歩幅も歩調も、これで伸び縮みする。
+      // 倍率を掛け忘れると、大きい個体は氷に3cm埋まり、小さい個体は浮く
+      const sc = this.info[i * 4 + 2];
       this.members.push({
         pos: new THREE.Vector3(
           center.x + Math.cos(a) * radius * 0.4,
@@ -269,6 +295,16 @@ export class PenguinFlock {
         neck: 0,          // 首の前傾
         feet: 0,          // 足の前倒し
         tail: 0,          // 尾の蹴り出し
+        // --- 歩き ---
+        scale: sc,
+        // 歩調と速さ。振り子は長いほどゆっくり振れるので、
+        // 大きい個体はゆったり大股に歩く
+        strideT: this.gait.strideT * Math.sqrt(sc),
+        walkSpeed: this.gait.speed * Math.sqrt(sc),
+        stride: Math.random() * Math.PI * 2,   // 歩調の位相
+        hipL: 0, hipR: 0, // 左右の脚の振り
+        swing: 0,         // 遊脚の縮み(符号でどちらの脚か)
+        yaw: 0,           // 体のひねり
         waddle: 0,        // よちよち歩きの左右の振れ
         // --- 立ち止まり ---
         hoverT: 0,
@@ -292,9 +328,78 @@ export class PenguinFlock {
    * 下がるので、そのぶんを足す。これを忘れると、一歩ごとに
    * 足先が氷にめり込む
    */
-  liftAt(m) {
+  ground(m, load) {
     const w = m.waddle || 0;
-    return this.standDrop * Math.cos(w) + this.standHalfW * Math.abs(Math.sin(w));
+    const g = this.gait;
+    const sc = m.scale;
+    const cw = Math.cos(w), sw = Math.sin(w);
+    let lift = -1e9, sway = 0;
+    const legs = [
+      [m.hipL || 0, Math.max(-(m.swing || 0), 0), -this.standHalfW * sc, load ? load[0] : 0.5],
+      [m.hipR || 0, Math.max(m.swing || 0, 0), this.standHalfW * sc, load ? load[1] : 0.5],
+    ];
+    for (const [hip, sh, sx, wt] of legs) {
+      const d = (this.hipDrop + g.R * (1 - sh) * Math.cos(hip)) * sc;
+      // 高さは深いほうに合わせる。浅いほうに合わせると足が甲板を突き抜ける。
+      // 支持脚が垂直になる一歩の中間で体はいちばん高くなり、踏み替えで
+      // いちばん低くなる——倒立振り子そのもの
+      lift = Math.max(lift, d * cw - sx * sw);
+      // 体を倒すとき、回転の中心は体の真ん中ではなく接地した足。
+      // 高さだけ直して横を放っておくと、倒し込むたびに支持足が
+      // 6cmも横滑りする。体のほうを足の上へ送らなければならない。
+      // 荷重で混ぜるのは、踏み替えで飛ばないようにするため
+      sway += (sx * (1 - cw) - d * sw) * wt;
+    }
+    return { lift, sway };
+  }
+
+  /** 甲板からの浮かせ量だけが要るとき(立ち止まり) */
+  liftAt(m) { return this.ground(m).lift; }
+
+  /**
+   * 一歩のなかの位相 u(0..1)から、その脚の振りと縮みを出す。
+   *
+   *   接地(u < duty): 足は地面に釘付け。体が前へ進むぶんだけ、脚は
+   *     前方から後方へ振れていく。角度を時間に対して一次で動かすと
+   *     足のずれは1mmに収まるので、そのまま一次で回す
+   *   遊脚(u >= duty): 足を持ち上げて前へ運び直す。跗蹠を軸方向へ
+   *     縮めて上げる。縮めないと、支持脚とすれ違う瞬間——両脚とも
+   *     垂直になるところ——で足が地面を擦る
+   */
+  /** 脚をまっすぐに戻す(泳ぎ・空中・腹這い) */
+  restLegs(m, dt, k) {
+    const f = 1 - Math.exp(-k * dt);
+    m.hipL += (0 - m.hipL) * f;
+    m.hipR += (0 - m.hipR) * f;
+    m.swing += (0 - m.swing) * f;
+    m.yaw += (0 - m.yaw) * f;
+  }
+
+  gaitLeg(u) {
+    const g = this.gait;
+    if (u < g.duty) {
+      return { th: g.swing * (2 * (u / g.duty) - 1), sh: 0, stance: true };
+    }
+    const b = (u - g.duty) / (1 - g.duty);
+    return { th: g.swing * (1 - 2 * (b * b * (3 - 2 * b))),
+             sh: Math.sin(Math.PI * b), stance: false };
+  }
+
+  /**
+   * どちらの脚がどれだけ体重を受けているか(左, 右)。
+   *
+   * 「浮いていないほうの脚が支えている」で切り替えると、踏み替えの
+   * 1フレームで体が左右に6cm跳ぶ。歩行には両脚が同時に着いている
+   * 時間があって、そのあいだに荷重が片方からもう片方へ移っていく。
+   * 倒し込みも、体を足の上へ送る量も、この配分から作る
+   */
+  loadAt(u) {
+    const b = this.gait.duty - 0.5;        // 両脚接地の長さ
+    const ease = (x) => { const c = Math.min(Math.max(x, 0), 1); return c * c * (3 - 2 * c); };
+    if (u < b) { const k = ease(u / b); return [k, 1 - k]; }
+    if (u < 0.5) return [1, 0];
+    if (u < 0.5 + b) { const k = ease((u - 0.5) / b); return [1 - k, k]; }
+    return [0, 1];
   }
 
   /**
@@ -306,9 +411,15 @@ export class PenguinFlock {
    */
   deckUnderFeet(m) {
     if (!this.iceField) return WORLD.surfaceY;
-    const f = this.standFwd;
-    return this.iceField.deck(m.pos.x + Math.sin(m.heading) * f,
-                              m.pos.z + Math.cos(m.heading) * f);
+    // 足は硬い板なので、その下でいちばん高いところに乗る。
+    // 一点だけ見ると、雪の起伏の谷を拾ったときに趾が雪に埋まる
+    const f = this.standFwd * m.scale, half = this.standHalfW * m.scale * 1.6;
+    const sx = Math.sin(m.heading), cz = Math.cos(m.heading);
+    let d = -1e4;
+    for (const a of [-half, 0, half]) {
+      d = Math.max(d, this.iceField.deck(m.pos.x + sx * (f + a), m.pos.z + cz * (f + a)));
+    }
+    return d;
   }
 
   /** その位置で泳げる上限(氷の下面か水面) */
@@ -492,6 +603,7 @@ export class PenguinFlock {
       // 水中では脚を尾のうしろへ伸ばし、尾ともども一直線の舵にする
       m.feet += (0 - m.feet) * (1 - Math.exp(-4 * dt));
       m.tail += (0 - m.tail) * (1 - Math.exp(-4 * dt));
+      this.restLegs(m, dt, 4);
       m.waddle *= Math.exp(-5 * dt);
       const wantNeck = m.state === 'hover'
         ? -0.20 + 0.28 * Math.sin(m.scull * 1.1 + m.seed)   // 見回す
@@ -711,6 +823,7 @@ export class PenguinFlock {
       m.wingSweep += (1.15 - m.wingSweep) * (1 - Math.exp(-9 * dt));
       m.neck += (0 - m.neck) * (1 - Math.exp(-8 * dt));
       m.tail += (0 - m.tail) * (1 - Math.exp(-8 * dt));
+      this.restLegs(m, dt, 8);
 
       const deck = this.iceField ? this.iceField.deck(m.pos.x, m.pos.z) : -1e4;
       // 氷の上へ着地。跳び乗った勢いで少し滑ってから立ち上がる
@@ -780,7 +893,8 @@ export class PenguinFlock {
       m.waddle *= Math.exp(-4 * dt);
       // 腹這いのあいだ尾はまっすぐ。曲げるのは立ち上がってから
       m.tail *= Math.exp(-4 * dt);
-      if (m.slide < 0.25) { m.iceStage = 'stand'; m.lookT = 0; }
+      this.restLegs(m, dt, 4);
+      if (m.slide < 0.25) { m.iceStage = 'stand'; m.lookT = 0; m.sway = 0; }
       return this.poseAt(m, i);
     }
 
@@ -801,6 +915,7 @@ export class PenguinFlock {
       m.tail += (this.standBend - m.tail) * (1 - Math.exp(-3.0 * dt));
       // 立ち止まっていても完全には止まらない。重心を左右へ送って揺れる
       m.waddle += (Math.sin(m.lookT * 1.5 + m.seed) * 0.05 - m.waddle) * (1 - Math.exp(-3 * dt));
+      this.restLegs(m, dt, 3);
       // 首は立ち上がりに合わせて折る。ここを止めると嘴が空を指す
       m.lookT += dt;
       const look = 1.16 + 0.26 * Math.sin(m.lookT * 0.9 + m.seed)
@@ -809,7 +924,7 @@ export class PenguinFlock {
       // その場でゆっくり向きを変える。棒立ちのままだと置物になる
       m.heading += Math.sin(m.lookT * 0.42 + m.seed * 2) * 0.5 * dt;
       m.rest -= dt;
-      if (m.rest <= 0) { m.iceStage = 'edge'; m.edgeT = 0; }
+      if (m.rest <= 0) { m.iceStage = 'edge'; m.edgeT = 0; m.sway = 0; }
       return this.poseAt(m, i);
     }
 
@@ -829,7 +944,8 @@ export class PenguinFlock {
       m.feet += (0 - m.feet) * (1 - Math.exp(-4 * dt));
       m.tail += (0 - m.tail) * (1 - Math.exp(-4 * dt));
       m.waddle *= Math.exp(-6 * dt);
-      m.pos.y = (m.lastDeck || surf) + this.standDrop * Math.cos(ease * 1.1);
+      this.restLegs(m, dt, 5);
+      m.pos.y = (m.lastDeck || surf) + this.standDrop * m.scale * Math.cos(ease * 1.1);
       // 倒れるにつれて重心が縁の外へ出て、そのまま落ちる
       m.pos.x += Math.sin(m.heading) * 0.55 * ease * dt;
       m.pos.z += Math.cos(m.heading) * 0.55 * ease * dt;
@@ -846,14 +962,32 @@ export class PenguinFlock {
 
     // ---- 縁まで歩く ----
     //
-    // ペンギンの歩きは「前へ進む」動作ではなく「左右に倒れ込む」動作。
-    // 脚が体のうしろに付いていて歩幅が取れないので、体を片側へ傾けて
-    // 反対の足を浮かせ、重心を振り子のように送る。これがよちよち歩きの正体で、
-    // 位置を等速で足すだけだと氷の上を滑っているようにしか見えない
-    // ——実際そう見えていた。
+    // 一度目は「位置を等速で足して、体を左右に揺らす」で作った。
+    // それは歩きではなく、氷の上を滑りながら体を振っているだけで、
+    // 実際そう見えていた。揺れの大きさをどう直しても直らない——
+    // 足が地面を掴んでいないのだから当然だった。
     //
-    // だから左右の傾き(waddle)を主役にして、前進はその副産物として作る。
+    // 本物のペンギンの歩きは、こうなっている。
+    //
+    //  ・接地している足は動かない。動くのは体のほう。あたりまえに
+    //    聞こえるが、これを守ると歩幅・歩調・速さが全部つながって
+    //    決まってしまう。脚の長さ R と振り出しの角 θ が歩幅を決め、
+    //    脚を振り子とみた固有周期が歩調を決め、その積が速さになる。
+    //    速さを先に決めて足を後から付けると、どうやっても滑る
+    //  ・左右の倒し込みは「揺れ」ではなく、遊脚を地面から離すための
+    //    動作。脚が短く足が大きいので、支持脚の上へ体を倒さないと
+    //    反対の足が上がらない。Griffin と Kram は、この倒し込みで
+    //    力学的エネルギーの8割を回収していることを示した——
+    //    よちよち歩きは無駄な動きではなく、歩くための仕掛けそのもの
+    //  ・体をひねる。脚が正中線の近くに付いているので、片脚を前へ
+    //    出すと骨盤ごと回る。この回旋がないと歩幅が取れない
+    //  ・支持脚が垂直になる一歩の中間で、体がいちばん高くなる
+    //    (倒立振り子)。踏み替えでいちばん低い
+    //
+    // だから、脚の位相を主役にして、倒し込みも、ひねりも、上下動も、
+    // 前進も、全部そこから出す。
     m.edgeT += dt;
+    const g = this.gait;
     const tx = m.target ? m.target.fromX : m.pos.x;
     const tz = m.target ? m.target.fromZ : m.pos.z;
     const want = Math.atan2(tx - m.pos.x, tz - m.pos.z);
@@ -863,16 +997,35 @@ export class PenguinFlock {
     // 向きもその場でくるくる変えられない。歩きながら少しずつ回る
     m.heading += THREE.MathUtils.clamp(dh * 1.1, -0.75, 0.75) * dt;
 
-    m.stepPh = (m.stepPh || 0) + dt * 1.75 * Math.PI;   // 片足あたり1.75歩/秒
-    // 左右の倒れ込み。±16度ほど傾く
-    m.waddle = Math.sin(m.stepPh) * 0.28;
-    // 足が着いた瞬間だけ前へ出る。傾きが両端に来たときが接地
-    const surge = 0.30 + 0.70 * Math.abs(Math.sin(m.stepPh));
-    const walk = 0.46 * surge;
-    m.pos.x += Math.sin(m.heading) * walk * dt;
-    m.pos.z += Math.cos(m.heading) * walk * dt;
-    // 一歩ごとの上下の弾み。傾いて片足に乗るとき体が少し持ち上がる
-    m.stepBob = Math.abs(Math.sin(m.stepPh)) * 0.018;
+    // 歩調。左右の脚は半周ずれる
+    m.stride = (m.stride + dt / m.strideT * Math.PI * 2) % (Math.PI * 2);
+    const u = m.stride / (Math.PI * 2);
+    const legL = this.gaitLeg(u);
+    const legR = this.gaitLeg((u + 0.5) % 1);
+    m.hipL = legL.th;
+    m.hipR = legR.th;
+    // 遊脚は跗蹠を1割縮めて足を上げる。両脚が同時に遊ぶことはないので、
+    // 符号でどちらの脚かを表してシェーダへ1本で渡す(正 = 右)
+    m.swing = (legR.sh - legL.sh) * 0.13;
+
+    // 荷重の乗っているほうへ倒し込む。+ が左脚(部位6)側。
+    // 目分量で位相を合わせると必ずずれるので、荷重配分から直接作る
+    const load = this.loadAt(u);
+    const wantRoll = 0.14 * (load[0] - load[1]);
+    m.waddle += (wantRoll - m.waddle) * (1 - Math.exp(-25 * dt));
+    // 前へ出ている脚のほうへ骨盤が回る
+    m.yaw += ((m.hipR - m.hipL) * 0.13 - m.yaw) * (1 - Math.exp(-12 * dt));
+
+    // 前進。速さは歩幅と歩調の結果であって、独立の数字ではない
+    m.pos.x += Math.sin(m.heading) * m.walkSpeed * dt;
+    m.pos.z += Math.cos(m.heading) * m.walkSpeed * dt;
+    // 倒し込みのぶん、体を支持足の上へ送る。重心は直進せず、
+    // 左右へ数センチずつジグザグに振れながら進む
+    const gr = this.ground(m, load);
+    const dLat = gr.sway - (m.sway || 0);
+    m.sway = gr.sway;
+    m.pos.x += Math.cos(m.heading) * dLat;
+    m.pos.z -= Math.sin(m.heading) * dLat;
     // 足と尾はしっかり倒したまま
     m.feet += (FEET_DOWN - m.feet) * (1 - Math.exp(-4 * dt));
     m.tail += (this.standBend - m.tail) * (1 - Math.exp(-4 * dt));
@@ -883,7 +1036,8 @@ export class PenguinFlock {
     const deckHere = this.deckUnderFeet(m);
     const onDeck = deckHere > surf + 0.05;
     if (onDeck) m.lastDeck = deckHere;
-    m.pos.y = (m.lastDeck || surf) + this.liftAt(m) + (m.stepBob || 0);
+    // 上下動も支持脚から出る。別に足す弾みは要らない
+    m.pos.y = (m.lastDeck || surf) + gr.lift;
 
     // 半歩先の足元を見る。縁に着いてから倒れ始めたのでは遅く、
     // 体が宙に浮いたまま前傾することになる
@@ -899,8 +1053,12 @@ export class PenguinFlock {
 
   /** 行列を1体ぶん書き込む */
   poseAt(m, i) {
-    _fwd.set(Math.sin(m.heading) * Math.cos(m.pitch), Math.sin(m.pitch),
-             Math.cos(m.heading) * Math.cos(m.pitch)).normalize();
+    // 体の向きは進行方向そのものではない。歩いているあいだは、
+    // 前へ出した脚のほうへ骨盤ごと回る。脚が体の中心線に近いので、
+    // この「ひねり」なしでは一歩ぶんの歩幅がそもそも取れない
+    const hd = m.heading + (m.yaw || 0);
+    _fwd.set(Math.sin(hd) * Math.cos(m.pitch), Math.sin(m.pitch),
+             Math.cos(hd) * Math.cos(m.pitch)).normalize();
     _up.set(0, 1, 0);
     _right.crossVectors(_up, _fwd);
     if (_right.lengthSq() < 1e-6) _right.set(1, 0, 0);
@@ -928,5 +1086,8 @@ export class PenguinFlock {
     this.pose[i * 4 + 2] = m.neck;
     this.pose[i * 4 + 3] = m.feet;
     this.pose2[i * 4 + 0] = m.tail;
+    this.pose2[i * 4 + 1] = m.hipL;
+    this.pose2[i * 4 + 2] = m.hipR;
+    this.pose2[i * 4 + 3] = m.swing;
   }
 }

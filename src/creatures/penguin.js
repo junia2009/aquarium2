@@ -81,6 +81,14 @@ const TAIL_TO = 1.02;
 // 尻のほうが下まで垂れて足が地面に届かない
 const HIP_T = 0.74;
 const ANKLE_T = 0.95;
+// 歩くとき脚を振る軸。ここから足裏までの長さが振り子の腕になり、
+// 歩幅も歩調も速さも全部そこから決まるので、位置がそのまま歩き方になる。
+// 羽毛の出口(0.86)に置くと腕が短すぎて、8cmの歩幅で小刻みに震える
+// ことになった。実際の股関節はもっと体の奥にある
+const HIP_PIVOT_T = 0.78;
+// 振りの配分。軸のところで一点に折らず、羽毛から出るまでに配る。
+// 跗蹠のローカル座標(0=根元 1=足首の先)で、軸が 0.14、出口が 0.55
+const HIP_FROM = 0.14, HIP_TO = 0.55;
 // 3本の前趾。開き(ラジアン、外向きが正)と長さの比。
 // 中趾がいちばん長く、内趾がいちばん短い。3本を同じ長さにすると
 // 蹼の後縁が円弧になって、鳥の足ではなく団扇になる
@@ -325,8 +333,14 @@ function buildLeg(kind, geom) {
   const drop = yAnkle - hug(1);
   const yAxis = (w) => hug(w) + drop * w * w * w;
 
+  const zPivot = zAt(HIP_PIVOT_T);
+  const wPivot = (HIP_PIVOT_T - HIP_T) / (ANKLE_T - HIP_T);
+
+  // 左右は別の部位番号にする(6=左 7=右)。歩くときは片脚ずつ別々に
+  // 動かすので、シェーダがどちらの脚かを知らないと話にならない
   for (const side of [-1, 1]) {
     const x0 = side * legX;
+    const partId = side > 0 ? 7 : 6;
 
     // --- 跗蹠 + 足首の球 ---
     // t の前半で棒、後半で足首を中心とした半球を閉じる
@@ -344,7 +358,7 @@ function buildLeg(kind, geom) {
         r = rAnkle * Math.cos(b);
       }
       return [cx + Math.sin(a) * r, cy + Math.cos(a) * r * 0.94, cz];
-    }, (t, s) => [t, s], 6, 0));
+    }, (t, s) => [t, s], partId, 0));
 
     // --- 足: 3本の前趾と蹼 ---
     // 薄い膜を1枚張ると紙細工に見えるので、閉じた薄い立体にして、
@@ -381,9 +395,9 @@ function buildLeg(kind, geom) {
         yFoot + th + claw * TOE_R * 0.45,
         zAnkle - Math.cos(ang) * e,
       ];
-    }, (t, q) => [t, q <= 0.5 ? q * 2 : (1 - q) * 2], 6, 1));
+    }, (t, q) => [t, q <= 0.5 ? q * 2 : (1 - q) * 2], partId, 1));
   }
-  return { parts, zAnkle, yAnkle };
+  return { parts, zAnkle, yAnkle, zPivot, yPivot: yAxis(wPivot) };
 }
 
 /**
@@ -485,8 +499,9 @@ export function buildPenguinGeometry(kind) {
     (s(Y_PROFILE, TAIL_PIVOT_T) + s(H_PROFILE, TAIL_PIVOT_T) * 0.30) * H,
     zAt(TAIL_PIVOT_T), TAIL_FROM, TAIL_TO
   );
-  // 足首(y, z)。陸ではここを軸に足を前へ倒して、体を支える板にする
-  geo.userData.footPivot = new THREE.Vector2(leg.yAnkle, leg.zAnkle);
+  // 足首(y, z)と、歩くとき脚を振る軸(y, z)。1本のベクトルにまとめて渡す
+  geo.userData.footPivot = new THREE.Vector4(
+    leg.yAnkle, leg.zAnkle, leg.yPivot, leg.zPivot);
   Object.assign(geo.userData, solveStand(dst, geo.userData, kind));
   geo.userData.length = kind.total;
   return geo;
@@ -505,6 +520,8 @@ export function buildPenguinGeometry(kind) {
  *   standDrop  体の原点から足裏までの深さ。甲板からの浮かせ量そのもの
  *   standHalfW 接地点の左右の広がり。よちよち歩きで傾けたときの補正に使う
  *   standFwd   接地点が体の真下からどれだけ前にあるか
+ *   hipDrop    体の原点から脚を振る軸まで
+ *   legReach   その軸から足裏まで。歩幅と歩調はこの長さで決まる
  *   standClear 足裏より上に残った余裕(負なら何かが甲板を突き抜けている)
  */
 function solveStand(dst, ud, kind) {
@@ -533,7 +550,7 @@ function solveStand(dst, ud, kind) {
       // 足首を軸に前へ倒す
       const dy = y - fp.x, dz = z - fp.y;
       sole.push([Math.abs(x), fp.x + dy * fc - dz * fs, fp.y + dy * fs + dz * fc]);
-    } else if (part < 0.5 || Math.abs(part - 1) < 0.5) {
+    } else if (part < 0.5 || Math.abs(part - 1) < 0.5) {   // 胴と尾
       const u = dst.uv[i * 2];
       const e = Math.min(Math.max((u - tp.z) / (tp.w - tp.z), 0), 1);
       bendable.push([y, z, e * e * (3 - 2 * e)]);
@@ -553,6 +570,10 @@ function solveStand(dst, ud, kind) {
     nContact++;
   }
   if (nContact) standFwd /= nContact;
+  // 歩きの寸法。振り子の腕の長さは「脚を振る軸から足裏まで」で、
+  // 歩幅も歩調も速さも、ぜんぶここから出る(→ penguinFlock の gait)
+  const hipDrop = depth(fp.z, fp.w);
+  const legReach = standDrop - hipDrop;
 
   // 尾を少しずつ曲げて、足裏より下に残るものが無くなる角度を探す。
   // 曲げ足りないと尾が甲板に刺さり、曲げすぎると尾が背中へ跳ね上がる。
@@ -573,5 +594,5 @@ function solveStand(dst, ud, kind) {
   }
   // 動かないものも含めた本当の余裕。負なら甲板を突き抜けている
   for (const [y, z] of fixed) standClear = Math.min(standClear, standDrop - depth(y, z));
-  return { standBend, standDrop, standHalfW, standFwd, standClear };
+  return { standBend, standDrop, standHalfW, standFwd, standClear, hipDrop, legReach };
 }

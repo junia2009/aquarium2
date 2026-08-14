@@ -20,7 +20,7 @@ uniform float uVertAxis;   // 0=左右うねり(魚類) 1=上下うねり(クジ
 uniform float uWing;       // 1=ペンギンの羽ばたき(翼を肩から振る)
 uniform vec4 uWingRoot;    // 翼の付け根(|x|, y, z) と w=翼の張り出し
 uniform vec2 uNeckPivot;   // 首の付け根(y, z)。頭はここを軸に前へ倒れる
-uniform vec2 uFootPivot;   // 足首(y, z)。陸では足をここから前へ倒す
+uniform vec4 uFootPivot;   // 足首(y, z) と 脚を振る軸(y, z)
 uniform vec4 uTailPivot;   // 尾の付け根(y, z) と 曲げの配分(始まり, 終わり)
 attribute vec2 aBodyUV;
 attribute float aPart;
@@ -31,8 +31,11 @@ attribute vec4 aInfo;      // x:位相 y:速度倍率 z:サイズ w:色ゆらぎ
 // ペンギンの姿勢。泳ぎ以外の格好はここで作る
 //   x: 翼の上下オフセット / y: 翼の後退(体側へ畳む) / z: 首の前傾 / w: 足の前倒し
 attribute vec4 aPose;
-// 関節がひとつ増えて vec4 に収まらなくなったぶん
+// 関節が増えて vec4 に収まらなくなったぶん
 //   x: 尾の曲げ(立つとき後ろへ蹴り出す)
+//   y: 左脚の振り / z: 右脚の振り(正 = 足が後ろ)
+//   w: 遊脚の縮み。同時に遊ぶ脚は無いので、符号でどちらかを表す
+//      (正 = 右脚が遊脚)
 attribute vec4 aPose2;
 #endif
 varying vec2 vBodyUV;
@@ -74,6 +77,7 @@ void main() {
   float neckBend = 0.0;    // 首の前傾
   float footSwing = 0.0;   // 足の前倒し。陸では足裏を前へ向けて体を支える
   float tailBend = 0.0;    // 尾の蹴り出し。立つとき後ろへ曲げて足を接地させる
+  vec3 gait = vec3(0.0);   // 左脚の振り / 右脚の振り / 遊脚の縮み
   float bodyPhase = phase;
   float bodySpd = spd;
   if (uWing > 0.5) {
@@ -85,15 +89,24 @@ void main() {
     neckBend = aPose.z;
     footSwing = aPose.w;
     tailBend = aPose2.x;
+    gait = aPose2.yzw;
 #endif
     bodyPhase = tint * 6.2831853;
     bodySpd = 1.0;
   }
 
   vec3 p = position;
+  // 個体ごとの体格差。関節の軸もいっしょに拡げないと、大きい個体ほど
+  // 軸が体の内側にずれて、回すたびに脚や首が本来と違う場所へ動く
+  float sc = 1.0;
 #ifdef USE_INSTANCING
-  p *= aInfo.z; // 個体ごとの体格差
+  sc = aInfo.z;
+  p *= sc;
 #endif
+  vec4 wingRoot = vec4(uWingRoot.xyz * sc, uWingRoot.w * sc);
+  vec2 neckPivot = uNeckPivot * sc;
+  vec4 footPivot = uFootPivot * sc;
+  vec2 tailPivot = uTailPivot.xy * sc;
   vec3 n = normal;
   float t = clamp(aBodyUV.x, 0.0, 1.3); // 尾びれは1超
   float w = uTime * uSwimFreq * bodySpd + bodyPhase;
@@ -127,14 +140,14 @@ void main() {
       float beat = sin(wingPhase);
       // 肩へ移してから体軸(Z)まわりに回す。左右で符号を変えると
       // 両翼の先が同時に上がる
-      vec3 root = vec3(uWingRoot.x * side, uWingRoot.y, uWingRoot.z);
+      vec3 root = vec3(wingRoot.x * side, wingRoot.y, wingRoot.z);
       vec3 d = p - root;
       // 付け根の何割まで来たか。翼の内端は体の中に埋まっているので、
       // そこまで一様に回すと、振り上げた瞬間に埋まっていた部分が
       // 脇腹を突き破って白い線になって現れる(実際そうなった)。
       // 肩に近いほど回転を殺せば、埋没部は動かず外だけが振れる——
       // 肩の皮膚が付いていかないのは生き物でも同じ
-      float span = clamp(abs(d.x) / max(uWingRoot.w, 1e-3), 0.0, 1.0);
+      float span = clamp(abs(d.x) / max(wingRoot.w, 1e-3), 0.0, 1.0);
       float ramp = smoothstep(0.0, 0.24, span);
       // 振幅0は「翼を左右に伸ばしたまま」。滑空はこの姿勢になる
       float ang = (beat * 0.52 * wingAmp + wingLift) * ramp;
@@ -154,7 +167,7 @@ void main() {
       // 畳んだ翼は体側に「乗る」。肩を軸に回すだけだと、
       // 翼が体の正中線へ寄って胴の中に沈み、消えてしまう。
       // 畳んだぶんだけ外へ逃がして、脇腹に沿わせる
-      r.x += side * uWingRoot.x * 0.85 * abs(sin(sw));
+      r.x += side * wingRoot.x * 0.85 * abs(sin(sw));
       p = root + r;
       // 法線も同じだけ回す
       n = vec3(n.x * c - n.y * sn, n.x * sn + n.y * c, n.z);
@@ -183,7 +196,7 @@ void main() {
     // 胴と同じ配分にすると、頭だけ倒れて嘴が置いていかれる
     float wgt = aPart > 4.5 ? 1.0 : smoothstep(0.36, 0.05, aBodyUV.x);
     float na = neckBend * wgt;
-    vec3 pv = vec3(0.0, uNeckPivot.x, uNeckPivot.y);
+    vec3 pv = vec3(0.0, neckPivot.x, neckPivot.y);
     vec3 dn = p - pv;
     float nc = cos(na), ns = sin(na);
     p = pv + vec3(dn.x, dn.y * nc - dn.z * ns, dn.y * ns + dn.z * nc);
@@ -201,26 +214,64 @@ void main() {
     // 折り目が立って、尾を差し込んだように見える
     float twg = smoothstep(uTailPivot.z, uTailPivot.w, aBodyUV.x);
     float ta = tailBend * twg;
-    vec3 tv = vec3(0.0, uTailPivot.x, uTailPivot.y);
+    vec3 tv = vec3(0.0, tailPivot.x, tailPivot.y);
     vec3 dt = p - tv;
     float tcc = cos(ta), tss = sin(ta);
     p = tv + vec3(dt.x, dt.y * tcc - dt.z * tss, dt.y * tss + dt.z * tcc);
     n = vec3(n.x, n.y * tcc - n.z * tss, n.y * tss + n.z * tcc);
   }
 
-  // ---- 足を前へ倒す ----
-  // 泳ぐときは跗蹠ごと尾のうしろへ伸ばして舵にしているが、陸ではこれを
-  // 足首で前へ倒し、足裏を地面に向けて体を支える板にする。
-  // 倒さないまま立たせると、体の真下に細い棒が刺さっているだけになり、
-  // どう見ても自立していない。
-  // 回るのは足首から先(aHeight=1)だけ。跗蹠は体に固定されている——
-  // ここを一緒に回すと、脚ごと前へ跳ね上がって膝が逆に折れる
-  if (uWing > 0.5 && aPart > 5.5 && aHeight > 0.5 && abs(footSwing) > 0.002) {
-    vec3 fp = vec3(0.0, uFootPivot.x, uFootPivot.y);
-    vec3 df = p - fp;
-    float fc = cos(footSwing), fs = sin(footSwing);
-    p = fp + vec3(df.x, df.y * fc - df.z * fs, df.y * fs + df.z * fc);
-    n = vec3(n.x, n.y * fc - n.z * fs, n.y * fs + n.z * fc);
+  // ---- 脚 ----
+  // 泳ぐときは跗蹠ごと尾のうしろへ伸ばして舵にしている。陸では
+  //   ・足首で足を前へ倒し、足裏を地面に向けた板にする(立ち姿)
+  //   ・脚の付け根で前後に振る(歩き)。左右は別々に動く
+  // の2つが要る。倒さないまま立たせると体の真下に細い棒が刺さって
+  // いるだけになり、振らないまま歩かせると氷の上を滑るだけになる。
+  //
+  // 順番が大事で、足首 → 跗蹠の縮み → 付け根、の順に掛ける。
+  // 逆にすると足裏が地面に対して傾く。
+  if (uWing > 0.5 && aPart > 5.5) {
+    bool isR = aPart > 6.5;                       // 6=左 7=右
+    float hip = isR ? gait.y : gait.x;
+    // 遊脚の縮み。1 なら伸びきっている
+    float shrink = 1.0 - max(isR ? gait.z : -gait.z, 0.0);
+    if (abs(footSwing) > 0.002 || abs(hip) > 0.002 || shrink < 0.999) {
+      vec2 ap = footPivot.xy;                    // 足首
+      vec2 hp = footPivot.zw;                    // 脚を振る軸
+      // 付け根より上(羽毛の下)は動かさない。一点で折ると
+      // 腹から棒が突き出したように見える
+      float wg = aHeight > 0.5 ? 1.0
+               : smoothstep(0.14, 0.55, aBodyUV.x);
+      if (aHeight > 0.5) {
+        // 足首から先。付け根で回したぶんを引くと、脚をどこまで振っても
+        // 足裏は地面と平行のままになる。遊脚では趾を上げる
+        float a = footSwing - hip + (1.0 - shrink) * 3.0;
+        vec2 d = p.yz - ap;
+        float c = cos(a), s2 = sin(a);
+        p.y = ap.x + d.x * c - d.y * s2;
+        p.z = ap.y + d.x * s2 + d.y * c;
+        vec2 dn = vec2(n.y, n.z);
+        n.y = dn.x * c - dn.y * s2;
+        n.z = dn.x * s2 + dn.y * c;
+        // 跗蹠が縮んだぶん、足も一緒に持ち上がる
+        p.yz += (ap - hp) * (shrink - 1.0);
+      } else {
+        // 跗蹠を軸方向へ縮める。実際は膝が折れているのだが、
+        // 縮めるだけでも遊脚が地面を擦らなくなる
+        p.yz = hp + (p.yz - hp) * mix(1.0, shrink, wg);
+      }
+      // 脚ぜんたいを付け根まわりに振る
+      float ha = hip * wg;
+      if (abs(ha) > 0.0005) {
+        vec2 d2 = p.yz - hp;
+        float hc = cos(ha), hs = sin(ha);
+        p.y = hp.x + d2.x * hc - d2.y * hs;
+        p.z = hp.y + d2.x * hs + d2.y * hc;
+        vec2 dn2 = vec2(n.y, n.z);
+        n.y = dn2.x * hc - dn2.y * hs;
+        n.z = dn2.x * hs + dn2.y * hc;
+      }
+    }
   }
 
   vec4 wp = modelMatrix
@@ -647,7 +698,7 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, float
     // 鳥の脚は鱗に覆われている。ここをのっぺり塗ると樹脂の棒になり、
     // せっかく脚を生やしても鳥に見えない。鱗の目と爪でそれらしくする。
     //   hgt = 0 : 跗蹠(裸出した脛の先)  hgt = 1 : 足(3本の趾と蹼)
-    else if (abs(part - 6.0) < 0.1) {
+    else if (part > 5.5) {
       vec3 foot = vec3(0.075, 0.070, 0.075);                     // キング: 黒
       if (uSpecies > 0.5 && uSpecies < 1.5) foot = vec3(0.95, 0.22, 0.03);  // ジェンツー: 橙
       else if (uSpecies > 1.5) foot = vec3(0.70, 0.47, 0.44);    // アデリー・ヒゲ: 肉色
@@ -817,7 +868,7 @@ export function createFishMaterial({ pattern, len, swim, vertAxis = 0, wing = nu
       uWing: { value: wing ? 1 : 0 },
       uWingRoot: { value: wing ? wing.clone() : new THREE.Vector4() },
       uNeckPivot: { value: neck ? neck.clone() : new THREE.Vector2() },
-      uFootPivot: { value: foot ? foot.clone() : new THREE.Vector2() },
+      uFootPivot: { value: foot ? foot.clone() : new THREE.Vector4() },
       uTailPivot: { value: tail ? tail.clone() : new THREE.Vector4() },
       uSpecies: { value: species },
     },
