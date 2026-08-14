@@ -83,6 +83,16 @@ export const PENGUIN_KINDS = {
     dive: 26,
     // 息継ぎのとき氷へ跳び乗る割合。大きく重い種ほど跳び乗りにくい
     haulOutChance: 0.16,
+    // --- 習性 ---
+    // キングは深海性。海底近くまで潜って長く留まり、群れはばらける。
+    // 息継ぎは静かに浮上するだけで、ポーポイジングはあまりしない
+    depth: [0.12, 0.62],      // 遊泳層(0=海底 1=水面)
+    cohesion: 0.55,           // 群れの密度
+    hoverChance: 0.34,        // 立ち止まって漂う割合
+    hoverTime: [3.5, 7.0],
+    arcs: [1, 2],             // ポーポイジングの弧の本数
+    standTime: [7, 14],       // 氷の上にいる時間
+    turnRate: 1.8,            // 旋回の鋭さ
   },
   gentoo: {
     key: 'gentoo', species: 1, name: 'ジェンツーペンギン',
@@ -93,6 +103,15 @@ export const PENGUIN_KINDS = {
     speed: 3.1,       // 現生のペンギンでいちばん速い
     dive: 20,
     haulOutChance: 0.30,
+    // ジェンツーは最速。浅い層を鋭く曲がりながら走り、
+    // 息継ぎは連続したポーポイジングで済ませる。立ち止まることは少ない
+    depth: [0.40, 0.92],
+    cohesion: 1.0,
+    hoverChance: 0.10,
+    hoverTime: [2.0, 3.5],
+    arcs: [4, 8],
+    standTime: [8, 15],
+    turnRate: 3.4,
   },
   adelie: {
     key: 'adelie', species: 2, name: 'アデリーペンギン',
@@ -104,6 +123,15 @@ export const PENGUIN_KINDS = {
     speed: 2.6,
     dive: 17,
     haulOutChance: 0.42,   // 氷の上でいちばんよく見かける種
+    // アデリーは群れがいちばん密。ひとかたまりで動き、
+    // 氷へもよく上がって長く立っている
+    depth: [0.45, 0.95],
+    cohesion: 2.1,
+    hoverChance: 0.20,
+    hoverTime: [2.5, 5.0],
+    arcs: [3, 6],
+    standTime: [16, 28],
+    turnRate: 2.8,
   },
   chinstrap: {
     key: 'chinstrap', species: 3, name: 'ヒゲペンギン',
@@ -114,6 +142,14 @@ export const PENGUIN_KINDS = {
     speed: 2.7,
     dive: 18,
     haulOutChance: 0.36,
+    // ヒゲはよく漂う。水中で立ち止まってあたりを見回す時間が長い
+    depth: [0.38, 0.90],
+    cohesion: 1.2,
+    hoverChance: 0.30,
+    hoverTime: [3.0, 6.0],
+    arcs: [3, 5],
+    standTime: [12, 22],
+    turnRate: 3.0,
   },
 };
 
@@ -288,6 +324,19 @@ export function buildPenguinGeometry(kind) {
     zNose - WING_AT * bodyLen,
     kind.flipper.width * bodyLen
   );
+  // 首の付け根(y, z)。シェーダはここを軸に頭だけを前へ倒す。
+  // 体型プロファイルのくびれ(t=0.2)と必ず同じ位置にすること
+  // 軸を体の中心に置くと、曲げたとき喉がつぶれて背が伸びる。
+  // 実際の頸椎は背側を通っているので、軸も項(うなじ)寄りに置く
+  const NECK_T = 0.22;
+  geo.userData.neckPivot = new THREE.Vector2(
+    (s(Y_PROFILE, NECK_T) + s(H_PROFILE, NECK_T) * 0.45) * H,
+    zNose - NECK_T * bodyLen
+  );
+  // 立たせたときに甲板へ触れるのは尾の先。目分量の式で出すと必ず
+  // 埋まるか浮くので、境界箱から実測する
+  geo.computeBoundingBox();
+  geo.userData.tailDrop = -geo.boundingBox.min.z;
   geo.userData.length = kind.total;
   return geo;
 }

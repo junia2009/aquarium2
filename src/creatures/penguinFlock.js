@@ -190,11 +190,14 @@ export class PenguinFlock {
       len: kind.total,
       species: kind.species,
       wing: geo.userData.wingRoot,
+      neck: geo.userData.neckPivot,
       // 体はほとんど曲げない。翼で進む鳥なので、うねりは硬直を避けるぶんだけ
       swim: { freq: 1.0, amp: 0.008, waveNum: 0.35, headAmp: 0.05, flapFreq: kind.beatFreq * 6.28 },
     });
     this.mesh = new THREE.InstancedMesh(geo, this.mat, count);
     this.mesh.frustumCulled = false;
+    // 尾の先までの距離。立ち姿の高さをこれから出す
+    this.tailDrop = geo.userData.tailDrop;
 
     // aInfo は羽ばたき用に意味が変わる:
     //   x = 羽ばたきの位相(CPUが積分する) / y = 振幅(0で滑空)
@@ -208,6 +211,11 @@ export class PenguinFlock {
     }
     this.infoAttr = new THREE.InstancedBufferAttribute(this.info, 4);
     geo.setAttribute('aInfo', this.infoAttr);
+    // 姿勢。翼を畳む・首を曲げるといった「泳ぎ以外の格好」はここで作る。
+    // 行列だけでは体が一本の棒のままなので、立ち姿も入水も作れない
+    this.pose = new Float32Array(count * 4);
+    this.poseAttr = new THREE.InstancedBufferAttribute(this.pose, 4);
+    geo.setAttribute('aPose', this.poseAttr);
     parent.add(this.mesh);
 
     this.members = [];
@@ -242,6 +250,13 @@ export class PenguinFlock {
         rest: 0,
         curiousT: 0,
         curX: 0, curY: 0, curZ: 0,
+        // --- 姿勢(シェーダへ渡す) ---
+        wingLift: 0,      // 翼の上下オフセット
+        wingSweep: 0,     // 翼を体側へ畳む量
+        neck: 0,          // 首の前傾
+        // --- 立ち止まり ---
+        hoverT: 0,
+        scull: 0,         // 漕ぎの位相
       });
     }
   }
@@ -271,7 +286,9 @@ export class PenguinFlock {
   curiousAlongRay(ray, slack = 1.0) {
     let best = null, bestT = 1e9;
     for (const m of this.members) {
-      if (m.state !== 'swim') continue;
+      // 泳いでいる個体でも、立ち止まって漂っている個体でも寄ってくる。
+      // むしろ漂っているときのほうが気づきやすい
+      if (m.state !== 'swim' && m.state !== 'hover') continue;
       // 体を回転楕円体とみなして視線との交差を解く。
       // 「視線にいちばん近い個体」を選ぶと、はるか後ろの1羽が
       // 手前の1羽を差し置いて選ばれることがある
@@ -290,8 +307,12 @@ export class PenguinFlock {
     const py = ray.origin.y + ray.direction.y * 1.4;
     const pz = ray.origin.z + ray.direction.z * 1.4;
     for (const m of this.members) {
-      if (m.state !== 'swim') continue;
+      if (m.state !== 'swim' && m.state !== 'hover') continue;
       if (m !== best && m.pos.distanceTo(best.pos) > 6) continue;
+      // 漂っていた個体は泳ぎに戻ってから寄ってくる
+      m.state = 'swim';
+      m.stroking = true;
+      m.phaseT = 1.4;
       m.curiousT = 5.5 + Math.random() * 3.5;
       m.curX = px + (Math.random() - 0.5) * 2.2;
       m.curY = py + (Math.random() - 0.5) * 1.4;
@@ -330,7 +351,8 @@ export class PenguinFlock {
     m.target = best;
     m.aimX = best ? best.x : m.pos.x;
     m.aimZ = best ? best.z : m.pos.z;
-    m.arcs = 2 + Math.floor(Math.random() * 4);
+    m.arcs = this.kind.arcs[0]
+           + Math.floor(Math.random() * (this.kind.arcs[1] - this.kind.arcs[0] + 1));
     m.state = 'approach';
   }
 
@@ -374,8 +396,26 @@ export class PenguinFlock {
         m.phaseT = m.stroking
           ? 1.2 + Math.random() * 1.6      // 打つ
           : 1.1 + Math.random() * 2.2;     // 滑る
+        // 滑りに入るとき、ときどきそのまま止まる。
+        // ペンギンは常に泳いでいるわけではなく、水中で立ち止まって
+        // あたりを見回している時間がかなりある。ここが無いと、
+        // 何かに追われているように延々と走り続けることになる
+        if (!m.stroking && m.state === 'swim' && m.curiousT <= 0
+            && Math.random() < k.hoverChance) {
+          m.state = 'hover';
+          m.hoverT = k.hoverTime[0] + Math.random() * (k.hoverTime[1] - k.hoverTime[0]);
+          m.scull = 0;
+        }
       }
       let target = m.stroking ? cruise * 1.60 : cruise * 0.42;
+      if (m.state === 'hover') {
+        // ほぼ静止。前へ進むためではなく、その場に留まるために漕ぐ。
+        // 翼は小刻みに速く、振幅は小さい(前進の羽ばたきとは別の動き)
+        m.hoverT -= dt;
+        target = cruise * 0.10;
+        m.scull += dt;
+        if (m.hoverT <= 0) { m.state = 'swim'; m.stroking = true; m.phaseT = 1.2; }
+      }
       // 打ち出しは速く、惰性の減速はやや遅い(推力が消えて抵抗だけになる)。
       // ここを近づけすぎると速度がほぼ一定になり、翼をいくら動かしても
       // 「進んでいる」ように見えない——最初がまさにそれだった
@@ -393,14 +433,24 @@ export class PenguinFlock {
       // 打つ速さは出したい推力で決まる。速く泳ぐほど速く打つ。
       // 位相は積分する(時間×周波数だと、速さを変えた瞬間に翼が飛ぶ)
       const effort = THREE.MathUtils.clamp((m.speed - cruise * 0.5) / cruise, 0, 1.6);
-      const rateHz = k.beatFreq * (0.55 + 0.75 * effort);
+      const rateHz = m.state === 'hover'
+        ? k.beatFreq * 1.45        // 漕ぎは速く小さく
+        : k.beatFreq * (0.55 + 0.75 * effort);
       m.wingPhase += rateHz * Math.PI * 2 * dt;
       if (m.wingPhase > Math.PI * 2) m.wingPhase -= Math.PI * 2;
       // 滑空では翼を左右に伸ばしたまま止める。振幅を0へ落とすと
       // その姿勢になる。ただし打つのをやめた瞬間に止めるのではなく、
       // 振り切ってから静かに畳む
-      const wantAmp = m.stroking ? 1 : 0.06;
+      const wantAmp = m.state === 'hover' ? 0.30 : m.stroking ? 1 : 0.06;
       m.wingAmp += (wantAmp - m.wingAmp) * (1 - Math.exp(-(m.stroking ? 7 : 3.6) * dt));
+      // 水中の姿勢。泳いでいるときは翼を横へ張り、首はまっすぐ。
+      // 立ち止まっているときだけ首を少し上げてあたりを見る
+      const wantSweep = m.state === 'hover' ? 0.22 : 0.0;
+      const wantNeck = m.state === 'hover'
+        ? -0.20 + 0.28 * Math.sin(m.scull * 1.1 + m.seed)   // 見回す
+        : 0.0;
+      m.wingSweep += (wantSweep - m.wingSweep) * (1 - Math.exp(-3 * dt));
+      m.neck += (wantNeck - m.neck) * (1 - Math.exp(-2.6 * dt));
 
       // ---- 針路 ----
       let turn;
@@ -424,15 +474,18 @@ export class PenguinFlock {
         turn = diff * 2.6;
       } else {
         // 群れの中心へゆるく寄りつつ、氷の下を蛇行する
-        turn = wander1(t * 0.22 + m.seed * 3, m.seed) * 1.5;
+        turn = wander1(t * 0.22 + m.seed * 3, m.seed) * (0.5 + k.turnRate * 0.4);
+        // 群れの結束。アデリーはひとかたまりで動き、キングはばらける。
+        // 中心へ向かう力の強さがそのまま「群れの見え方」になる
         const dx = m.pos.x - this.center.x, dz = m.pos.z - this.center.z;
         const r = Math.hypot(dx, dz);
-        if (r > this.radius) {
+        const hold = this.radius * (0.35 + 0.55 / Math.max(k.cohesion, 0.3));
+        if (r > hold) {
           const toIn = Math.atan2(-dx, -dz);
           let diff = toIn - m.heading;
           while (diff > Math.PI) diff -= Math.PI * 2;
           while (diff < -Math.PI) diff += Math.PI * 2;
-          turn += diff * 1.4;
+          turn += diff * (0.7 + k.cohesion * 0.6);
         }
       }
       // 仲間との近接回避
@@ -450,16 +503,24 @@ export class PenguinFlock {
           turn += diff * (1 - Math.sqrt(d2) / near) * 2.2;
         }
       }
-      m.heading += THREE.MathUtils.clamp(turn, -2.6, 2.6) * dt;
+      m.heading += THREE.MathUtils.clamp(turn, -k.turnRate, k.turnRate) * dt;
       // 翼で進む生き物は、曲がるとき体ごと大きく傾ける。
       // 舵で曲がる魚と違い、傾けた翼の揚力そのもので曲がるため
       const wantBank = THREE.MathUtils.clamp(-turn * 0.55, -1.0, 1.0);
       m.bank += (wantBank - m.bank) * (1 - Math.exp(-4 * dt));
 
       // ---- 深さ ----
-      let targetY = this.center.y + wander1(t * 0.10 + m.seed, m.seed) * 4.0;
-      if (m.curiousT > 0) targetY = m.curY;
       const floor = sandHeight(m.pos.x, m.pos.z) + m.body + 0.6;
+      // 遊泳層は種ごと。キングは海底近くまで潜って長く留まり、
+      // ジェンツーとアデリーは浅い層を走る。同じ水槽の別の高さで
+      // 暮らしているように見せる
+      const bandLo = floor + (surf - floor) * k.depth[0];
+      const bandHi = floor + (surf - floor) * k.depth[1];
+      let targetY = bandLo + (bandHi - bandLo)
+                  * (0.5 + 0.5 * wander1(t * 0.10 + m.seed, m.seed));
+      if (m.curiousT > 0) targetY = m.curY;
+      // 立ち止まっているあいだは深さを変えない
+      if (m.state === 'hover') targetY = m.pos.y + Math.sin(m.scull * 1.7) * 0.04;
       // 頭上を塞いでいるのは氷だけ。水面は壁ではない。
       // ここを一律に「水面まで」で止めると、跳ぶための上向きの速度が
       // 作れず、いつまでも水面下をなぞるだけになる(実際そうなった)
@@ -514,7 +575,7 @@ export class PenguinFlock {
       // ---- 気泡の尾 ----
       // 羽毛の空気は、加速したときと深いところで押し出される。
       // 漂っているときに出しっぱなしにすると、ただの泡発生装置になる
-      if (this.bubbles) {
+      if (this.bubbles && m.state !== 'hover') {
         const depth = Math.max(WORLD.surfaceY - m.pos.y, 0);
         const push = THREE.MathUtils.clamp((m.speed - cruise * 0.9) / (cruise * 0.6), 0, 1);
         const rateB = push * (0.8 + depth * 0.16) * 62;
@@ -537,6 +598,7 @@ export class PenguinFlock {
     }
     this.mesh.instanceMatrix.needsUpdate = true;
     this.infoAttr.needsUpdate = true;
+    this.poseAttr.needsUpdate = true;
     if (this.bubbles) this.bubbles.flush();
   }
 
@@ -596,59 +658,153 @@ export class PenguinFlock {
       m.pitch = Math.atan2(m.vel.y, Math.hypot(m.vel.x, m.vel.z));
       m.bank += (0 - m.bank) * (1 - Math.exp(-5 * dt));
 
+      // 空中では翼を後ろへ引きつけ、体をまっすぐ伸ばす。
+      // 左右に広げたままだと、飛んでいるのではなく落ちている絵になる
+      m.wingSweep += (1.15 - m.wingSweep) * (1 - Math.exp(-9 * dt));
+      m.neck += (0 - m.neck) * (1 - Math.exp(-8 * dt));
+
       const deck = this.iceField ? this.iceField.deck(m.pos.x, m.pos.z) : -1e4;
-      // 氷の上へ落ちてきたら着地。腹から滑り込む(トボガン)
+      // 氷の上へ着地。跳び乗った勢いで少し滑ってから立ち上がる
       if (m.plan === 'haulOut' && deck > -100 && m.pos.y <= deck + m.body && m.vel.y < 0) {
         m.pos.y = deck + m.body * 0.55;
         m.state = 'onIce';
+        m.iceStage = 'land';
         m.slide = Math.hypot(m.vel.x, m.vel.z);
-        m.rest = 5 + Math.random() * 8;
+        m.rest = this.kind.standTime[0]
+               + Math.random() * (this.kind.standTime[1] - this.kind.standTime[0]);
         m.breath = this.kind.dive * (0.8 + Math.random() * 0.4);
         m.wingAmp = 0;
-        m.pitch = 0;
         return this.poseAt(m, i);
       }
       // 水へ戻る
       if (m.pos.y <= surf && m.vel.y < 0) {
         m.pos.y = surf;
-        if (this.splash) this.splash.burst(_v.copy(m.pos), U.uTime.value, 0.5);
+        // 頭から入る入水は水を切って入るので、しぶきは小さい。
+        // 腹から落ちたときだけ派手になる
+        const nose = -m.pitch;   // 0.8rad ほどで頭から
+        if (this.splash) {
+          this.splash.burst(_v.copy(m.pos), U.uTime.value,
+                            nose > 0.6 ? 0.26 : 0.5);
+        }
         m.speed = Math.hypot(m.vel.x, m.vel.z) * 0.85;
         m.arcs = (m.arcs || 0) - 1;
         if (m.plan === 'porpoise' && m.arcs > 0) {
           // まだ弧を続ける。水面すれすれを走り、すぐまた跳ぶ
           m.state = 'approach';
-          m.aimX = m.pos.x + Math.sin(m.heading) * 6;
-          m.aimZ = m.pos.z + Math.cos(m.heading) * 6;
+          m.aimX = m.pos.x + Math.sin(m.heading) * 5;
+          m.aimZ = m.pos.z + Math.cos(m.heading) * 5;
         } else {
           m.state = 'swim';
           m.breath = this.kind.dive * (0.8 + Math.random() * 0.4);
         }
         m.wingAmp = 1;
+        m.wingSweep = 0;
       }
       return this.poseAt(m, i);
     }
 
-    // ---- 氷の上 ----
-    // 跳び乗った勢いで腹這いのまま滑り、止まってしばらく休む。
-    // 立ち姿にはしない。この体は首が曲がらない一本の紡錘形なので、
-    // 直立させると嘴が真上を向いてしまう。腹で滑るのは実際の行動でもある
-    m.slide *= Math.exp(-1.9 * dt);
-    if (m.slide > 0.05) {
+    // ================= 氷の上 =================
+    // 跳び乗ってから水へ戻るまでを3段に分ける。
+    //   land  : 着地の勢いで腹這いのまま滑る
+    //   stand : 立ち上がってあたりを見る(氷上のペンギンの本来の姿)
+    //   edge  : 縁へ歩き、体を前へ折って頭から入水する
+    //
+    // 最初は「腹這いのまま滑って、そのまま縁から落ちる」で済ませていた。
+    // 立ち姿を諦めたのは、この体が首の曲がらない紡錘形で、
+    // 直立させると嘴が真上を向いてしまうからだった。
+    // だが順序が逆で、曲がらないなら曲げられるようにすればいい。
+    // 首を曲げられるようにした今、氷の上のペンギンは立っている。
+    const deckAt = (x, z) => Math.max(this.iceField ? this.iceField.deck(x, z) : surf, surf);
+    // 立ち姿での体の中心の高さ。尾と脚が甲板に触れるところから逆算する
+    const standPitch = 1.30;                       // 75度。やや後ろへ反って立つ
+    const lift = this.tailDrop * Math.sin(standPitch) + 0.02;
+
+    if (m.iceStage === 'land') {
+      m.slide *= Math.exp(-2.6 * dt);
       m.pos.x += Math.sin(m.heading) * m.slide * dt;
       m.pos.z += Math.cos(m.heading) * m.slide * dt;
-      const deck = this.iceField ? this.iceField.deck(m.pos.x, m.pos.z) : surf;
-      m.pos.y = Math.max(deck, surf) + m.body * 0.55;
+      m.pos.y = deckAt(m.pos.x, m.pos.z) + m.body * 0.55;
+      m.pitch += (0 - m.pitch) * (1 - Math.exp(-6 * dt));
+      m.wingSweep += (0.6 - m.wingSweep) * (1 - Math.exp(-5 * dt));
+      if (m.slide < 0.25) { m.iceStage = 'stand'; m.lookT = 0; }
+      return this.poseAt(m, i);
     }
-    m.rest -= dt;
-    if (m.rest <= 0) {
-      // 縁へ向かって滑り出し、そのまま水へ落ちる
-      m.state = 'air';
-      m.plan = 'porpoise';
-      m.arcs = 0;
-      m.heading = Math.atan2(m.target.fromX - m.pos.x, m.target.fromZ - m.pos.z);
-      const v = 2.2 + Math.random();
-      m.vel.set(Math.sin(m.heading) * v, 0.3, Math.cos(m.heading) * v);
-      m.wingAmp = 0.3;
+
+    if (m.iceStage === 'stand') {
+      // 立ち上がる。翼は体側へ垂れ、首は前へ折れて嘴が水平に近くなる
+      m.pos.y += (deckAt(m.pos.x, m.pos.z) + lift - m.pos.y) * (1 - Math.exp(-4 * dt));
+      m.pitch += (standPitch - m.pitch) * (1 - Math.exp(-3.2 * dt));
+      m.wingSweep += (1.45 - m.wingSweep) * (1 - Math.exp(-3.0 * dt));
+      m.wingAmp += (0 - m.wingAmp) * (1 - Math.exp(-4 * dt));
+      // 首は立ち上がりに合わせて折る。ここを止めると嘴が空を指す
+      m.lookT += dt;
+      const look = 1.16 + 0.26 * Math.sin(m.lookT * 0.9 + m.seed)
+                        + 0.14 * Math.sin(m.lookT * 2.7 + m.seed * 3);
+      m.neck += (look * Math.min(m.lookT / 1.2, 1) - m.neck) * (1 - Math.exp(-4 * dt));
+      // その場でゆっくり向きを変える。棒立ちのままだと置物になる
+      m.heading += Math.sin(m.lookT * 0.42 + m.seed * 2) * 0.5 * dt;
+      m.rest -= dt;
+      if (m.rest <= 0) { m.iceStage = 'edge'; m.edgeT = 0; }
+      return this.poseAt(m, i);
+    }
+
+    // ---- 縁で前へ倒れる ----
+    // 立った姿勢からいきなり弾道へ渡すと、水面を割る1フレームで
+    // 体が +75度 から -30度 までねじれる(イルカのブリーチングで
+    // 踏んだのとまったく同じ失敗)。縁でいったん止まり、
+    // 体を前へ倒しきってから離れる。倒れる動作そのものが入水の初速になる。
+    if (m.iceStage === 'tip') {
+      m.tipT += dt;
+      const e = Math.min(m.tipT / 0.75, 1);
+      const ease = e * e * (3 - 2 * e);
+      m.pitch = standPitch + (-0.75 - standPitch) * ease;
+      m.neck += (0 - m.neck) * (1 - Math.exp(-5 * dt));
+      m.pos.y = (m.lastDeck || surf) + lift * Math.cos(ease * 1.1);
+      // 倒れるにつれて重心が縁の外へ出て、そのまま落ちる
+      m.pos.x += Math.sin(m.heading) * 0.55 * ease * dt;
+      m.pos.z += Math.cos(m.heading) * 0.55 * ease * dt;
+      if (e >= 1) {
+        m.state = 'air';
+        m.plan = 'dive';
+        m.arcs = 0;
+        m.vel.set(Math.sin(m.heading) * 1.5, -0.9, Math.cos(m.heading) * 1.5);
+        m.wingSweep = 1.15;
+        m.wingAmp = 0.2;
+      }
+      return this.poseAt(m, i);
+    }
+
+    // ---- 縁まで歩く ----
+    // 立ったまま、よちよちと縁へ向かう
+    m.edgeT += dt;
+    const tx = m.target ? m.target.fromX : m.pos.x;
+    const tz = m.target ? m.target.fromZ : m.pos.z;
+    const want = Math.atan2(tx - m.pos.x, tz - m.pos.z);
+    let dh = want - m.heading;
+    while (dh > Math.PI) dh -= Math.PI * 2;
+    while (dh < -Math.PI) dh += Math.PI * 2;
+    m.heading += THREE.MathUtils.clamp(dh * 2.4, -2.0, 2.0) * dt;
+    // よちよち歩き。左右に体を振りながら進む
+    const walk = 0.75;
+    m.pos.x += Math.sin(m.heading) * walk * dt;
+    m.pos.z += Math.cos(m.heading) * walk * dt;
+    m.bank = Math.sin(m.edgeT * 5.2) * 0.16;
+    // 甲板の高さ場は格子の外側が大きな負の値なので、縁の1マス手前から
+    // 一気に落ちる。そのまま足元の高さに使うと、飛び込む直前に体が
+    // 30cm沈む。最後に踏んだ甲板の高さを覚えておいて、そこで踏み切る
+    const deckHere = this.iceField ? this.iceField.deck(m.pos.x, m.pos.z) : -1e4;
+    const onDeck = deckHere > surf + 0.05;
+    if (onDeck) m.lastDeck = deckHere;
+    m.pos.y = (m.lastDeck || surf) + lift;
+
+    // 半歩先の足元を見る。縁に着いてから倒れ始めたのでは遅く、
+    // 体が宙に浮いたまま前傾することになる
+    const aheadX = m.pos.x + Math.sin(m.heading) * 0.55;
+    const aheadZ = m.pos.z + Math.cos(m.heading) * 0.55;
+    const brink = !this.iceField || this.iceField.deck(aheadX, aheadZ) <= surf + 0.05;
+    if (!onDeck || brink || m.edgeT > 16) {
+      m.iceStage = 'tip';
+      m.tipT = 0;
     }
     return this.poseAt(m, i);
   }
@@ -671,5 +827,8 @@ export class PenguinFlock {
     this.mesh.setMatrixAt(i, _m);
     this.info[i * 4 + 0] = m.wingPhase;
     this.info[i * 4 + 1] = m.wingAmp;
+    this.pose[i * 4 + 0] = m.wingLift;
+    this.pose[i * 4 + 1] = m.wingSweep;
+    this.pose[i * 4 + 2] = m.neck;
   }
 }

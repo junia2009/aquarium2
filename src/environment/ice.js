@@ -413,9 +413,19 @@ export function createIceCanopy(scene, { seed = 1 } = {}) {
         vec3 col = underwaterLight(albedo, lit, vWorldPos, V, 26.0, 0.22);
         // 雪の結晶のきらめき。一粒ずつは見えないが、無数の面のうち
         // たまたま太陽を返したものが点になって光る
-        float glint = pow(hash12(floor(p * 260.0)), 34.0)
-                    * smoothstep(0.0, 0.3, dot(lit, uSunDir)) * (1.0 - under);
-        col += uSunColor * glint * 3.0 * uSunI;
+        // 雪の結晶のきらめき。
+        // セルの当たり外れだけで出すと、当たったセルが丸ごと光って
+        // 四角い紙吹雪になる(実際そうなった)。セルの中に小さな点を
+        // 置いて、そこだけ光らせる。粒が細かすぎると画素より小さくなって
+        // 砂嵐になるので、1粒は数mm、遠くでは消す
+        vec2 gc = p * 55.0;
+        vec2 gi = floor(gc);
+        vec2 gj = (vec2(hash12(gi + 3.1), hash12(gi + 7.7)) - 0.5) * 0.6;
+        float glint = step(0.962, hash12(gi))
+                    * smoothstep(0.17, 0.03, length(fract(gc) - 0.5 - gj))
+                    * smoothstep(0.0, 0.3, dot(lit, uSunDir)) * (1.0 - under)
+                    * (1.0 - smoothstep(7.0, 22.0, distance(cameraPosition, vWorldPos)));
+        col += uSunColor * glint * 2.4 * uSunI;
         // 透過光。氷を通ってきたぶんなので、氷の影(iceOpen)は掛けない——
         // 掛けると自分自身の影で消えてしまう
         col += uSunColor * trans * uSunI * under * 0.85;

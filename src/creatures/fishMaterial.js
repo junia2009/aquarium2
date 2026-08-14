@@ -19,11 +19,15 @@ uniform float uFlapFreq;   // 胸びれ
 uniform float uVertAxis;   // 0=左右うねり(魚類) 1=上下うねり(クジラ類)
 uniform float uWing;       // 1=ペンギンの羽ばたき(翼を肩から振る)
 uniform vec4 uWingRoot;    // 翼の付け根(|x|, y, z) と w=翼の張り出し
+uniform vec2 uNeckPivot;   // 首の付け根(y, z)。頭はここを軸に前へ倒れる
 attribute vec2 aBodyUV;
 attribute float aPart;
 attribute float aHeight;   // 体の中心からの実際の高さ(H比)
 #ifdef USE_INSTANCING
 attribute vec4 aInfo;      // x:位相 y:速度倍率 z:サイズ w:色ゆらぎ
+// ペンギンの姿勢。泳ぎ以外の格好はここで作る
+//   x: 翼の上下オフセット / y: 翼の後退(体側へ畳む) / z: 首の前傾 / w: 予備
+attribute vec4 aPose;
 #endif
 varying vec2 vBodyUV;
 varying vec3 vWorldPos;
@@ -59,12 +63,18 @@ void main() {
   // 体のうねりのほうは、位相を個体の色ゆらぎから作って散らしておく。
   float wingPhase = uTime * uFlapFreq;
   float wingAmp = 1.0;
+  float wingLift = 0.0;    // 翼の上下オフセット
+  float wingSweep = 0.0;   // 翼の後退。体側へ畳むと立ち姿・弾道姿勢になる
+  float neckBend = 0.0;    // 首の前傾
   float bodyPhase = phase;
   float bodySpd = spd;
   if (uWing > 0.5) {
 #ifdef USE_INSTANCING
     wingPhase = aInfo.x;
     wingAmp = aInfo.y;
+    wingLift = aPose.x;
+    wingSweep = aPose.y;
+    neckBend = aPose.z;
 #endif
     bodyPhase = tint * 6.2831853;
     bodySpd = 1.0;
@@ -115,8 +125,9 @@ void main() {
       // 肩に近いほど回転を殺せば、埋没部は動かず外だけが振れる——
       // 肩の皮膚が付いていかないのは生き物でも同じ
       float span = clamp(abs(d.x) / max(uWingRoot.w, 1e-3), 0.0, 1.0);
+      float ramp = smoothstep(0.0, 0.24, span);
       // 振幅0は「翼を左右に伸ばしたまま」。滑空はこの姿勢になる
-      float ang = beat * 0.52 * wingAmp * smoothstep(0.0, 0.24, span);
+      float ang = (beat * 0.52 * wingAmp + wingLift) * ramp;
       float c = cos(ang * side), sn = sin(ang * side);
       vec3 r = vec3(d.x * c - d.y * sn, d.x * sn + d.y * c, d.z);
       // 翼をひねる(フェザリング)。打ち下ろしと打ち上げの両方で
@@ -124,16 +135,49 @@ void main() {
       float tw = -cos(wingPhase) * 0.30 * wingAmp;
       float tc = cos(tw * span), ts = sin(tw * span);
       r = vec3(r.x, r.y * tc - r.z * ts, r.y * ts + r.z * tc);
+      // 後退。左右に張ったままの翼を体側へ畳む。
+      // 立っているときは翼が体に沿って垂れ、跳んでいるあいだは
+      // 後ろへ引きつける——どちらも「左右に広げたまま」では出せない格好
+      float sw = wingSweep * ramp * side;
+      float wc = cos(sw), ws = sin(sw);
+      r = vec3(r.x * wc + r.z * ws, r.y, -r.x * ws + r.z * wc);
+      // 畳んだ翼は体側に「乗る」。肩を軸に回すだけだと、
+      // 翼が体の正中線へ寄って胴の中に沈み、消えてしまう。
+      // 畳んだぶんだけ外へ逃がして、脇腹に沿わせる
+      r.x += side * uWingRoot.x * 0.85 * abs(sin(sw));
       p = root + r;
       // 法線も同じだけ回す
       n = vec3(n.x * c - n.y * sn, n.x * sn + n.y * c, n.z);
       n = vec3(n.x, n.y * tc - n.z * ts, n.y * ts + n.z * tc);
+      n = vec3(n.x * wc + n.z * ws, n.y, -n.x * ws + n.z * wc);
     } else {
       float flap = sin(uTime * uFlapFreq * spd + phase * 1.7 + side * 1.57);
       float dist = abs(p.x) / max(uFishLen * 0.2, 1e-3);
       p.y += flap * dist * uFishLen * 0.08;
       p.x += side * flap * dist * uFishLen * 0.03;
     }
+  }
+
+  // ---- 首を曲げる ----
+  // 泳ぐペンギンは嘴の先から尾まで一直線だが、立っているときは
+  // 頭を前へ倒さないと嘴が真上を向く。この体は首が曲がらない紡錘形
+  // ——という理由で最初は「立たせない」ことにしたが、それは順序が逆で、
+  // 曲がらないなら曲げられるようにすればいい。
+  // 頭と嘴だけを、首の付け根を軸に回す。
+  if (uWing > 0.5 && abs(neckBend) > 0.002 && (aPart < 0.5 || abs(aPart - 5.0) < 0.5)) {
+    // 首の後ろでは 0、頭では 1。
+    // ここを短い区間で切り替えると、首が一点で折れて鉤(かぎ)になる。
+    // 実際の首は何個もの椎骨がすこしずつ曲がってS字を描くので、
+    // 胴の3割ほどを使ってなだらかに配分する
+    // 嘴は頭蓋に固定されているので、首の曲がりをまるごと受ける。
+    // 胴と同じ配分にすると、頭だけ倒れて嘴が置いていかれる
+    float wgt = aPart > 4.5 ? 1.0 : smoothstep(0.36, 0.05, aBodyUV.x);
+    float na = neckBend * wgt;
+    vec3 pv = vec3(0.0, uNeckPivot.x, uNeckPivot.y);
+    vec3 dn = p - pv;
+    float nc = cos(na), ns = sin(na);
+    p = pv + vec3(dn.x, dn.y * nc - dn.z * ns, dn.y * ns + dn.z * nc);
+    n = vec3(n.x, n.y * nc - n.z * ns, n.y * ns + n.z * nc);
   }
 
   vec4 wp = modelMatrix
@@ -688,7 +732,7 @@ void main() {
 }
 `;
 
-export function createFishMaterial({ pattern, len, swim, vertAxis = 0, wing = null, species = 0 }) {
+export function createFishMaterial({ pattern, len, swim, vertAxis = 0, wing = null, species = 0, neck = null }) {
   return new THREE.ShaderMaterial({
     uniforms: {
       ...baseUniforms(),
@@ -703,6 +747,7 @@ export function createFishMaterial({ pattern, len, swim, vertAxis = 0, wing = nu
       uVertAxis: { value: vertAxis },
       uWing: { value: wing ? 1 : 0 },
       uWingRoot: { value: wing ? wing.clone() : new THREE.Vector4() },
+      uNeckPivot: { value: neck ? neck.clone() : new THREE.Vector2() },
       uSpecies: { value: species },
     },
     vertexShader: FISH_VERTEX,
