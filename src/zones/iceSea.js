@@ -153,6 +153,7 @@ export const ICE_SEA = {
         godRays.update(camera);
       },
       feedLeft: () => krill.n,
+      __cloud: krill,
       /**
        * 餌をまく。氷の下でしか撒けない——甲板の上へこぼしても
        * ペンギンは水中から取りに行けない
@@ -160,7 +161,7 @@ export const ICE_SEA = {
       onFeed(p) {
         const y = Math.min(p.y, ice.field.under(p.x, p.z) - 0.5, WORLD.surfaceY - 0.6);
         _feed.set(p.x, Math.max(y, iceTerrain(p.x, p.z) + 1.2), p.z);
-        krill.drop(_feed, 120, 1.5);
+        krill.drop(_feed, 190, 1.0);
         for (const f of Object.values(flocks)) f.noticeFeed(krill);
       },
       onTap(ray) {

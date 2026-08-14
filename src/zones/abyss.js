@@ -191,11 +191,12 @@ export const ABYSS = {
         angler.update(dt, camera);
       },
       feedLeft: () => fall.n,
+      __cloud: fall,
       onFeed(p) {
         // 沈んでいくものなので、少し上から落とす
         const y = Math.max(p.y, abyssTerrain(p.x, p.z) + 1.5);
         _focus.set(p.x, Math.min(y + 1.5, WORLD.surfaceY - 1), p.z);
-        fall.drop(_focus, 100, 1.0);
+        fall.drop(_focus, 150, 0.9);
       },
       onTap(ray, hit) {
         // 深海で光を向けられるのは強い刺激。

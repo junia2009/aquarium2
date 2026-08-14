@@ -128,7 +128,8 @@ const ui = setupUI({
   // 引き寄せてから落とす
   onFeed: () => {
     if (!active || !active.onFeed) return;
-    _feedAt.copy(camera.position).addScaledVector(_fwd.setFromMatrixColumn(camera.matrixWorld, 2).negate(), 6.5);
+    // 5m。餌は数cmの生き物なので、遠くへ置くと点にしか見えない
+    _feedAt.copy(camera.position).addScaledVector(_fwd.setFromMatrixColumn(camera.matrixWorld, 2).negate(), 5.0);
     active.onFeed(_feedAt);
   },
   audio,

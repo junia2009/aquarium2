@@ -55,11 +55,14 @@ body {
 }
 .ctl label { font-size: 12px; color: var(--dim); white-space: nowrap; }
 .ctl input[type="range"] { width: 130px; accent-color: var(--accent); }
-.ctl-row { display: flex; gap: 8px; }
+/* ボタンが増えても、ラベルの途中で折り返さないこと。
+   幅が足りないときは行を増やして逃がす(「えさを/まく」と割れると読めない) */
+.ctl-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .chip {
   background: var(--glass); border: 1px solid var(--glass-line); color: var(--ink);
   backdrop-filter: blur(8px); border-radius: 10px; padding: 8px 14px;
   font-size: 12.5px; cursor: pointer; transition: background 0.15s;
+  white-space: nowrap; flex: 0 0 auto;
 }
 .chip:hover { background: rgba(20, 60, 90, 0.7); }
 .chip.on { border-color: var(--accent); color: var(--accent); }
@@ -180,7 +183,7 @@ body {
     left: 16px; right: 16px; bottom: 176px; transform: none;
     max-width: none; font-size: 11.5px; padding: 10px 14px;
   }
-  /* 指で押しやすい大きさに */
-  .chip { padding: 10px 16px; font-size: 13px; }
+  /* 指で押しやすい大きさに。3つ並べても折り返らない範囲で詰める */
+  .chip { padding: 10px 13px; font-size: 12.5px; }
   #panelToggle { padding: 12px 18px; }
 }

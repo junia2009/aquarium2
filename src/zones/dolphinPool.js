@@ -115,10 +115,11 @@ export const DOLPHIN_POOL = {
         godRays.update(camera);
       },
       feedLeft: () => fry.n,
+      __cloud: fry,
       /** 餌は水面近くへ落とす。イルカは水面で受け取る */
       onFeed(p) {
         _feed.set(p.x, Math.min(Math.max(p.y, WORLD.surfaceY - 5.0), WORLD.surfaceY - 0.5), p.z);
-        fry.drop(_feed, 90, 1.2);
+        fry.drop(_feed, 120, 1.0);
         for (const q of Object.values(pods)) q.noticeFeed(fry);
       },
       onTap() { /* イルカは驚かせない */ },

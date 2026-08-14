@@ -221,11 +221,12 @@ export const GREAT_TANK = {
       },
 
       feedLeft: () => plankton.n,
+      __cloud: plankton,   // 検証用。ヘッドレスから餌の状態を読むため
       onFeed(p) {
         // 海底より下や水面より上へこぼしても意味がない
         const y = Math.min(Math.max(p.y, sandHeight(p.x, p.z) + 1.0), 15.0);
         _focus.set(p.x, y, p.z);
-        plankton.drop(_focus, 110, 1.1);
+        plankton.drop(_focus, 170, 0.85);
       },
 
       // タップに反応するのはイワシの群れのみ
