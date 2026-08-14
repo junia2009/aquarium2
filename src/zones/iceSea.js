@@ -7,6 +7,7 @@ import { createGodRays, createMarineSnow } from '../environment/effects.js';
 import { CollisionWorld } from '../collision.js';
 import { PENGUIN_KINDS } from '../creatures/penguin.js';
 import { PenguinFlock, BubbleTrail } from '../creatures/penguinFlock.js';
+import { SplashField } from '../creatures/dolphin.js';
 import { ICE_SEA_SPECIES } from '../species.js';
 
 // ============ 流氷の海ゾーン ============
@@ -75,26 +76,31 @@ export const ICE_SEA = {
     // 気泡は1つの粒プールを4種で共有する。種ごとに持たせても意味がなく、
     // 描画呼び出しだけが増える
     const bubbles = new BubbleTrail(root);
+    // 水面を割るしぶきはイルカと同じものを使う。物理は同じ
+    const splash = new SplashField(root);
+    // 息継ぎに出られる場所。氷の下で浮上しても息はできない
+    const openSpots = ice.leadSpots.concat(ice.polynyas.map((p) => ({ x: p.x, z: p.z })));
+    const shared = { iceField: ice.field, bubbles, splash, openSpots, haulOuts: ice.haulOuts };
     const flocks = {
       king: new PenguinFlock(root, {
         kind: PENGUIN_KINDS.king, count: 5,
         center: new THREE.Vector3(-6, 8.5, 4), radius: 15,
-        iceField: ice.field, bubbles,
+        ...shared,
       }),
       gentoo: new PenguinFlock(root, {
         kind: PENGUIN_KINDS.gentoo, count: 7,
         center: new THREE.Vector3(7, 10.5, -8), radius: 17,
-        iceField: ice.field, bubbles,
+        ...shared,
       }),
       adelie: new PenguinFlock(root, {
         kind: PENGUIN_KINDS.adelie, count: 8,
         center: new THREE.Vector3(-9, 6.5, -11), radius: 16,
-        iceField: ice.field, bubbles,
+        ...shared,
       }),
       chinstrap: new PenguinFlock(root, {
         kind: PENGUIN_KINDS.chinstrap, count: 7,
         center: new THREE.Vector3(11, 9.0, 9), radius: 16,
-        iceField: ice.field, bubbles,
+        ...shared,
       }),
     };
     // 種をまたいでぶつからないよう、全個体を共有する
@@ -128,7 +134,13 @@ export const ICE_SEA = {
         for (const f of Object.values(flocks)) f.update(dt);
         godRays.update(camera);
       },
-      onTap() {},
+      onTap(ray) {
+        // ペンギンは驚いて散るのではなく、寄ってくる。
+        // 潜水者のまわりを回ってのぞき込み、満足すると離れていく
+        for (const f of Object.values(flocks)) {
+          if (f.curiousAlongRay(ray)) break;
+        }
+      },
     };
   },
 };

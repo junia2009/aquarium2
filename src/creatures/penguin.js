@@ -78,6 +78,11 @@ export const PENGUIN_KINDS = {
     flipper: { width: 0.335, len: 0.145, chord: 0.078, thick: 0.16 },
     beatFreq: 1.55,   // 大きい種ほどゆっくり打つ
     speed: 2.4,
+    // 息継ぎまでの潜水時間(秒)。実物は数分潜れるが、
+    // 見ていて何も起きないので水槽の尺に縮めてある
+    dive: 26,
+    // 息継ぎのとき氷へ跳び乗る割合。大きく重い種ほど跳び乗りにくい
+    haulOutChance: 0.16,
   },
   gentoo: {
     key: 'gentoo', species: 1, name: 'ジェンツーペンギン',
@@ -86,6 +91,8 @@ export const PENGUIN_KINDS = {
     flipper: { width: 0.330, len: 0.140, chord: 0.080, thick: 0.16 },
     beatFreq: 2.05,
     speed: 3.1,       // 現生のペンギンでいちばん速い
+    dive: 20,
+    haulOutChance: 0.30,
   },
   adelie: {
     key: 'adelie', species: 2, name: 'アデリーペンギン',
@@ -95,6 +102,8 @@ export const PENGUIN_KINDS = {
     flipper: { width: 0.320, len: 0.135, chord: 0.082, thick: 0.16 },
     beatFreq: 2.25,
     speed: 2.6,
+    dive: 17,
+    haulOutChance: 0.42,   // 氷の上でいちばんよく見かける種
   },
   chinstrap: {
     key: 'chinstrap', species: 3, name: 'ヒゲペンギン',
@@ -103,6 +112,8 @@ export const PENGUIN_KINDS = {
     flipper: { width: 0.325, len: 0.138, chord: 0.080, thick: 0.16 },
     beatFreq: 2.20,
     speed: 2.7,
+    dive: 18,
+    haulOutChance: 0.36,
   },
 };
 

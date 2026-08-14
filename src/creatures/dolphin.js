@@ -184,7 +184,7 @@ float splashSwell(vec2 p, float t){
 }
 `;
 
-class SplashField {
+export class SplashField {
   constructor(parent) {
     this.origins = [];
     this.times = [];

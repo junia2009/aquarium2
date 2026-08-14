@@ -340,6 +340,12 @@ export function createIceCanopy(scene, { seed = 1 } = {}) {
       varying float vEdge;
       varying float vSeed;
 
+      // サスツルギの高さ場(0..1)。風座標で受け取る
+      float sastHeight(vec2 sp) {
+        return fbm(vec2(sp.x * 0.55, sp.y * 3.4))
+             + 0.4 * fbm(vec2(sp.x * 1.7, sp.y * 9.0));
+      }
+
       void main() {
         vec3 n = normalize(vNormal);
         if (!gl_FrontFacing) n = -n;
@@ -373,14 +379,43 @@ export function createIceCanopy(scene, { seed = 1 } = {}) {
 
         vec3 iceCol = mix(vec3(0.42, 0.62, 0.74), vec3(0.10, 0.32, 0.46),
                           smoothstep(0.4, 2.6, thick));
-        vec3 snowCol = vec3(0.86, 0.90, 0.94) * (0.9 + 0.2 * brine);
+
+        // ---- 上面の雪 ----
+        // 極地の雪は降り積もるだけでなく、風に削られて硬い畝(サスツルギ)になる。
+        // これが無いと、上から見た氷はただの白い板だった。
+        // 畝は卓越風の向きに揃うので、その向きへ引き伸ばしたノイズを高さ場にする
+        vec2 wind = vec2(0.87, 0.49);
+        vec2 sp = vec2(dot(p, wind), dot(p, vec2(-wind.y, wind.x)));
+        float sast = sastHeight(sp);
+        // 畝の傾きから法線を作る。色のむらより陰影のほうが凹凸に見える。
+        // 差分は世界座標の幅で取ること(スケール後の座標で取ると、
+        // 傾きが伸ばした倍率ぶん狂って、ほとんど平らなままになる)
+        const float E = 0.07;              // 差分幅(m)
+        const float AMP = 0.075;           // 畝の高さ(m)
+        float gx = (sastHeight(sp + vec2(E, 0.0)) - sast) / E * AMP;
+        float gz = (sastHeight(sp + vec2(0.0, E)) - sast) / E * AMP;
+        // 風座標の勾配をワールドへ戻す
+        vec3 snowN = normalize(n + vec3(-(gx * wind.x - gz * wind.y), 0.0,
+                                        -(gx * wind.y + gz * wind.x)) * (1.0 - under));
+        // 雪の反射率は本当は 0.85 ほどあるが、この照明(半球 + 直射)を掛けると
+        // トーンマッピングの頭で潰れて、どんなむらを入れても真っ白な板になる。
+        // 変化が見える帯まで落として、窪みは空の青だけで照らされる色にする
+        vec3 snowCol = mix(vec3(0.40, 0.46, 0.56), vec3(0.66, 0.685, 0.70),
+                           smoothstep(0.25, 0.80, sast));
 
         // 下面のざらつき。凍りついた微結晶が細かく光を返す
         float frost = 0.85 + 0.30 * fbm(p * 6.0 + vSeed * 7.0);
         vec3 albedo = mix(snowCol, iceCol * frost, under);
         albedo = mix(albedo, albedo + vec3(0.20, 0.24, 0.26), channels * under * 0.8);
 
-        vec3 col = underwaterLight(albedo, n, vWorldPos, V, 26.0, 0.22);
+        // 上面は雪の法線で、下面はもとの法線で照らす
+        vec3 lit = mix(snowN, n, under);
+        vec3 col = underwaterLight(albedo, lit, vWorldPos, V, 26.0, 0.22);
+        // 雪の結晶のきらめき。一粒ずつは見えないが、無数の面のうち
+        // たまたま太陽を返したものが点になって光る
+        float glint = pow(hash12(floor(p * 260.0)), 34.0)
+                    * smoothstep(0.0, 0.3, dot(lit, uSunDir)) * (1.0 - under);
+        col += uSunColor * glint * 3.0 * uSunI;
         // 透過光。氷を通ってきたぶんなので、氷の影(iceOpen)は掛けない——
         // 掛けると自分自身の影で消えてしまう
         col += uSunColor * trans * uSunI * under * 0.85;
@@ -408,7 +443,50 @@ export function createIceCanopy(scene, { seed = 1 } = {}) {
     leadSpots: findLeads(floes),
     polynyas: floes.polynyas,
     field: bakeField(floes),
+    haulOuts: findHaulOuts(floes),
   };
+}
+
+// ---- 上陸点(ハウルアウト) ----
+// ペンギンが氷へ跳び乗る場所。板の縁のうち、外側が開水面になっている
+// ところを探し、「助走する水面の点」と「着地する氷の上の点」を対にして返す。
+//
+// 縁ならどこでもよいわけではない。隣の板がすぐ外にあると、
+// 跳び上がる水面がそもそも無い。だから外側の開けぐあいまで見る。
+function findHaulOuts(floes) {
+  const out = [];
+  for (const f of floes) {
+    if (f.rMean < 5) continue;                    // 小さい板には乗らない
+    for (let a = 0; a < 8; a++) {
+      const ang = (a / 8) * Math.PI * 2 + f.seed;
+      const rr = floeRadius(f, ang);
+      const ex = f.x + Math.cos(ang) * rr;        // 縁の位置
+      const ez = f.z + Math.sin(ang) * rr;
+      // 縁の外 2.5m が他の板に覆われていないこと。
+      // ここが助走して跳び上がる水面になるので、遠すぎると
+      // 板まで届かない(実際、4mにしていたときは全部届かなかった)
+      const ox = f.x + Math.cos(ang) * (rr + 2.5);
+      const oz = f.z + Math.sin(ang) * (rr + 2.5);
+      let blocked = false;
+      for (const g of floes) {
+        if (g === f) continue;
+        const dx = ox - g.x, dz = oz - g.z;
+        const d = Math.hypot(dx, dz);
+        if (d < g.r + 0.5 && d < floeRadius(g, Math.atan2(dz, dx)) + 0.8) { blocked = true; break; }
+      }
+      if (blocked) continue;
+      out.push({
+        // 着地点。縁からじゅうぶん内側でないと、跳び乗った勢いで
+        // 反対側から落ちてしまう
+        x: f.x + Math.cos(ang) * rr * 0.78,
+        z: f.z + Math.sin(ang) * rr * 0.78,
+        // 助走する水面の点
+        fromX: ox, fromZ: oz,
+        edgeX: ex, edgeZ: ez,
+      });
+    }
+  }
+  return out;
 }
 
 // ---- 氷の高さ場 ----

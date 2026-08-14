@@ -148,6 +148,46 @@ export class UnderwaterAudio {
     };
     this._scheduleRumble = scheduleRumble;
 
+    // --- 流氷の軋み ---
+    // 氷の海でいちばん耳につくのは、板どうしが押し合ってきしむ音。
+    // 水中では驚くほどよく通り、遠くの一枚が鳴いても手元で聞こえる。
+    // 深海のうなりと違って、これは「軋み」なので周波数が揺れる。
+    // 帯域ノイズではなく、音程のふらつく細い音でないとそう聞こえない。
+    const scheduleCreak = () => {
+      if (!this.enabled || this.zone !== 'iceSea') { this.creakTimer = null; return; }
+      const ctx = this.ctx;
+      const dur = 0.7 + Math.random() * 2.2;
+      const osc = ctx.createOscillator();
+      osc.type = 'sawtooth';
+      const f0 = 90 + Math.random() * 220;
+      osc.frequency.setValueAtTime(f0, ctx.currentTime);
+      // きしみ: 押し合う力が抜けるにつれて音程が滑り落ちる
+      osc.frequency.exponentialRampToValueAtTime(f0 * (0.45 + Math.random() * 0.3),
+                                                 ctx.currentTime + dur);
+      // 細かいびびり(スティックスリップ)。これがないと単なるサイレンになる
+      const jitter = ctx.createOscillator();
+      jitter.type = 'square';
+      jitter.frequency.value = 14 + Math.random() * 40;
+      const jg = ctx.createGain();
+      jg.gain.value = f0 * 0.10;
+      jitter.connect(jg).connect(osc.frequency);
+
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = 220 + Math.random() * 380;
+      bp.Q.value = 3.5;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.035 + Math.random() * 0.05, ctx.currentTime + 0.25);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + dur);
+      osc.connect(bp).connect(g).connect(this.master);
+      g.connect(this._reverb());
+      osc.start(); jitter.start();
+      osc.stop(ctx.currentTime + dur); jitter.stop(ctx.currentTime + dur);
+      this.creakTimer = setTimeout(scheduleCreak, 2500 + Math.random() * 9000);
+    };
+    this._scheduleCreak = scheduleCreak;
+
     this.zone = this.zone || 'sea';
     this._applyZone();
   }
@@ -163,15 +203,19 @@ export class UnderwaterAudio {
 
   _applyZone() {
     const abyss = this.zone === 'abyss';
+    const ice = this.zone === 'iceSea';
     const now = this.ctx.currentTime;
-    // 深海のざわめきは、浅い海よりさらに低くこもる
-    this.waterLP.frequency.setTargetAtTime(abyss ? 85 : 240, now, 1.5);
-    this.waterLFO.gain.setTargetAtTime(abyss ? 22 : 90, now, 1.5);
+    // 深海のざわめきは、浅い海よりさらに低くこもる。
+    // 氷の海は逆に、蓋をされた空間なので高域がよく残って響く
+    this.waterLP.frequency.setTargetAtTime(abyss ? 85 : ice ? 420 : 240, now, 1.5);
+    this.waterLFO.gain.setTargetAtTime(abyss ? 22 : ice ? 130 : 90, now, 1.5);
     this.master.gain.setTargetAtTime(abyss ? 0.13 : 0.16, now, 1.5);
     clearTimeout(this.bubbleTimer); this.bubbleTimer = null;
     clearTimeout(this.rumbleTimer); this.rumbleTimer = null;
+    clearTimeout(this.creakTimer); this.creakTimer = null;
     if (abyss) this._scheduleRumble();
     else this._scheduleBubble();
+    if (ice) this._scheduleCreak();
   }
 
   // 海の残響。水中は高域が早く減衰するので、暗く長い尾を引く
