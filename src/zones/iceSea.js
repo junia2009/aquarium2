@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { setIceCover } from '../env.js';
+import { setIceCover, WORLD } from '../env.js';
 import { createWaterSurface } from '../environment/surface.js';
 import { createSand } from '../environment/seabed.js';
 import { iceTerrain, createIceCanopy, createDropstones, ICE_EXTENT } from '../environment/ice.js';
@@ -8,6 +8,7 @@ import { CollisionWorld } from '../collision.js';
 import { PENGUIN_KINDS } from '../creatures/penguin.js';
 import { PenguinFlock, BubbleTrail } from '../creatures/penguinFlock.js';
 import { SplashField } from '../creatures/dolphin.js';
+import { FeedCloud } from '../creatures/feed.js';
 import { ICE_SEA_SPECIES } from '../species.js';
 
 // ============ 流氷の海ゾーン ============
@@ -42,7 +43,7 @@ export const ICE_SEA = {
   },
   // リードのすぐ下、光の柱を見上げる位置から始める
   camera: { pos: new THREE.Vector3(-2, 9.0, 14), look: new THREE.Vector3(2, 14.0, -2) },
-  tap: 'クリック: ペンギンが寄ってくる',
+  tap: 'クリック: ペンギンが寄ってくる / えさをまくとオキアミを追う',
   species: ICE_SEA_SPECIES,
 
   build(root, audio) {
@@ -80,6 +81,9 @@ export const ICE_SEA = {
     // 気泡は1つの粒プールを4種で共有する。種ごとに持たせても意味がなく、
     // 描画呼び出しだけが増える
     const bubbles = new BubbleTrail(root);
+    // 餌はオキアミ。ペンギンの主食で、密な群れを作って自分で泳ぎ、
+    // 捕食者が来ると跳ねて散る
+    const krill = new FeedCloud(root, 'krill');
     // 水面を割るしぶきはイルカと同じものを使う。物理は同じ
     const splash = new SplashField(root);
     // カメラは原点から半径42mまでしか出られない(camera.js の maxR)。
@@ -144,7 +148,20 @@ export const ICE_SEA = {
       },
       update(dt, camera) {
         for (const f of Object.values(flocks)) f.update(dt);
+        // オキアミは追ってくるペンギンから逃げる
+        krill.update(dt, null, everyone);
         godRays.update(camera);
+      },
+      feedLeft: () => krill.n,
+      /**
+       * 餌をまく。氷の下でしか撒けない——甲板の上へこぼしても
+       * ペンギンは水中から取りに行けない
+       */
+      onFeed(p) {
+        const y = Math.min(p.y, ice.field.under(p.x, p.z) - 0.5, WORLD.surfaceY - 0.6);
+        _feed.set(p.x, Math.max(y, iceTerrain(p.x, p.z) + 1.2), p.z);
+        krill.drop(_feed, 120, 1.5);
+        for (const f of Object.values(flocks)) f.noticeFeed(krill);
       },
       onTap(ray) {
         // ペンギンは驚いて散るのではなく、寄ってくる。
@@ -160,3 +177,4 @@ export const ICE_SEA = {
 // 図鑑から「流氷」を選んだときの注視点。いちばん大きい板の下面。
 // build() のなかで確定させる
 const FLOE_VIEW = new THREE.Vector3(0, 13, 0);
+const _feed = new THREE.Vector3();

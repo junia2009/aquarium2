@@ -5,6 +5,7 @@ import { createKelp, createAnemone, KELP_CLUSTERS } from '../environment/flora.j
 import { createGodRays, createBubbles, createMarineSnow } from '../environment/effects.js';
 import { CollisionWorld } from '../collision.js';
 import { disturbPoint } from '../interaction.js';
+import { FeedCloud } from '../creatures/feed.js';
 
 import { FISH_SHAPES } from '../creatures/fishGeometry.js';
 import { createFishMaterial } from '../creatures/fishMaterial.js';
@@ -34,7 +35,7 @@ export const GREAT_TANK = {
     exposure: 1.08,
   },
   camera: { pos: new THREE.Vector3(0, 7.5, 24), look: new THREE.Vector3(0, 7, 0) },
-  tap: 'クリック: 魚が驚く',
+  tap: 'クリック: 魚が驚く / えさをまくとイワシが玉になる',
   species: GREAT_TANK_SPECIES,
 
   build(root, audio) {
@@ -133,6 +134,9 @@ export const GREAT_TANK = {
     });
 
     // --- 大型遊泳者たち ---
+    // 餌はプランクトン。ほとんど自分では動かず、ゆっくり沈む。
+    // イワシが渦を巻き、ジンベエザメが濾しとりに来る
+    const plankton = new FeedCloud(root, 'plankton');
     const ray = new EagleRay(root);
     const turtle = new SeaTurtle(root);
     const whaleShark = new WhaleShark(root);
@@ -179,6 +183,25 @@ export const GREAT_TANK = {
           { pos: whaleShark.pos, radius: 8.5 },
           { pos: whale.pos, radius: 9.5 },
         ];
+        // ---- 餌 ----
+        // 撒かれているあいだ、イワシは餌のまわりに集まって玉になる。
+        // これがベイトボール——本来は捕食者から身を守る形だが、
+        // 餌に群がるときも同じ形になる
+        plankton.update(dt, sandHeight);
+        if (plankton.active) {
+          const c = plankton.focus(_focus);
+          sardines.feedAt(c);
+          sardines.lure(c, 10, 6.5);
+          // 口が届いた個体から食べる。減っていくのが見えないと、
+          // 食べているようには見えない。
+          // 口数のほうで秒あたりを抑えているので、走査は口数が尽きたら止める
+          for (let i = 0; i < sardines.count && plankton.credit >= 1; i++) {
+            plankton.eatNear(sardines.pos[i], 0.5);
+          }
+          // ジンベエザメは濾過摂食者。口を開けたまま通り、
+          // 通り道にあるぶんをまとめて漉しとっていく
+          if (whaleShark.pos.distanceTo(c) < 4.5) plankton.eatNear(whaleShark.pos, 2.6, 3);
+        }
         sardines.update(dt, predators, world);
         tangs.update(dt, predators, world);
         clowns.update(dt);
@@ -197,6 +220,14 @@ export const GREAT_TANK = {
         godRays.update(camera);
       },
 
+      feedLeft: () => plankton.n,
+      onFeed(p) {
+        // 海底より下や水面より上へこぼしても意味がない
+        const y = Math.min(Math.max(p.y, sandHeight(p.x, p.z) + 1.0), 15.0);
+        _focus.set(p.x, y, p.z);
+        plankton.drop(_focus, 110, 1.1);
+      },
+
       // タップに反応するのはイワシの群れのみ
       onTap(ray3, hit) {
         if (disturbPoint(ray3, sardines, 4.5, hit)) sardines.scare(hit, 11, 80);
@@ -204,3 +235,5 @@ export const GREAT_TANK = {
     };
   },
 };
+
+const _focus = new THREE.Vector3();

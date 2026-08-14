@@ -720,6 +720,22 @@ export class DreamCucumbers {
   }
 
   /**
+   * 海底に降りた餌をあさる。落ちてきた一片のいちばん近くにいる1匹だけが
+   * 反応して、そこへ這っていって光る。
+   * @returns 反応した個体の位置(近くにいなければ null)
+   */
+  forageAt(p, radius = 3.5) {
+    let best = null, bd = radius * radius;
+    for (const it of this.items) {
+      const d = it.group.position.distanceToSquared(p);
+      if (d < bd) { bd = d; best = it; }
+    }
+    if (!best) return null;
+    best.glow = 1;
+    return best.group.position;
+  }
+
+  /**
    * 視線の通った1匹だけを光らせる。
    *
    * 「タップ地点から半径N mの個体を全部光らせる」ようにすると、

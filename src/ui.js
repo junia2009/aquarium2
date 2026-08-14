@@ -1,7 +1,7 @@
 import { U } from './env.js';
 
 // ============ UI(ゾーン切替・図鑑パネル・コントロール) ============
-export function setupUI({ zones, onFollow, onFree, onZone, audio }) {
+export function setupUI({ zones, onFollow, onFree, onZone, onFeed, audio }) {
   const panel = document.getElementById('panel');
   const toggle = document.getElementById('panelToggle');
   const cards = document.getElementById('cards');
@@ -81,6 +81,18 @@ export function setupUI({ zones, onFollow, onFree, onZone, audio }) {
   freeBtn.addEventListener('click', () => {
     clearActive();
     onFree();
+  });
+
+  // ---- 餌やり ----
+  // 見ている先へひとつかみ撒く。ここが、この水槽でいちばん
+  // 「こちらの行動に世界が応える」操作になる。
+  // 連打されると粒が飽和して、寄ってくる過程が見えないまま終わるので、
+  // 短い間だけ押せなくする
+  const feedBtn = document.getElementById('feedBtn');
+  feedBtn.addEventListener('click', () => {
+    onFeed();
+    feedBtn.classList.add('cooling');
+    setTimeout(() => feedBtn.classList.remove('cooling'), 2600);
   });
 
   soundBtn.addEventListener('click', () => {

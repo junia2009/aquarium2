@@ -27,6 +27,8 @@ const _q = new THREE.Quaternion();
 const _m = new THREE.Matrix4();
 const _qb = new THREE.Matrix4();
 const _axis = new THREE.Vector3();
+const _bait = new THREE.Vector3();
+const _bite = new THREE.Vector3();
 
 const GRAVITY = 9.8;
 
@@ -184,6 +186,9 @@ export class PenguinFlock {
     this.time = 0;
     this.world = null;
     this.neighbors = null;
+    // 餌。撒かれているあいだだけ、群れの用事がこれに変わる
+    this.feed = null;
+    this.feedT = 0;
 
     const geo = buildPenguinGeometry(kind);
     this.mat = createFishMaterial({
@@ -507,6 +512,23 @@ export class PenguinFlock {
   }
 
   /**
+   * 餌に気づかせる。
+   *
+   * ペンギンの主食はオキアミで、群れで見つけて群れで突っ込む。
+   * 大事なのは「群れごと向かうが、口に運ぶのは一羽ずつ」という点。
+   * 全員が同じ一点へ吸い寄せられると団子になって、食べているようには
+   * 見えない。個体はそれぞれ自分のいちばん近い粒を狙う。
+   */
+  noticeFeed(cloud) {
+    this.feed = cloud;
+    this.feedT = 30;
+    // 漂っていた個体も泳ぎに戻る
+    for (const m of this.members) {
+      if (m.state === 'hover') { m.state = 'swim'; m.stroking = true; m.phaseT = 1.2; }
+    }
+  }
+
+  /**
    * 息継ぎに行く。群れ全体でひとつの行き先を選び、全員で向かう。
    *
    *   ・たいていは開水面へ出て、水面すれすれをポーポイジングする。
@@ -588,9 +610,14 @@ export class PenguinFlock {
       if (p.breath <= 0 && inWater > 0) this.planSurfacing();
     }
 
-    // 針路。息継ぎ地点があればそこへ、無ければ持ち場のなかを蛇行する
+    // 針路。餌があればそこへ、息継ぎ地点があればそこへ、
+    // どちらも無ければ持ち場のなかを蛇行する
     let want;
-    if (p.target) {
+    const bait = this.feedT > 0 && this.feed && this.feed.active
+      ? this.feed.focus(_bait) : null;
+    if (bait && !p.target) {
+      want = Math.atan2(bait.x - p.pos.x, bait.z - p.pos.z);
+    } else if (p.target) {
       want = Math.atan2(p.target.fromX - p.pos.x, p.target.fromZ - p.pos.z);
     } else {
       const dx = p.pos.x - this.center.x, dz = p.pos.z - this.center.z;
@@ -605,7 +632,7 @@ export class PenguinFlock {
     while (diff < -Math.PI) diff += Math.PI * 2;
     p.heading += THREE.MathUtils.clamp(diff * 1.4, -k.turnRate * 0.5, k.turnRate * 0.5) * dt;
 
-    const podSpeed = k.speed * (p.target ? 0.85 : 0.45);
+    const podSpeed = k.speed * (p.target ? 0.85 : bait ? 0.80 : 0.45);
     p.pos.x += Math.sin(p.heading) * podSpeed * dt;
     p.pos.z += Math.cos(p.heading) * podSpeed * dt;
     // 重心が実際の群れから離れないよう、ゆるく引き戻す。
@@ -629,6 +656,10 @@ export class PenguinFlock {
     const lo = floor + (surf - floor) * k.depth[0];
     const hi = floor + (surf - floor) * k.depth[1];
     p.pos.y = lo + (hi - lo) * p.level;
+    // 餌があるあいだは、種ごとの遊泳層より餌の深さを優先する。
+    // 層に閉じこめると、撒いた場所によっては誰も来ない
+    if (bait && !p.target) p.pos.y += (bait.y - p.pos.y) * (1 - Math.exp(-1.2 * dt));
+    if (this.feedT > 0) this.feedT -= dt;
   }
 
   /**
@@ -701,6 +732,9 @@ export class PenguinFlock {
         }
       }
       let target = m.stroking ? cruise * 1.60 : cruise * 0.42;
+      // 餌を追っているあいだは滑らない。翼を打ち続けて追いかける
+      const chasing = this.feedT > 0 && this.feed && this.feed.active && m.state === 'swim';
+      if (chasing) { target = cruise * 1.5; m.stroking = true; m.phaseT = 1.0; }
       if (m.state === 'hover') {
         // ほぼ静止。前へ進むためではなく、その場に留まるために漕ぐ。
         // 翼は小刻みに速く、振幅は小さい(前進の羽ばたきとは別の動き)
@@ -752,7 +786,19 @@ export class PenguinFlock {
 
       // ---- 針路 ----
       let turn;
-      if (m.curiousT > 0) {
+      // 餌がいちばん優先。近くの粒をひとつ狙い、口が届いたら食べる
+      const bite = chasing ? this.feed.nearest(m.pos, 16, _bite) : null;
+      if (bite) {
+        if (m.pos.distanceTo(bite) < m.body * 1.7) {
+          this.feed.eatNear(m.pos, m.body * 2.0);
+          m.neck = -0.28;          // 食いつく瞬間だけ首を伸ばす
+        }
+        const want = Math.atan2(bite.x - m.pos.x, bite.z - m.pos.z);
+        let diff = want - m.heading;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        turn = diff * 3.4;
+      } else if (m.curiousT > 0) {
         // のぞきに来ている。近づいたら速度を落として、まわりを回る
         m.curiousT -= dt;
         const d = Math.hypot(m.curX - m.pos.x, m.curZ - m.pos.z);
@@ -829,6 +875,7 @@ export class PenguinFlock {
       let targetY = THREE.MathUtils.clamp(
         this.pod.pos.y + this.spread * 0.45 * wander1(t * 0.10 + m.seed, m.seed),
         bandLo, bandHi);
+      if (bite) targetY = bite.y;
       if (m.curiousT > 0) targetY = m.curY;
       // 立ち止まっているあいだは深さを変えない
       if (m.state === 'hover') targetY = m.pos.y + Math.sin(m.scull * 1.7) * 0.04;

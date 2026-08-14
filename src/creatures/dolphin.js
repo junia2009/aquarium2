@@ -16,6 +16,7 @@ import { UW_NOISE } from '../glsl.js';
 // 「水面を突き破って消え、しぶきとともに戻ってくる」という見え方になる。
 
 const _v = new THREE.Vector3();
+const _bait = new THREE.Vector3();
 const _fwd = new THREE.Vector3();
 const _right = new THREE.Vector3();
 const _up = new THREE.Vector3();
@@ -464,6 +465,21 @@ export class DolphinPod {
 
   setWorld(world) { this.world = world; }
 
+  /**
+   * 餌に気づかせる。
+   *
+   * イルカは餌が来ると水面近くへ集まり、待ちきれずに跳ねる。
+   * 水族館で餌の時間にいちばん派手に動くのはこの瞬間で、
+   * ここでジャンプの間隔を詰めておかないと「ただ寄ってくる」だけになる
+   */
+  noticeFeed(cloud) {
+    this.feed = cloud;
+    this.feedT = 24;
+    for (const m of this.members) {
+      if (m.state === 'cruise') m.timer = Math.min(m.timer, 0.5 + Math.random() * 3.0);
+    }
+  }
+
   /** 他のポッドも含めた全個体を渡すと、互いにぶつからなくなる */
   setNeighbors(list) { this.neighbors = list; }
 
@@ -493,6 +509,10 @@ export class DolphinPod {
     const surf = WORLD.surfaceY;
     const bh = this.kind.behavior;
     const others = this.neighbors || this.members;
+    // 餌。あるあいだは巡航の行き先がこれに変わる
+    const bait = this.feedT > 0 && this.feed && this.feed.active
+      ? this.feed.focus(_bait) : null;
+    if (this.feedT > 0) this.feedT -= dt;
 
     for (let i = 0; i < this.members.length; i++) {
       const m = this.members[i];
@@ -572,6 +592,12 @@ export class DolphinPod {
           // 巡航: ポッドでゆるくまとまって回遊する
           targetY = this.center.y + wander1(t * 0.06 + m.seed, m.seed) * 3.0;
           speed = bh.cruise * (1 + wander1(t * 0.1 + m.seed * 2, m.seed) * 0.3);
+          // 餌があればそちらへ。近づいたら食べる
+          if (bait) {
+            targetY = bait.y;
+            speed = bh.cruise * 1.35;
+            this.feed.eatNear(m.pos, this.bodyScale * 1.1);
+          }
           if (m.timer <= 0) {
             m.state = 'charge';
             m.timer = 10;
@@ -612,6 +638,13 @@ export class DolphinPod {
         } else {
           // --- 巡航の針路: 群れの中心へゆるく寄りつつ、外周で内向きに ---
           turn = wander1(t * 0.12 + m.seed * 3, m.seed) * 0.7;
+          if (bait) {
+            const want = Math.atan2(bait.x - m.pos.x, bait.z - m.pos.z);
+            let bd = want - m.heading;
+            while (bd > Math.PI) bd -= Math.PI * 2;
+            while (bd < -Math.PI) bd += Math.PI * 2;
+            turn += bd * 1.8;
+          }
           const dx = m.pos.x - this.center.x, dz = m.pos.z - this.center.z;
           const r = Math.hypot(dx, dz);
           if (r > this.radius) {

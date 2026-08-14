@@ -63,6 +63,11 @@ body {
 }
 .chip:hover { background: rgba(20, 60, 90, 0.7); }
 .chip.on { border-color: var(--accent); color: var(--accent); }
+/* 餌やりだけは押してほしいボタンなので、少し前に出す。
+   撒いたあとは短いあいだ沈んで、次に撒けるまでを見せる */
+.chip.feed { border-color: rgba(255, 176, 96, 0.55); color: #ffd0a0; }
+.chip.feed:hover { background: rgba(120, 70, 20, 0.55); }
+.chip.feed.cooling { opacity: 0.45; pointer-events: none; }
 #fps { font-size: 10px; color: rgba(140, 180, 200, 0.55); padding-left: 4px; }
 
 /* ---- ゾーン切替 ---- */

@@ -8,6 +8,7 @@ import { createFishMaterial } from '../creatures/fishMaterial.js';
 import { School, makeSchoolInstanceAttr } from '../creatures/school.js';
 import { AtollaSwarm, DreamCucumbers, TunicateBed } from '../creatures/abyssal.js';
 import { Anglerfish } from '../creatures/angler.js';
+import { FeedCloud } from '../creatures/feed.js';
 import { disturbPoint } from '../interaction.js';
 import { ABYSS_SPECIES } from '../species.js';
 
@@ -77,7 +78,7 @@ export const ABYSS = {
     pos: new THREE.Vector3(4.5, 5.2, -1.0),
     look: new THREE.Vector3(12, 3.6, -13),
   },
-  tap: 'クリック: クラゲが警報発光 / ナマコが光る',
+  tap: 'クリック: クラゲが警報発光 / えさをまくと落ちてきた餌に集まる',
   species: ABYSS_SPECIES,
 
   build(root, audio) {
@@ -130,6 +131,10 @@ export const ABYSS = {
 
     // --- ユメナマコ ---
     // 泥の上を漂う半透明のナマコ。中身(泥を詰めた消化管)が透けて見える
+    // 餌は沈降する有機物。深海には光が届かないので、上から落ちてくる
+    // これだけが食べもの。落ちてきた一片に生き物が集まるのは、
+    // この海でいちばんよく起きる出来事そのもの
+    const fall = new FeedCloud(root, 'detritus');
     const cukes = new DreamCucumbers(root, {
       count: 6, center: new THREE.Vector3(-6, 0, -8), radius: 5,
       floorFn: abyssTerrain,
@@ -167,9 +172,30 @@ export const ABYSS = {
       update(dt, camera) {
         lanterns.update(dt, [], world);
         atolla.update(dt);
+        fall.update(dt, abyssTerrain);
+        if (fall.active) {
+          const c = fall.focus(_focus);
+          lanterns.feedAt(c);
+          lanterns.lure(c, 9, 5.5);
+          for (let i = 0; i < lanterns.count && fall.credit >= 1; i++) {
+            fall.eatNear(lanterns.pos[i], 0.5);
+          }
+          // 底に降り積もったぶんはナマコが掃除する。
+          // ユメナマコは海底の堆積物を漉して食べる、いわば掃除屋で、
+          // 実際に「落ちてきた餌のまわりに集まる」ことが知られている
+          const q = cukes.forageAt(c, 4.5);
+          if (q) fall.eatNear(q, 1.1);
+        }
         cukes.update(dt);
         tunicates.update(dt, camera);
         angler.update(dt, camera);
+      },
+      feedLeft: () => fall.n,
+      onFeed(p) {
+        // 沈んでいくものなので、少し上から落とす
+        const y = Math.max(p.y, abyssTerrain(p.x, p.z) + 1.5);
+        _focus.set(p.x, Math.min(y + 1.5, WORLD.surfaceY - 1), p.z);
+        fall.drop(_focus, 100, 1.0);
       },
       onTap(ray, hit) {
         // 深海で光を向けられるのは強い刺激。
@@ -187,3 +213,5 @@ export const ABYSS = {
     };
   },
 };
+
+const _focus = new THREE.Vector3();

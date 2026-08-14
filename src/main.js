@@ -110,6 +110,10 @@ function enterZone(key, { moveCamera = true } = {}) {
 }
 
 // ================= UI =================
+// 餌を落とす先を作るための作業用
+const _feedAt = new THREE.Vector3();
+const _fwd = new THREE.Vector3();
+
 const ui = setupUI({
   zones: ZONES,
   onFollow: (key) => {
@@ -118,8 +122,18 @@ const ui = setupUI({
   },
   onFree: () => diveCam.clearFollow(),
   onZone: (key) => enterZone(key),
+  // ---- 餌やり ----
+  // 撒く場所は「いま見ている先」。カメラの正面に固定距離で置くと、
+  // 壁や氷の向こう側へ撒けてしまうので、視線の先にある面まで
+  // 引き寄せてから落とす
+  onFeed: () => {
+    if (!active || !active.onFeed) return;
+    _feedAt.copy(camera.position).addScaledVector(_fwd.setFromMatrixColumn(camera.matrixWorld, 2).negate(), 6.5);
+    active.onFeed(_feedAt);
+  },
   audio,
 });
+
 
 enterZone(GREAT_TANK.key);
 
@@ -130,6 +144,8 @@ if (new URLSearchParams(location.search).has('debug')) {
   window.__dive = diveCam;
   window.__three = THREE;
   window.__zone = () => active;
+  // 検証用。撒いた餌が減っていくかを外から数える
+  window.__feedCount = () => (active && active.feedLeft ? active.feedLeft() : -1);
 }
 
 // ================= タップ =================

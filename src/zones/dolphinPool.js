@@ -7,6 +7,7 @@ import { CollisionWorld } from '../collision.js';
 import { DolphinPod, DOLPHIN_KINDS } from '../creatures/dolphin.js';
 import { DOLPHIN_POOL_SPECIES } from '../species.js';
 import { fbm3 } from '../noise.js';
+import { FeedCloud } from '../creatures/feed.js';
 
 // ============ イルカプールゾーン ============
 // 大水槽と違い、浅く明るいラグーン。日射が強く、水色は透明な турコイズ。
@@ -42,7 +43,7 @@ export const DOLPHIN_POOL = {
     exposure: 1.0,
   },
   camera: { pos: new THREE.Vector3(0, 10.0, 16), look: new THREE.Vector3(0, 10.5, 0) },
-  tap: 'イルカはときどき水面へ跳びます',
+  tap: 'イルカはときどき水面へ跳びます / えさをまくと寄ってきて跳ねる',
   species: DOLPHIN_POOL_SPECIES,
 
   build(root, audio) {
@@ -65,6 +66,9 @@ export const DOLPHIN_POOL = {
       { x: 11, y: poolTerrain(11, -8) + 0.4, z: -8, count: 90, radius: 0.6 },
     ]);
     createMarineSnow(root);
+
+    // 餌は小魚。水面近くで銀色にひらめき、追われると散る
+    const fry = new FeedCloud(root, 'fry');
 
     // --- 3種のポッド ---
     // 種ごとに遊泳域をずらして、同じ水槽の別の場所で暮らしているように見せる
@@ -107,7 +111,15 @@ export const DOLPHIN_POOL = {
       },
       update(dt, camera) {
         for (const p of Object.values(pods)) p.update(dt);
+        fry.update(dt, poolTerrain, everyone);
         godRays.update(camera);
+      },
+      feedLeft: () => fry.n,
+      /** 餌は水面近くへ落とす。イルカは水面で受け取る */
+      onFeed(p) {
+        _feed.set(p.x, Math.min(Math.max(p.y, WORLD.surfaceY - 5.0), WORLD.surfaceY - 0.5), p.z);
+        fry.drop(_feed, 90, 1.2);
+        for (const q of Object.values(pods)) q.noticeFeed(fry);
       },
       onTap() { /* イルカは驚かせない */ },
     };
@@ -116,3 +128,5 @@ export const DOLPHIN_POOL = {
 
 // 水面より上へ跳び出せるよう、カメラの上限は水面直下に留める
 export const POOL_SURFACE = WORLD.surfaceY;
+
+const _feed = new THREE.Vector3();

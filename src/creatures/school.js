@@ -17,6 +17,16 @@ const _up = new THREE.Vector3();
 const _m = new THREE.Matrix4();
 const _avoid = new THREE.Vector3();
 
+/**
+ * 単位球のなかの一様な点。餌の雲の内側を偏りなく埋めるのに使う。
+ * 毎フレーム呼ばれるので、渡された Vector3 に書きこんで確保はしない
+ */
+function randomInBall(v) {
+  do { v.set(Math.random() * 2 - 1, Math.random() * 2 - 1, Math.random() * 2 - 1); }
+  while (v.lengthSq() > 1);
+  return v;
+}
+
 export class School {
   constructor({
     mesh,            // InstancedMesh
@@ -53,6 +63,11 @@ export class School {
     this.vel = [];
     this.panics = []; // {pos, t0, radius, strength}
     this.lures = [];  // {pos, radius, strength} — 毎フレーム作り直す
+    this.bait = null; // 餌のありか。あれば回遊目標より優先される
+    this.baitSpread = 1.3;
+    // 餌の雲のなかで個体ごとに狙う点。全員が中心を狙うと外側で
+    // 押しあうだけになって、いつまでも粒に口が届かない
+    this.baitOff = [];
     for (let i = 0; i < count; i++) {
       const a = Math.random() * Math.PI * 2;
       const r = Math.random() * homeRadius * 0.4;
@@ -70,6 +85,7 @@ export class School {
     // 警戒度。隣の個体から次々に伝播する(実魚の驚愕が群れを走る現象)
     this.alarm = new Float32Array(count);
     this.alarmNext = new Float32Array(count);
+    for (let i = 0; i < count; i++) this.baitOff.push(randomInBall(new THREE.Vector3()));
   }
 
   /**
@@ -80,6 +96,17 @@ export class School {
   lure(point, radius = 6, strength = 3.5) {
     this.lures.push({ pos: point, radius, strength });
   }
+
+  /**
+   * 餌のありか。群れ全体の回遊目標をそこへ置きかえる。
+   *
+   * lure() は半径のなかの個体を引き寄せるだけなので、群れが遠くにいると
+   * いつまでも気づかない。実際、水槽の反対側にいたイワシが餌の時間に
+   * 寄ってくるのは一匹ずつが誘われるからではなく、群れごと向きを変えるから。
+   * なので誘引とは別に、回遊の行き先そのものを餌へ向ける。
+   * lure と同じく1フレーム限りなので、置く側が毎フレーム呼び直す。
+   */
+  feedAt(point, spread = 1.3) { this.bait = point; this.baitSpread = spread; }
 
   // クリック等による驚愕反応
   scare(point, radius = 9, strength = 60) {
@@ -115,6 +142,11 @@ export class School {
       THREE.MathUtils.clamp(this.center.y + wander1(t + 50, this.seed) * 4.5, p.yMin + 1, p.yMax - 1),
       this.center.z + wander1(t + 100, this.seed) * this.homeRadius * 0.75
     );
+    // 餌があるならそちらへ。行き先ごと差し替えるので、群れは
+    // 遠くにいても向きを変えて寄ってくる
+    if (this.bait) {
+      target.set(this.bait.x, THREE.MathUtils.clamp(this.bait.y, p.yMin + 0.5, p.yMax - 0.5), this.bait.z);
+    }
 
     const panicActive = this.panics.filter(pp => this.time - pp.t0 < 2.2);
     this.panics = panicActive;
@@ -160,14 +192,29 @@ export class School {
 
       if (nCount > 0) {
         const inv = 1 / nCount;
+        // 餌についているあいだは隊列がゆるむ。プランクトン食の魚が
+        // 餌の塊にたどりつくと、整った群れの形はいったん崩れて
+        // めいめいが粒を追う。食べ終わるとまた隊列に戻る
+        const g = this.bait ? 0.4 : 1;
         // 整列: 平均速度へ
-        force.x += (aliX * inv - vel.x) * p.wAli;
-        force.y += (aliY * inv - vel.y) * p.wAli;
-        force.z += (aliZ * inv - vel.z) * p.wAli;
+        force.x += (aliX * inv - vel.x) * p.wAli * g;
+        force.y += (aliY * inv - vel.y) * p.wAli * g;
+        force.z += (aliZ * inv - vel.z) * p.wAli * g;
         // 結集: 近傍重心へ
-        force.x += (cohX * inv - pos.x) * p.wCoh;
-        force.y += (cohY * inv - pos.y) * p.wCoh;
-        force.z += (cohZ * inv - pos.z) * p.wCoh;
+        force.x += (cohX * inv - pos.x) * p.wCoh * g;
+        force.y += (cohY * inv - pos.y) * p.wCoh * g;
+        force.z += (cohZ * inv - pos.z) * p.wCoh * g;
+      }
+
+      // ---- 餌の粒へ ----
+      // 狙った点まで来たら次の点を選びなおす。これで群れは雲のなかを
+      // 絶えずかき回すように動き、止まってしまわない
+      if (this.bait) {
+        const o = this.baitOff[i], sp = this.baitSpread;
+        const bx = this.bait.x + o.x * sp, by = this.bait.y + o.y * sp, bz = this.bait.z + o.z * sp;
+        const dx = bx - pos.x, dy = by - pos.y, dz = bz - pos.z;
+        if (dx * dx + dy * dy + dz * dz < 0.16) randomInBall(o);
+        force.x += dx * 1.2; force.y += dy * 1.2; force.z += dz * 1.2;
       }
 
       // ---- 遊泳目標へ(弱い引力) ----
@@ -275,6 +322,7 @@ export class School {
     this.schoolCenter.copy(centerAccum).multiplyScalar(1 / this.count);
     // 誘引点は1フレーム限り。置いた側が毎フレーム置き直す
     this.lures.length = 0;
+    this.bait = null;
     this.writeMatrices(dt);
   }
 
