@@ -72,6 +72,9 @@ export const ICE_SEA = {
 
     const world = new CollisionWorld();
     for (const c of stones.colliders) world.addStatic(c.center, c.rx, c.ry, c.rz);
+    // 氷山は水面下に本体がある。ここを入れないと、泳いでいて塊を
+    // すり抜けることになる
+    for (const c of ice.colliders) world.addStatic(c.center, c.rx, c.ry, c.rz);
 
     // --- ペンギン4種 ---
     // 気泡は1つの粒プールを4種で共有する。種ごとに持たせても意味がなく、

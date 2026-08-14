@@ -152,11 +152,32 @@ function makeFloes(seed = 1) {
     for (let a = 0; a < SAMP; a++) rMean += rad[a];
     rMean /= SAMP;
 
+    // 一年氷か多年氷か。ここを一様にすると、同じ厚みの板を敷き詰めた
+    // 床になる(実際そう見えていた)。夏を越した氷は融けきらずに
+    // 厚みを増し、水面から1m以上せり上がって丘のようになる。
+    // 一年氷は薄く平らで、水面とほとんど面一。この2つが混じって
+    // はじめて「海に浮かぶ氷の原」に見える
+    const old = rnd() < (rMean > 7 ? 0.55 : 0.22);
+    // 氷丘脈(圧力リッジ)。板どうしが押し合うと、接した縁が座屈して
+    // 瓦礫の壁になる。上に1〜2mせり上がり、下にはその数倍の竜骨が垂れる。
+    // 流氷の原が「タイルの床」ではなく「地形」に見えるのは、ほぼこれのおかげ。
+    // 押し合っている縁とそうでない縁があるので、方位ごとに強さを持たせる
+    const ridge = new Float32Array(SAMP);
+    for (let a = 0; a < SAMP; a++) {
+      const th = (a / SAMP) * Math.PI * 2;
+      const g = noise3(Math.cos(th) * 1.25 + fs * 5, Math.sin(th) * 1.25, 11);
+      ridge[a] = Math.min(Math.max((g - 0.44) / 0.40, 0), 1);
+    }
+    smoothRing(ridge, 1);
+    const thick = old ? 2.2 + rMean * 0.14 + rnd() * 1.4
+                      : 0.45 + rMean * 0.05 + rnd() * 0.35;
     floes.push({
       x: sx, z: sz, rad, r: rMax, rMean,
-      seed: fs,
-      // 厚さ。一年氷で1〜2m、多年氷で3m超。大きい板ほど古く厚い
-      thick: 0.70 + rMean * 0.085 + rnd() * 0.35,
+      seed: fs, old, ridge,
+      thick,
+      // 瓦礫の壁の高さ。実物の氷丘脈は一年氷で1m前後、
+      // 重なった多年氷で数m。上限を切らないと壁だらけになる
+      sail: Math.min(thick * 0.5 + rnd() * 0.6, 2.2),
     });
   }
   floes.polynyas = POLYNYAS;
@@ -187,6 +208,26 @@ function smoothRing(arr, passes) {
       arr[i] = (cp[(i - 1 + n) % n] + cp[i] * 2 + cp[(i + 1) % n]) * 0.25;
     }
   }
+}
+
+// 氷丘脈のせり上がり(m)。方位ごとの強さ × 縁からの分布 × 瓦礫のむら。
+// 縁のすぐ内側がいちばん高く、外側の面は水際へ崩れ落ちる
+function ridgeAt(f, u, ang) {
+  const n = f.ridge.length;
+  const x = ((ang / (Math.PI * 2)) % 1 + 1) % 1 * n;
+  const i = Math.floor(x), t = x - i;
+  const amp = f.ridge[i % n] * (1 - t) + f.ridge[(i + 1) % n] * t;
+  if (amp <= 0.001) return 0;
+  const prof = smooth01((u - 0.52) / 0.34) * (1 - smooth01((u - 0.88) / 0.12) * 0.6);
+  // 瓦礫。滑らかな土手にすると壁ではなく畦(あぜ)になる
+  const cx = Math.cos(ang), cz = Math.sin(ang);
+  const rub = 0.45 + 0.55 * noise3(cx * 9 + f.seed * 2, cz * 9, 21);
+  return f.sail * amp * prof * rub;
+}
+
+function smooth01(x) {
+  const c = Math.min(Math.max(x, 0), 1);
+  return c * c * (3 - 2 * c);
 }
 
 // 板の輪郭半径(角度の関数)
@@ -223,6 +264,16 @@ function floeDraft(f, u, ang) {
   return Math.max(flat + keel + keel2 + bump - 0.22 - rimCut, 0.22);
 }
 
+// 板の下面の深さ(m、水面から下向きが正)。
+// 氷丘脈の下には、せり上がりの何倍もの竜骨が垂れている。
+// ただし海底を突き抜けさせるわけにはいかないので、
+// その場所の水深の半分あまりで頭を打たせる
+function floeBottom(f, u, ang, x, z) {
+  const d = floeDraft(f, u, ang) * f.thick * 0.90 + ridgeAt(f, u, ang) * 2.2;
+  const depth = WORLD.surfaceY - sandHeight(x, z);
+  return Math.min(d, depth * 0.58);
+}
+
 /**
  * 流氷の天蓋。1つのマージ済みメッシュとして作る。
  * @returns { mesh, floes, coverTexture, leadSpots }
@@ -248,7 +299,13 @@ function deckAt(f, u, ang) {
     // 「氷の板」ではなく「水に浮いた紙」に見える
     const snow = free * (1.2 + 1.7 * noise3(Math.cos(aa) * uu * 3 + f.seed, Math.sin(aa) * uu * 3, 5))
                * (1 - Math.pow(uu, 3));
-    return WORLD.surfaceY + free * 0.3 + snow;
+    // 多年氷は表面が丘のようにうねる。融けて凍ってを繰り返した跡で、
+    // 一年氷の平らな板とはここが違う
+    const humm = f.old
+      ? f.thick * 0.09 * (noise3(Math.cos(aa) * uu * 2.2 + f.seed * 3, Math.sin(aa) * uu * 2.2, 31) - 0.35)
+        * (1 - Math.pow(uu, 2.5))
+      : 0;
+    return WORLD.surfaceY + free * 0.3 + snow + Math.max(humm, 0) + ridgeAt(f, uu, aa);
   };
   const fu = Math.min(Math.max(u, 0), 1) * RINGS;
   const i0 = Math.min(Math.floor(fu), RINGS - 1), tu = fu - i0;
@@ -259,11 +316,91 @@ function deckAt(f, u, ang) {
        + (node(i0 + 1, j0) * (1 - ta) + node(i0 + 1, j0 + 1) * ta) * tu;
 }
 
+// ---- 氷山 ----
+//
+// 海氷とは出自がまったく違う。海氷は海面が凍ったもの(塩水・薄い・平ら)、
+// 氷山は氷河や棚氷から割れて流れてきた真水の氷の塊。
+// だから見た目も別物になる:
+//   ・ブライン(塩水の管)が無いぶん透明で、深く青い
+//   ・何万年ぶんの雪が押し固まった年層が、崖に縞になって見える
+//   ・水面下に本体の大部分がある。浅い沿岸では底に乗り上げて座礁し、
+//     そのまわりに流氷が寄せて固まる
+//
+// ここの水深は15m前後しかないので、置く氷山はどれも座礁している。
+// 底から水面上まで一本の柱として作り、水際には波に削られたノッチを入れる。
+// 小さいものは座礁せずに浮いている(氷山の欠片=グラウラー)。
+function makeBergs(seed, floes) {
+  const rnd = rng(seed * 71 + 3);
+  const bergs = [];
+  const want = [
+    // [個数, 半径の範囲, 水面上の高さ, 底に着くか]
+    [2, [21, 33], [4.5, 7.5], true],     // 泳いで行ける範囲。見上げられる
+    [4, [40, 76], [7.0, 13.0], true],    // 遠景。水平線に立つ
+    [5, [14, 46], [0.5, 1.6], false],    // グラウラー(氷山の欠片)
+  ];
+  for (const [n, rRange, hRange, grounded] of want) {
+    for (let k = 0; k < n; k++) {
+      let x = 0, z = 0, ok = false;
+      for (let tries = 0; tries < 60 && !ok; tries++) {
+        const a = rnd() * Math.PI * 2;
+        const r = rRange[0] + rnd() * (rRange[1] - rRange[0]);
+        x = Math.cos(a) * r; z = Math.sin(a) * r;
+        ok = true;
+        for (const b of bergs) {
+          if (Math.hypot(x - b.x, z - b.z) < (b.rMean + 14)) { ok = false; break; }
+        }
+      }
+      const top = WORLD.surfaceY + hRange[0] + rnd() * (hRange[1] - hRange[0]);
+      const free = top - WORLD.surfaceY;
+      // 大きさは高さから決める。塔のように細いものは自立できないので、
+      // 幅は高さの2倍前後になる
+      const rMean = free * (0.9 + rnd() * 0.9) + 2.0;
+      const SAMP = 40;
+      const rad = new Float32Array(SAMP);
+      const fs = rnd() * 100;
+      for (let a = 0; a < SAMP; a++) {
+        const th = (a / SAMP) * Math.PI * 2;
+        rad[a] = rMean * (0.72 + 0.55 * noise3(Math.cos(th) * 1.6 + fs, Math.sin(th) * 1.6, 3));
+      }
+      smoothRing(rad, 1);
+      // 座礁するものは海底まで、浮いているものは氷山の1/8則で沈める
+      const base = grounded
+        ? Math.min(sandHeight(x, z) - 0.4, WORLD.surfaceY - free * 1.5)
+        : WORLD.surfaceY - free * 6.5;
+      bergs.push({
+        x, z, rad, rMean, r: Math.max(...rad), seed: fs, top, base, grounded,
+        // 天面の傾き。水平な卓状氷山でも、たいてい少し傾いて浮いている
+        tiltX: (rnd() - 0.5) * 0.26, tiltZ: (rnd() - 0.5) * 0.26,
+        // 卓状(棚氷から割れたばかり)か、尖峰状(融けて崩れて久しい)か。
+        // 卓状ばかり並べると、箱を置いただけの絵になる
+        dome: rnd() < 0.45 ? 0.5 + rnd() * 0.8 : 0,
+      });
+    }
+  }
+  return bergs;
+}
+
+// 氷山の輪郭半径。高さで少しずつ変わる(下がわずかに広く、
+// 水際に波食のノッチ、上は切り立つ)
+function bergRadius(b, ang, h) {
+  const n = b.rad.length;
+  const x = ((ang / (Math.PI * 2)) % 1 + 1) % 1 * n;
+  const i = Math.floor(x), t = x - i;
+  const base = b.rad[i % n] * (1 - t) + b.rad[(i + 1) % n] * t;
+  const hw = (WORLD.surfaceY - b.base) / (b.top - b.base);   // 水面の高さ
+  let k = 1.06 - (0.14 + b.dome * 0.30) * h;
+  k -= 0.06 * Math.exp(-Math.pow((h - hw) / 0.045, 2));      // 波に削られた溝
+  // 崖の縦の溝。角度に速く、高さにゆっくり変わるノイズ
+  k *= 1 + 0.07 * (noise3(Math.cos(ang) * 5.5 + b.seed, Math.sin(ang) * 5.5, h * 3) - 0.5);
+  return base * k;
+}
+
 export function createIceCanopy(scene, { seed = 1 } = {}) {
   const floes = makeFloes(seed);
+  const bergs = makeBergs(seed, floes);
 
   const pos = [], nrm = [], idx = [];
-  const thickA = [], edgeA = [], seedA = [];
+  const thickA = [], edgeA = [], seedA = [], bergA = [];
   const Y = WORLD.surfaceY;
 
   for (const f of floes) {
@@ -278,12 +415,14 @@ export function createIceCanopy(scene, { seed = 1 } = {}) {
       for (let j = 0; j < SEGS; j++) {
         const ang = (j / SEGS) * Math.PI * 2;
         const rr = floeRadius(f, ang) * u;
-        const d = floeDraft(f, u, ang) * draft;
-        pos.push(f.x + Math.cos(ang) * rr, Y - d, f.z + Math.sin(ang) * rr);
+        const px = f.x + Math.cos(ang) * rr, pz = f.z + Math.sin(ang) * rr;
+        const d = floeBottom(f, u, ang, px, pz);
+        pos.push(px, Y - d, pz);
         nrm.push(0, -1, 0);
         thickA.push(d + free);
         edgeA.push(u);
         seedA.push(f.seed);
+        bergA.push(0);
       }
     }
     for (let i = 0; i < RINGS; i++) {
@@ -308,6 +447,7 @@ export function createIceCanopy(scene, { seed = 1 } = {}) {
         thickA.push(top - Y + free * 0.7);
         edgeA.push(u);
         seedA.push(f.seed);
+        bergA.push(0);
       }
     }
     for (let i = 0; i < RINGS; i++) {
@@ -329,12 +469,84 @@ export function createIceCanopy(scene, { seed = 1 } = {}) {
     }
   }
 
+  // ---- 氷山 ----
+  // 底から天面まで一本の柱として積む。最後に天面を張って蓋をする。
+  //
+  // 板とは別のメッシュにして、裏面を描かない。板は上からも下からも
+  // 見るので両面描きが要るが、氷山は閉じた塊で、中に入ることはない
+  // (当たり判定で入れない)。両面のまま置いたら、水上の描画が
+  // 塊の裏側を描くぶんだけ丸損していた
+  const bpos = [], bnrm = [], bidx = [];
+  const bthick = [], bedge = [], bseed = [], bberg = [];
+  const BSEG = 30, BRING = 10, BCAP = 3;
+  for (const b of bergs) {
+    const bBase = bpos.length / 3;
+    const H = b.top - b.base;
+    for (let i = 0; i <= BRING; i++) {
+      const h = i / BRING;
+      for (let j = 0; j < BSEG; j++) {
+        const ang = (j / BSEG) * Math.PI * 2;
+        const rr = bergRadius(b, ang, h);
+        bpos.push(b.x + Math.cos(ang) * rr, b.base + H * h, b.z + Math.sin(ang) * rr);
+        bnrm.push(Math.cos(ang), 0, Math.sin(ang));
+        // 真水の氷は厚い。透過はほとんど無く、青く沈む
+        bthick.push(3.2);
+        bedge.push(0);
+        bseed.push(b.seed);
+        bberg.push(1);
+      }
+    }
+    for (let i = 0; i < BRING; i++) {
+      for (let j = 0; j < BSEG; j++) {
+        const jn = (j + 1) % BSEG;
+        const a = bBase + i * BSEG + j, c = bBase + i * BSEG + jn;
+        const d = bBase + (i + 1) * BSEG + j, e = bBase + (i + 1) * BSEG + jn;
+        bidx.push(a, d, c, c, d, e);
+      }
+    }
+    // 天面。雪を載せた台地。少し傾いていて、真ん中がわずかに盛り上がる
+    const capBase = bpos.length / 3;
+    for (let i = 0; i <= BCAP; i++) {
+      const u = i / BCAP;
+      for (let j = 0; j < BSEG; j++) {
+        const ang = (j / BSEG) * Math.PI * 2;
+        const rr = bergRadius(b, ang, 1) * (1 - u);
+        const cx = Math.cos(ang) * rr, cz = Math.sin(ang) * rr;
+        const y = b.top + cx * b.tiltX + cz * b.tiltZ
+                + b.dome * (b.top - WORLD.surfaceY) * 0.55 * Math.pow(u, 1.4)
+                + noise3(cx * 0.35 + b.seed, cz * 0.35, 13) * H * 0.05;
+        bpos.push(b.x + cx, y, b.z + cz);
+        bnrm.push(0, 1, 0);
+        bthick.push(3.2);
+        bedge.push(0);
+        bseed.push(b.seed);
+        bberg.push(1);
+      }
+    }
+    for (let i = 0; i < BCAP; i++) {
+      for (let j = 0; j < BSEG; j++) {
+        const jn = (j + 1) % BSEG;
+        const a = capBase + i * BSEG + j, c = capBase + i * BSEG + jn;
+        const d = capBase + (i + 1) * BSEG + j, e = capBase + (i + 1) * BSEG + jn;
+        bidx.push(a, c, d, c, e, d);
+      }
+    }
+    // 柱の上端と天面の外周をつなぐ
+    const rimTop = bBase + BRING * BSEG;
+    for (let j = 0; j < BSEG; j++) {
+      const jn = (j + 1) % BSEG;
+      bidx.push(rimTop + j, capBase + j, rimTop + jn);
+      bidx.push(rimTop + jn, capBase + j, capBase + jn);
+    }
+  }
+
   const geo = new THREE.BufferGeometry();
   geo.setIndex(idx);
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   geo.setAttribute('aThick', new THREE.Float32BufferAttribute(thickA, 1));
   geo.setAttribute('aEdge', new THREE.Float32BufferAttribute(edgeA, 1));
   geo.setAttribute('aSeed', new THREE.Float32BufferAttribute(seedA, 1));
+  geo.setAttribute('aBerg', new THREE.Float32BufferAttribute(bergA, 1));
   geo.computeVertexNormals();
 
   const mat = new THREE.ShaderMaterial({
@@ -344,12 +556,15 @@ export function createIceCanopy(scene, { seed = 1 } = {}) {
       attribute float aThick;
       attribute float aEdge;
       attribute float aSeed;
+      attribute float aBerg;
       varying vec3 vWorldPos;
       varying vec3 vNormal;
       varying float vThick;
       varying float vEdge;
       varying float vSeed;
+      varying float vBerg;
       void main() {
+        vBerg = aBerg;
         vec4 wp = modelMatrix * vec4(position, 1.0);
         vWorldPos = wp.xyz;
         vNormal = normalize(mat3(modelMatrix) * normal);
@@ -365,6 +580,7 @@ export function createIceCanopy(scene, { seed = 1 } = {}) {
       varying float vThick;
       varying float vEdge;
       varying float vSeed;
+      varying float vBerg;
 
       // サスツルギの高さ場(0..1)。風座標で受け取る
       float sastHeight(vec2 sp) {
@@ -378,12 +594,30 @@ export function createIceCanopy(scene, { seed = 1 } = {}) {
         vec3 V = normalize(cameraPosition - vWorldPos);
         vec2 p = vWorldPos.xz;
 
+        // ---- 下面か上面か ----
+        // これを先に決める。この一枚は画面の大半を覆うので、
+        // 「上から見たときにしか効かないもの」を下面でも計算していると、
+        // そのぶんがまるごと fps に出る。実際、雪のサスツルギの法線だけで
+        // 画素あたり6回 fbm を回していて、水中では1回も使っていなかった。
+        // 氷山は板ではなく塊なので、この判定が使えない。切り立った崖は
+        // 法線が水平で「下面でも上面でもない」——雪が載るのは天面だけ
+        float under = clamp(-n.y * 0.5 + 0.5, 0.0, 1.0);
+        under = mix(under, 1.0 - smoothstep(0.55, 0.92, n.y), vBerg);
+
         // ---- 氷の中身 ----
         // 海氷は真水の氷とちがって、凍るときに追い出された塩水が
         // 細い管(ブラインチャンネル)として無数に残る。これが光を散らすので
         // 白く濁って見える。管の少ない古い氷ほど透明で、青い。
-        float brine = fbm(p * 1.7 + vSeed);
-        float channels = pow(abs(sin(fbm(p * 0.55 + vSeed * 2.0) * 9.0)), 8.0);
+        float brine = 0.5, channels = 0.0, crack = 0.0, frost = 1.0;
+        if (under > 0.015) {
+          brine = fbm(p * 1.7 + vSeed);
+          channels = pow(abs(sin(fbm(p * 0.55 + vSeed * 2.0) * 9.0)), 8.0);
+          // ひびは「線」。fbm をそのまま累乗すると染みのような面になる
+          float cw = fbm(p * 0.14 + vSeed * 3.0 + 5.0);
+          crack = smoothstep(0.011, 0.0, abs(cw - 0.5)) * 0.24;
+          // 下面のざらつき。凍りついた微結晶が細かく光を返す
+          frost = 0.85 + 0.30 * fbm(p * 6.0 + vSeed * 7.0);
+        }
 
         // ---- 透過光 ----
         // 上から差した光が板を通って下面へ抜けてくる。厚いほど減衰し、
@@ -394,71 +628,93 @@ export function createIceCanopy(scene, { seed = 1 } = {}) {
         vec3 trans = exp(-kappa * thick);
         // 割れ目やひび、板の縁は極端に薄いので、そこだけ白く輝く
         float rim = smoothstep(0.72, 1.0, vEdge);
-        // ひびは「線」。fbm をそのまま累乗すると染みのような面になる
-        float cw = fbm(p * 0.14 + vSeed * 3.0 + 5.0);
-        float crack = smoothstep(0.011, 0.0, abs(cw - 0.5)) * 0.24;
         trans += vec3(1.0) * (rim * 0.50 + crack);
-
-        // ---- 下面か上面か ----
-        // 下から見上げるときは透過光が主役。上から見るときは雪の反射が主役
-        float under = clamp(-n.y * 0.5 + 0.5, 0.0, 1.0);
 
         vec3 iceCol = mix(vec3(0.42, 0.62, 0.74), vec3(0.10, 0.32, 0.46),
                           smoothstep(0.4, 2.6, thick));
+        // ---- 氷山 ----
+        // 氷河の氷。海氷とちがってブラインが無いので、中身は透明で
+        // 深く青い。ただし外から見える面はほとんど白い——風化して
+        // 表層が細かい気泡だらけになるから。青が出るのは、
+        //   ・水に濡れた水際から下
+        //   ・割れ目のなか(表層が剥がれて中身が露出している)
+        // の2か所だけ。全面を青くすると、氷ではなく色ガラスの塊になる。
+        // 何万年ぶんの雪が押し固まった年層は「水平」に走る。
+        // ここに横方向のノイズを強く混ぜると、縞が縦に立ってバーコードになる。
+        //
+        // この2つの fbm は氷山のためだけのものなので、必ず分岐で囲む。
+        // 分岐なしで書いていたら、画面の大半を占める流氷の側でも毎画素
+        // 余分に2回 fbm を回すことになり、水上の描画が3割落ちた
+        float wet = 0.0;
+        if (vBerg > 0.5) {
+          float layer = 0.5 + 0.5 * sin(vWorldPos.y * 1.9 + fbm(p * 0.10 + vSeed) * 1.6);
+          wet = smoothstep(uSurfaceY + 0.7, uSurfaceY - 1.0, vWorldPos.y);
+          // 割れ目。崖を縦に走る
+          float fis = smoothstep(0.018, 0.0, abs(fbm(p * 0.85 + vSeed * 4.0) - 0.5));
+          vec3 bergDry = mix(vec3(0.52, 0.58, 0.64), vec3(0.70, 0.75, 0.79), layer);
+          vec3 bergWet = mix(vec3(0.10, 0.30, 0.41), vec3(0.19, 0.43, 0.54), layer);
+          iceCol = mix(mix(bergDry, bergWet, wet), vec3(0.13, 0.40, 0.56), fis * 0.45);
+        }
 
         // ---- 上面の雪 ----
         // 極地の雪は降り積もるだけでなく、風に削られて硬い畝(サスツルギ)になる。
         // これが無いと、上から見た氷はただの白い板だった。
         // 畝は卓越風の向きに揃うので、その向きへ引き伸ばしたノイズを高さ場にする
-        vec2 wind = vec2(0.87, 0.49);
-        vec2 sp = vec2(dot(p, wind), dot(p, vec2(-wind.y, wind.x)));
-        float sast = sastHeight(sp);
-        // 畝の傾きから法線を作る。色のむらより陰影のほうが凹凸に見える。
-        // 差分は世界座標の幅で取ること(スケール後の座標で取ると、
-        // 傾きが伸ばした倍率ぶん狂って、ほとんど平らなままになる)
-        const float E = 0.07;              // 差分幅(m)
-        const float AMP = 0.075;           // 畝の高さ(m)
-        float gx = (sastHeight(sp + vec2(E, 0.0)) - sast) / E * AMP;
-        float gz = (sastHeight(sp + vec2(0.0, E)) - sast) / E * AMP;
-        // 風座標の勾配をワールドへ戻す
-        vec3 snowN = normalize(n + vec3(-(gx * wind.x - gz * wind.y), 0.0,
-                                        -(gx * wind.y + gz * wind.x)) * (1.0 - under));
-        // 雪の反射率は本当は 0.85 ほどあるが、この照明(半球 + 直射)を掛けると
-        // トーンマッピングの頭で潰れて、どんなむらを入れても真っ白な板になる。
-        // 変化が見える帯まで落として、窪みは空の青だけで照らされる色にする
-        vec3 snowCol = mix(vec3(0.40, 0.46, 0.56), vec3(0.66, 0.685, 0.70),
-                           smoothstep(0.25, 0.80, sast));
-
-        // 下面のざらつき。凍りついた微結晶が細かく光を返す
-        float frost = 0.85 + 0.30 * fbm(p * 6.0 + vSeed * 7.0);
+        vec3 snowN = n;
+        vec3 snowCol = vec3(0.55, 0.60, 0.66);
+        float glint = 0.0;
+        if (under < 0.985) {
+          vec2 wind = vec2(0.87, 0.49);
+          vec2 sp = vec2(dot(p, wind), dot(p, vec2(-wind.y, wind.x)));
+          float sast = sastHeight(sp);
+          // 畝の傾きから法線を作る。色のむらより陰影のほうが凹凸に見える。
+          // 差分は世界座標の幅で取ること(スケール後の座標で取ると、
+          // 傾きが伸ばした倍率ぶん狂って、ほとんど平らなままになる)
+          const float E = 0.07;              // 差分幅(m)
+          const float AMP = 0.075;           // 畝の高さ(m)
+          float gx = (sastHeight(sp + vec2(E, 0.0)) - sast) / E * AMP;
+          float gz = (sastHeight(sp + vec2(0.0, E)) - sast) / E * AMP;
+          // 風座標の勾配をワールドへ戻す
+          snowN = normalize(n + vec3(-(gx * wind.x - gz * wind.y), 0.0,
+                                     -(gx * wind.y + gz * wind.x)) * (1.0 - under));
+          // 雪の反射率は本当は 0.85 ほどあるが、この照明(半球 + 直射)を掛けると
+          // トーンマッピングの頭で潰れて、どんなむらを入れても真っ白な板になる。
+          // 変化が見える帯まで落として、窪みは空の青だけで照らされる色にする
+          snowCol = mix(vec3(0.40, 0.46, 0.56), vec3(0.66, 0.685, 0.70),
+                        smoothstep(0.25, 0.80, sast));
+          // 雪の結晶のきらめき。
+          // セルの当たり外れだけで出すと、当たったセルが丸ごと光って
+          // 四角い紙吹雪になる(実際そうなった)。セルの中に小さな点を
+          // 置いて、そこだけ光らせる。粒が細かすぎると画素より小さくなって
+          // 砂嵐になるので、1粒は数mm、遠くでは消す
+          vec2 gc = p * 55.0;
+          vec2 gi = floor(gc);
+          vec2 gj = (vec2(hash12(gi + 3.1), hash12(gi + 7.7)) - 0.5) * 0.6;
+          glint = step(0.962, hash12(gi))
+                * smoothstep(0.17, 0.03, length(fract(gc) - 0.5 - gj))
+                * smoothstep(0.0, 0.3, dot(snowN, uSunDir)) * (1.0 - under)
+                * (1.0 - smoothstep(7.0, 22.0, distance(cameraPosition, vWorldPos)));
+        }
         vec3 albedo = mix(snowCol, iceCol * frost, under);
-        albedo = mix(albedo, albedo + vec3(0.20, 0.24, 0.26), channels * under * 0.8);
+        albedo = mix(albedo, albedo + vec3(0.20, 0.24, 0.26), channels * under * 0.8 * (1.0 - vBerg));
 
         // 上面は雪の法線で、下面はもとの法線で照らす
         vec3 lit = mix(snowN, n, under);
         vec3 col = underwaterLight(albedo, lit, vWorldPos, V, 26.0, 0.22);
-        // 雪の結晶のきらめき。一粒ずつは見えないが、無数の面のうち
-        // たまたま太陽を返したものが点になって光る
-        // 雪の結晶のきらめき。
-        // セルの当たり外れだけで出すと、当たったセルが丸ごと光って
-        // 四角い紙吹雪になる(実際そうなった)。セルの中に小さな点を
-        // 置いて、そこだけ光らせる。粒が細かすぎると画素より小さくなって
-        // 砂嵐になるので、1粒は数mm、遠くでは消す
-        vec2 gc = p * 55.0;
-        vec2 gi = floor(gc);
-        vec2 gj = (vec2(hash12(gi + 3.1), hash12(gi + 7.7)) - 0.5) * 0.6;
-        float glint = step(0.962, hash12(gi))
-                    * smoothstep(0.17, 0.03, length(fract(gc) - 0.5 - gj))
-                    * smoothstep(0.0, 0.3, dot(lit, uSunDir)) * (1.0 - under)
-                    * (1.0 - smoothstep(7.0, 22.0, distance(cameraPosition, vWorldPos)));
         col += uSunColor * glint * 2.4 * uSunI;
         // 透過光。氷を通ってきたぶんなので、氷の影(iceOpen)は掛けない——
         // 掛けると自分自身の影で消えてしまう
         col += uSunColor * trans * uSunI * under * 0.85;
+        // 氷山の水面下は、中へ差し込んだ光が散って青白く光る。
+        // 板の透過光とは別物なので、ここで足す
+        col += vec3(0.08, 0.24, 0.34) * vBerg * wet * uSunI * 0.28;
         // 水面のさざなみが下面に映す揺れる光。
-        // リードから入った光が波で曲げられて、氷の裏に模様を投げる
-        float ripple = causticIter((p + uTime * 0.03) * 0.09, uTime * 0.4);
-        col += uSunColor * ripple * under * 1.1 * uSunI * iceOpen(vWorldPos - vec3(0.0, 0.4, 0.0));
+        // リードから入った光が波で曲げられて、氷の裏に模様を投げる。
+        // 上から見ているときは見えないので、そのときは計算もしない
+        if (under > 0.015) {
+          float ripple = causticIter((p + uTime * 0.03) * 0.09, uTime * 0.4);
+          col += uSunColor * ripple * under * 1.1 * uSunI * iceOpen(vWorldPos - vec3(0.0, 0.4, 0.0));
+        }
         // 縁のフレネル
         col += uAmbTop * pow(1.0 - abs(dot(n, V)), 3.0) * 0.35;
 
@@ -473,12 +729,34 @@ export function createIceCanopy(scene, { seed = 1 } = {}) {
   mesh.renderOrder = -4;      // 水面より手前(水面は -5)
   scene.add(mesh);
 
+  // 氷山。ユニフォームは板と同じオブジェクトを共有する(clone すると
+  // 値ごと複製されて、太陽やフォグの変更が氷山に届かなくなる)
+  const bgeo = new THREE.BufferGeometry();
+  bgeo.setIndex(bidx);
+  bgeo.setAttribute('position', new THREE.Float32BufferAttribute(bpos, 3));
+  bgeo.setAttribute('aThick', new THREE.Float32BufferAttribute(bthick, 1));
+  bgeo.setAttribute('aEdge', new THREE.Float32BufferAttribute(bedge, 1));
+  bgeo.setAttribute('aSeed', new THREE.Float32BufferAttribute(bseed, 1));
+  bgeo.setAttribute('aBerg', new THREE.Float32BufferAttribute(bberg, 1));
+  bgeo.computeVertexNormals();
+  const bergMat = new THREE.ShaderMaterial({
+    uniforms: mat.uniforms,
+    side: THREE.FrontSide,
+    vertexShader: mat.vertexShader,
+    fragmentShader: mat.fragmentShader,
+  });
+  const bergMesh = new THREE.Mesh(bgeo, bergMat);
+  bergMesh.renderOrder = -4;
+  scene.add(bergMesh);
+
   return {
-    mesh, floes,
-    coverTexture: bakeCover(floes),
-    leadSpots: findLeads(floes),
+    mesh, bergMesh, floes, bergs,
+    // 氷山は光を通さない塊。ここに入れないと、影の落ちない氷山になる
+    coverTexture: bakeCover(floes, bergs),
+    leadSpots: findLeads(floes, bergs),
     polynyas: floes.polynyas,
-    field: bakeField(floes),
+    field: bakeField(floes, bergs),
+    colliders: bergColliders(bergs),
     haulOuts: findHaulOuts(floes),
   };
 }
@@ -495,6 +773,8 @@ function findHaulOuts(floes) {
     if (f.rMean < 5) continue;                    // 小さい板には乗らない
     for (let a = 0; a < 8; a++) {
       const ang = (a / 8) * Math.PI * 2 + f.seed;
+      // 瓦礫の壁が立っている縁は登れない。ペンギンも低い縁から上がる
+      if (ridgeAt(f, 0.9, ang) > 0.28) continue;
       const rr = floeRadius(f, ang);
       const ex = f.x + Math.cos(ang) * rr;        // 縁の位置
       const ez = f.z + Math.sin(ang) * rr;
@@ -535,7 +815,7 @@ function findHaulOuts(floes) {
 // 双一次補間で引く。
 const FIELD_RES = 160;
 
-function bakeField(floes) {
+function bakeField(floes, bergs = []) {
   const N = FIELD_RES;
   const px = ICE_EXTENT / N;
   const Y = WORLD.surfaceY;
@@ -545,7 +825,6 @@ function bakeField(floes) {
   const deck = new Float32Array(N * N).fill(-1e4);
 
   for (const f of floes) {
-    const draft = f.thick * 0.90;
     const i0 = Math.max(Math.floor((f.x - f.r + ICE_EXTENT / 2) / px) - 1, 0);
     const i1 = Math.min(Math.ceil((f.x + f.r + ICE_EXTENT / 2) / px) + 1, N - 1);
     const j0 = Math.max(Math.floor((f.z - f.r + ICE_EXTENT / 2) / px) - 1, 0);
@@ -561,8 +840,28 @@ function bakeField(floes) {
         if (d > rr) continue;
         const u = d / Math.max(rr, 1e-3);
         const k = j * N + i;
-        under[k] = Math.min(under[k], Y - floeDraft(f, u, ang) * draft);
+        under[k] = Math.min(under[k], Y - floeBottom(f, u, ang, x, z));
         deck[k] = Math.max(deck[k], deckAt(f, u, ang));
+      }
+    }
+  }
+
+  // 氷山の足元。ここは氷ではなく「塊が立っている」ので、ペンギンが
+  // 息継ぎに浮上してはいけない。甲板の値を入れて hasIce を立てるが、
+  // 上陸点の探索は板しか見ないので、乗ろうとすることはない
+  for (const b of bergs) {
+    const i0 = Math.max(Math.floor((b.x - b.r + ICE_EXTENT / 2) / px) - 1, 0);
+    const i1 = Math.min(Math.ceil((b.x + b.r + ICE_EXTENT / 2) / px) + 1, N - 1);
+    const j0 = Math.max(Math.floor((b.z - b.r + ICE_EXTENT / 2) / px) - 1, 0);
+    const j1 = Math.min(Math.ceil((b.z + b.r + ICE_EXTENT / 2) / px) + 1, N - 1);
+    for (let j = j0; j <= j1; j++) {
+      const z = (j + 0.5) * px - ICE_EXTENT / 2;
+      for (let i = i0; i <= i1; i++) {
+        const x = (i + 0.5) * px - ICE_EXTENT / 2;
+        const dx = x - b.x, dz = z - b.z;
+        const d = Math.hypot(dx, dz);
+        if (d > bergRadius(b, Math.atan2(dz, dx), 0.8)) continue;
+        deck[j * N + i] = Math.max(deck[j * N + i], b.top);
       }
     }
   }
@@ -611,7 +910,7 @@ function bakeField(floes) {
 // 板の輪郭をXZ平面のグレースケールに焼く。縁はぼかす:
 // 氷の影の境目は、深くなるほど散乱光で甘くなるので、
 // くっきりした型抜きにしてはいけない。
-function bakeCover(floes) {
+function bakeCover(floes, bergs = []) {
   const N = COVER_RES;
   const px = ICE_EXTENT / N;
   const buf = new Uint8Array(N * N * 4);
@@ -629,6 +928,13 @@ function bakeCover(floes) {
         const c = Math.min(Math.max((rr - d) / 1.5, 0), 1);
         cover = Math.max(cover, c);
       }
+      for (const b of bergs) {
+        const dx = x - b.x, dz = z - b.z;
+        const d = Math.hypot(dx, dz);
+        if (d > b.r * 1.3) continue;
+        const rr = bergRadius(b, Math.atan2(dz, dx), 0.6);
+        cover = Math.max(cover, Math.min(Math.max((rr - d) / 1.5, 0), 1));
+      }
       const k = (j * N + i) * 4;
       buf[k] = buf[k + 1] = buf[k + 2] = Math.round(cover * 255);
       buf[k + 3] = 255;
@@ -642,10 +948,19 @@ function bakeCover(floes) {
   return tex;
 }
 
+// 氷山の当たり判定。回転楕円体で近似する。
+// 泳いでいて塊をすり抜けたら台無しなので、これは必ず入れる
+function bergColliders(bergs) {
+  return bergs.map((b) => ({
+    center: new THREE.Vector3(b.x, (b.base + b.top) / 2, b.z),
+    rx: b.rMean * 0.86, ry: (b.top - b.base) / 2 + 0.5, rz: b.rMean * 0.86,
+  }));
+}
+
 // ---- リード(割れ目)の場所 ----
 // 光芒を差し込ませる位置。板の下に立てても意味がないので、
 // 実際に空いているところを探して返す。
-function findLeads(floes) {
+function findLeads(floes, bergs = []) {
   const spots = [];
   for (let i = 0; i < 900 && spots.length < 7; i++) {
     const a = i * 2.39996323;
@@ -657,6 +972,10 @@ function findLeads(floes) {
       const d = Math.hypot(dx, dz);
       if (d > f.r + 2.0) continue;
       if (d < floeRadius(f, Math.atan2(dz, dx)) + 1.5) { open = false; break; }
+    }
+    // 氷山の真上に光芒を立てると、塊を突き抜ける光の柱になる
+    for (const b of bergs) {
+      if (Math.hypot(x - b.x, z - b.z) < b.r + 2.0) { open = false; break; }
     }
     if (!open) continue;
     if (spots.some((s) => Math.hypot(s.x - x, s.z - z) < 9)) continue;
