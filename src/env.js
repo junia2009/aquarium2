@@ -26,6 +26,9 @@ export const U = {
   uFogColor:   { value: new THREE.Color('#0b3a58') }, // 水中散乱色
   uFogDensity: { value: 0.024 },
   uSurfaceY:   { value: WORLD.surfaceY },
+  // うねりの振幅倍率。1.0 で外洋の±1m。
+  // 流氷に蓋をされた海では、板が波を吸うのでほとんど平らになる
+  uSwell:      { value: 1.0 },
   uAmbTop:     { value: new THREE.Color('#3b87a8') }, // 上方からの環境光
   uAmbBottom:  { value: new THREE.Color('#07222f') }, // 下方(底)からの照り返し
 
@@ -68,6 +71,7 @@ export function baseUniforms() {
     uFogColor: U.uFogColor,
     uFogDensity: U.uFogDensity,
     uSurfaceY: U.uSurfaceY,
+    uSwell: U.uSwell,
     uAmbTop: U.uAmbTop,
     uAmbBottom: U.uAmbBottom,
     uLampPos: U.uLampPos,

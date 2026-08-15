@@ -20,13 +20,17 @@ export function createWaterSurface(scene) {
     depthWrite: true,
     vertexShader: /* glsl */ `
       uniform float uTime;
+      uniform float uSwell;
       varying vec3 vWorldPos;
 
-      // 大きなうねり(頂点変位で水平線のシルエットが揺れる)
+      // 大きなうねり(頂点変位で水平線のシルエットが揺れる)。
+      // 外洋では山と谷で2mほど動く。uSwell はゾーンごとの倍率で、
+      // 流氷の海だけはここを大きく落としてある——海氷は波を吸うので、
+      // 固まった氷の中の海面はほとんど平らになる
       float swell(vec2 p, float t){
-        return sin(p.x * 0.11 + t * 0.7) * 0.35
+        return (sin(p.x * 0.11 + t * 0.7) * 0.35
              + sin(dot(p, vec2(0.07, 0.09)) + t * 0.5) * 0.45
-             + sin(dot(p, vec2(-0.13, 0.05)) + t * 0.9) * 0.2;
+             + sin(dot(p, vec2(-0.13, 0.05)) + t * 0.9) * 0.2) * uSwell;
       }
 
       void main() {

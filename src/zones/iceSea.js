@@ -40,6 +40,11 @@ export const ICE_SEA = {
     sunColor: new THREE.Color('#f4faff'),
     sunDir: new THREE.Vector3(0.34, 0.84, 0.26).normalize(),
     exposure: 1.06,
+    // うねりをほぼ殺す。海氷は波を吸うので、固まった流氷の中の海面は
+    // 池のように平らになる(だから探検家は氷の中を「millpond」と書いた)。
+    // ここが外洋なみ(±1m)のままだと、板の乾舷は中央値でも32cmしか
+    // ないので、氷の上に立っているペンギンが波に飲まれてしまう
+    swell: 0.12,
   },
   // リードのすぐ下、光の柱を見上げる位置から始める
   camera: { pos: new THREE.Vector3(-2, 9.0, 14), look: new THREE.Vector3(2, 14.0, -2) },

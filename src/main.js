@@ -76,6 +76,8 @@ function enterZone(key, { moveCamera = true } = {}) {
   U.uAmbTop.value.copy(e.ambTop);
   U.uAmbBottom.value.copy(e.ambBottom);
   U.uSunDir.value.copy(e.sunDir);
+  // うねりの大きさもゾーンごと。既定は外洋なみ
+  U.uSwell.value = e.swell ?? 1.0;
   // 太陽の色はゾーンごと。深海では限りなく黒に近く、太陽を掛けた項が全部消える
   U.uSunColor.value.copy(e.sunColor || DEFAULT_SUN);
   // ダイバーライト。lamp を持たないゾーンでは消灯したまま
@@ -145,6 +147,7 @@ if (new URLSearchParams(location.search).has('debug')) {
   window.__dive = diveCam;
   window.__three = THREE;
   window.__zone = () => active;
+  window.__env = U;
   // 検証用。撒いた餌が減っていくかを外から数える
   window.__feedCount = () => (active && active.feedLeft ? active.feedLeft() : -1);
 }

@@ -767,6 +767,13 @@ export function createIceCanopy(scene, { seed = 1 } = {}) {
 //
 // 縁ならどこでもよいわけではない。隣の板がすぐ外にあると、
 // 跳び上がる水面がそもそも無い。だから外側の開けぐあいまで見る。
+//
+// 高さも見る。薄い板は水面すれすれに浮いていて、そこへ上げると
+// ペンギンが「氷の上に立っているのに波に洗われている」絵になる。
+// 実際そうなっていた——うねりの山(±12cm)より乾舷の低い上陸点が
+// 全体の14%あった。ペンギンは水を被る板ではなく、乾いた板に上がる。
+const HAUL_FREEBOARD = 0.18;
+
 function findHaulOuts(floes) {
   const out = [];
   for (const f of floes) {
@@ -775,6 +782,8 @@ function findHaulOuts(floes) {
       const ang = (a / 8) * Math.PI * 2 + f.seed;
       // 瓦礫の壁が立っている縁は登れない。ペンギンも低い縁から上がる
       if (ridgeAt(f, 0.9, ang) > 0.28) continue;
+      // 着地点(縁から78%内側)が水面から出ていること
+      if (deckAt(f, 0.78, ang) - WORLD.surfaceY < HAUL_FREEBOARD) continue;
       const rr = floeRadius(f, ang);
       const ex = f.x + Math.cos(ang) * rr;        // 縁の位置
       const ez = f.z + Math.sin(ang) * rr;
