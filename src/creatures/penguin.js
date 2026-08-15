@@ -366,16 +366,21 @@ function buildBeak(kind, zBase) {
 function buildLeg(kind, geom) {
   const parts = { pos: [], uv: [], h: [], part: [], idx: [] };
   const L = kind.total;
-  const { zAt, ventralAt } = geom;
-  // 実物の足は大きい。キングで13cmほどあり、これが体を支える面になる。
+  const { zAt, ventralAt, halfWidth } = geom;
+  // 実物の足は大きい。キングで13〜15cmあり、これが体を支える面になる。
   // 泳ぎだけを考えて小さくすると、立たせたとき支えが無くて
-  // 棒が刺さっているようにしか見えない
-  const FOOT = L * 0.118;          // 足首から趾の先まで
-  const TOE_R = L * 0.021;         // 趾の太さ
-  // 左右の脚は正中線の近くに寄せる。外へ開くほど、そこの腹の面が
-  // 丸みで持ち上がるぶん脚が早く羽毛から出て、鷺のような長い脚に見える
-  const legX = L * 0.023;          // 片側の中心からの距離
-  const rHip = L * 0.011, rAnkle = L * 0.024;
+  // 棒が刺さっているようにしか見えない。0.118 では12cmで下限を割っていた
+  const FOOT = L * 0.132;          // 足首から趾の先まで
+  const TOE_R = L * 0.025;         // 趾の太さ。ペンギンの趾は短く頑丈
+  // 左右の脚の間隔は、胴の長さではなく「腹の広さ」で決まる。
+  // 脚は腹から生えているので、胴が太くなれば付け根も外へ出る。
+  // ここを体長基準にしていたので、胴を太くしたときだけ脚が内側に
+  // 取り残されて、幅広の体を細い2本で支える絵になった。
+  //
+  // ただし外へ出しすぎてもいけない。そこの腹の面は丸みで持ち上がるので、
+  // 脚が早く羽毛から出て、鷺のような長い脚になる
+  const legX = halfWidth * 0.26;   // 片側の中心からの距離
+  const rHip = L * 0.013, rAnkle = L * 0.029;
   const rAt = (w) => rHip + (rAnkle - rHip) * w;
 
   const zHip = zAt(HIP_T), zAnkle = zAt(ANKLE_T);
@@ -527,7 +532,7 @@ export function buildPenguinGeometry(kind) {
     const k = Math.sqrt(Math.max(1 - Math.pow(Math.min(Math.abs(x) / hw, 1), 2), 0));
     return (s(Y_PROFILE, t) - s(H_PROFILE, t) * k) * H;
   };
-  const leg = buildLeg(kind, { zAt, ventralAt });
+  const leg = buildLeg(kind, { zAt, ventralAt, halfWidth: W });
   mergeInto(dst, leg.parts);
 
   const geo = new THREE.BufferGeometry();
