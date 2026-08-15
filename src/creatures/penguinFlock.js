@@ -272,6 +272,13 @@ export class PenguinFlock {
       this.trait[i * 4 + 3] = 1 - Math.pow(Math.random(), 2.2) * 0.45;
     }
     geo.setAttribute('aTrait', new THREE.InstancedBufferAttribute(this.trait, 4));
+    // 濡れ具合。水にいるあいだは1、氷の上では乾いていく。
+    // 上がったばかりの個体は黒々と濡れて光り、しばらく立っていた個体は
+    // マットにふくらむ。同じ板の上で乾き具合の違う個体が混ざるのが、
+    // 実際のコロニーの見え方
+    this.wet = new Float32Array(count).fill(1);
+    this.wetAttr = new THREE.InstancedBufferAttribute(this.wet, 1);
+    geo.setAttribute('aWet', this.wetAttr);
     parent.add(this.mesh);
 
     // ---- 群れの重心 ----
@@ -371,6 +378,8 @@ export class PenguinFlock {
         fidget: 0.55 + Math.random() * 1.1,
         // よちよちの深さ。体を大きく倒す個体とそうでない個体がいる
         rollAmp: 0.82 + Math.random() * 0.4,
+        // 濡れ具合。1=上がったばかり 0=すっかり乾いた
+        wet: 1,
       });
     }
   }
@@ -728,6 +737,18 @@ export class PenguinFlock {
     for (let i = 0; i < this.members.length; i++) {
       const m = this.members[i];
 
+      // ---- 濡れと乾き ----
+      // 水に浸かっているあいだは濡れたまま、外へ出ると乾いていく。
+      // 羽毛は水を弾くうえ、上がった個体は激しく身震いして水を切るので、
+      // 表面の水はすぐ飛ぶ。30秒でほぼ乾く見当。
+      //
+      // ここを90秒にしていたが、ペンギンが氷の上にいるのは7〜20秒しか
+      // ないので、乾く前に海へ戻ってしまって変化が一度も見えなかった。
+      // 氷の上でこれをやるので、水を出る分岐より前に置くこと
+      if (m.pos.y < surf - m.body * 0.3) m.wet = 1;
+      else m.wet = Math.max(m.wet - dt / 30, 0);
+      this.wet[i] = m.wet;
+
       // ================= 水の外 =================
       if (m.state === 'air' || m.state === 'onIce') {
         this.updateAirborne(m, dt, i);
@@ -998,6 +1019,7 @@ export class PenguinFlock {
     this.infoAttr.needsUpdate = true;
     this.poseAttr.needsUpdate = true;
     this.pose2Attr.needsUpdate = true;
+    this.wetAttr.needsUpdate = true;
     if (this.bubbles) this.bubbles.flush();
   }
 

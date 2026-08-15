@@ -45,6 +45,9 @@ attribute vec4 aPose2;
 // どれも「既定値で標準」になるよう置いてある。属性を渡さないメッシュでは
 // GLSL の既定 (0,0,0,1) がそのまま標準の個体になる
 attribute vec4 aTrait;
+// 濡れ具合。1=上がったばかり 0=すっかり乾いた。
+// 属性を渡さないメッシュでは既定の 0(乾いた状態)になる
+attribute float aWet;
 #endif
 varying vec2 vBodyUV;
 varying vec3 vWorldPos;
@@ -54,6 +57,7 @@ varying float vTint;
 varying float vHeight;
 varying vec3 vLocal;
 varying vec2 vTrait;   // x:顔のばらつき y:羽色の濃さ
+varying float vWet;    // 1=濡れている 0=乾いている
 
 void main() {
   vBodyUV = aBodyUV;
@@ -109,10 +113,12 @@ void main() {
   // 軸が体の内側にずれて、回すたびに脚や首が本来と違う場所へ動く
   float sc = 1.0;
   vTrait = vec2(0.0, 1.0);
+  vWet = 0.0;
 #ifdef USE_INSTANCING
   sc = aInfo.z;
   p *= sc;
   vTrait = aTrait.yw;
+  vWet = aWet;
   // 太り具合。胴だけに掛ける。
   // 脚に掛けると足裏の位置が変わって立ち姿の接地計算が崩れるし、
   // 翼に掛けると個体ごとに翼長が変わってしまう。太った鳥の足と翼は
@@ -321,6 +327,7 @@ uniform float uSpecies;   // ペンギンの種(0..3)
 uniform float uTimeP;
 // 個体差。x=顔の模様のばらつき(0が標準、±) y=羽色の濃さ(1が標準)
 varying vec2 vTrait;
+varying float vWet;   // 1=濡れている 0=乾いている
 
 // v(高さ方向)は断面角のcosなので、同じvは左右両側に対応する。
 // これを利用して「両側の目」を1つの式で描く
@@ -337,7 +344,9 @@ float photoRow(float u, float v, float vy, float n, float rad){
   return smoothstep(rad, rad * 0.35, length(vec2(x * 1.7, (v - vy) * 3.2))) * band;
 }
 
-vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, float hgt, vec3 lp, out float glossMul, out vec3 emit) {
+// n は inout。羽毛のように「色より陰影で分かる」表面は、法線を
+// 揺らさないかぎり磨いた面のままになるので、ここで曲げられるようにしておく
+vec3 fishAlbedo(vec2 buv, vec3 wp, inout vec3 n, vec3 V, float tint, float part, float hgt, vec3 lp, out float glossMul, out vec3 emit) {
   float u = clamp(buv.x, 0.0, 1.0);
   float v = buv.y;
   glossMul = 1.0;
@@ -799,14 +808,48 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, float
     }
     if (part < 0.5) {
       // ---- 羽毛 ----
-      // ペンギンの羽は小さく硬く、瓦のように重なって体を覆っている。
-      // 面をなめらかに塗ったままだと、どれだけ形を合わせてもゴムの人形に
-      // 見える。粗さの目を入れるだけで、同じ形が鳥の皮膚に寄る
-      col *= 0.93 + 0.14 * fbm(vec2(u * 130.0, v * 52.0));
-      // 羽の列。黒い背でだけ見え、白い腹では消える
+      // ペンギンの羽は鳥類でいちばん密で(1cm²あたり10〜15本)、短く硬く、
+      // 瓦のように重なって水を通さない一枚の面を作っている。
+      // だから離れて見ると本当につるりとしていて、羽を描き込むほど嘘になる。
+      //
+      // それでもゴム人形に見えていた原因は、粗さが「色」にしか入って
+      // いなかったこと。法線がなめらかなままだと、光の当たり方が
+      // 磨いた面のそれになる。羽毛は色ではなく陰影で分かる表面なので、
+      // ここは法線を揺らさないと質感が出ない。
+      //
+      // ただし遠くでちらつかせない。細かい起伏は近づいたときだけ出す
+      float near = 1.0 - smoothstep(1.2, 5.0, distance(cameraPosition, wp));
+
+      // 羽の並び。列ごとに半枚ずれた千鳥で、下端が次の列に隠れる
+      vec2 fq = vec2(u * 62.0, v * 132.0);
+      float row = floor(fq.y);
+      fq.x += mod(row, 2.0) * 0.5;
+      vec2 cell = fract(fq) - 0.5;
+      // 羽先は丸い。露出している上端が明るく、重なりの下端に影が落ちる
+      float tile = smoothstep(0.52, 0.16, length(vec2(cell.x * 0.85, cell.y * 1.7)));
+      float lip = tile * (0.5 - cell.y);
+
+      // 濡れた羽は寝て平らになり、乾くと立って起伏が出る
+      float relief = near * mix(1.0, 0.35, vWet);
+      // 法線を羽の重なりの向きへ倒す。体の周方向が v なので、
+      // 起伏もその向きに出る
+      vec3 tangentish = normalize(cross(n, vec3(0.0, 0.0, 1.0)) + vec3(0.0, 0.001, 0.0));
+      n = normalize(n + tangentish * lip * 0.55 * relief
+                      + vec3(0.0, 1.0, 0.0) * (fbm(vec2(u * 90.0, v * 38.0)) - 0.5) * 0.30 * near);
+
+      // 色のむらは控えめでよい。陰影が出たぶん、ここを強くすると汚れになる
+      col *= 0.95 + 0.10 * fbm(vec2(u * 130.0, v * 52.0));
+      col *= 1.0 + 0.16 * lip * relief;
+      // 羽の列。白い腹でも消さない——消すと腹だけが塩化ビニルになる。
+      // ただし白のほうが陰影が目立つので、振幅は半分に
       float rows = sin(v * 190.0 + sin(u * 44.0) * 1.6 + u * 26.0);
-      col *= 1.0 - 0.07 * smoothstep(0.1, 0.9, rows)
-                 * smoothstep(line - 0.02, line + 0.16, v);
+      float rowAmp = mix(0.035, 0.07, smoothstep(line - 0.02, line + 0.16, v));
+      col *= 1.0 - rowAmp * smoothstep(0.1, 0.9, rows) * mix(0.5, 1.0, near);
+
+      // 濡れた羽は暗く、乾いた羽は光を散らして明るい。
+      // 上がったばかりの個体が黒々としているのはこれ
+      col *= mix(1.05, 0.80, vWet);
+
       // 目。頭の模様に埋もれないよう最後に置く。虹彩は暗褐色で、
       // まわりに細い裸出部の輪がある
       col = mix(col, vec3(0.055, 0.040, 0.032), eyeDot(u, v, 0.128, 0.80, 0.024));
@@ -815,8 +858,9 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, float
     // 羽毛は水を弾くので濡れた体はよく光る……のだが、広い鏡面ローブを
     // 掛けると脇腹に一本の白い刀傷が走る(実際そうなった)。
     // 生きた羽毛は無数の細かい羽枝でできていて、面としては鈍い。
-    // 鋭い煌めきはむしろ体表に付いた気泡の役目なので、ここは抑える
-    glossMul *= 0.10;
+    // 鋭い煌めきはむしろ体表に付いた気泡の役目なので、ここは抑える。
+    // 濡れているあいだだけ、水膜のぶん少し戻す
+    glossMul *= 0.10 + 0.32 * vWet;
   } else {
     // ---- ハダカイワシ: 黒褐色の体に、腹面の発光器が青緑に灯る ----
     // 鱗が剥がれやすく、生きた個体は体側が銀色に光る。
