@@ -37,6 +37,14 @@ attribute vec4 aPose;
 //   w: 遊脚の縮み。同時に遊ぶ脚は無いので、符号でどちらかを表す
 //      (正 = 右脚が遊脚)
 attribute vec4 aPose2;
+// 個体差。同じ種でも1羽ずつ違う。
+//   x: 太り具合の増減(0 = 標準)
+//   y: 顔の模様のばらつき(0 = 標準)
+//   z: 首の据わりのくせ(0 = 標準)
+//   w: 羽色の濃さ(1 = 標準)
+// どれも「既定値で標準」になるよう置いてある。属性を渡さないメッシュでは
+// GLSL の既定 (0,0,0,1) がそのまま標準の個体になる
+attribute vec4 aTrait;
 #endif
 varying vec2 vBodyUV;
 varying vec3 vWorldPos;
@@ -45,6 +53,7 @@ varying float vPart;
 varying float vTint;
 varying float vHeight;
 varying vec3 vLocal;
+varying vec2 vTrait;   // x:顔のばらつき y:羽色の濃さ
 
 void main() {
   vBodyUV = aBodyUV;
@@ -99,9 +108,21 @@ void main() {
   // 個体ごとの体格差。関節の軸もいっしょに拡げないと、大きい個体ほど
   // 軸が体の内側にずれて、回すたびに脚や首が本来と違う場所へ動く
   float sc = 1.0;
+  vTrait = vec2(0.0, 1.0);
 #ifdef USE_INSTANCING
   sc = aInfo.z;
   p *= sc;
+  vTrait = aTrait.yw;
+  // 太り具合。胴だけに掛ける。
+  // 脚に掛けると足裏の位置が変わって立ち姿の接地計算が崩れるし、
+  // 翼に掛けると個体ごとに翼長が変わってしまう。太った鳥の足と翼は
+  // 大きくならない——太るのは胴だけ
+  if (aPart < 0.5) p.xy *= 1.0 + aTrait.x;
+  // 首の長さ。頭と嘴をまとめて前後にずらす。嘴を置いていくと
+  // 顔から外れるので、頭のおもみは嘴では常に1
+  float headW = (abs(aPart - 5.0) < 0.1) ? 1.0
+              : (aPart < 0.5 ? 1.0 - smoothstep(0.09, 0.27, aBodyUV.x) : 0.0);
+  p.z += headW * aTrait.z;
 #endif
   vec4 wingRoot = vec4(uWingRoot.xyz * sc, uWingRoot.w * sc);
   vec2 neckPivot = uNeckPivot * sc;
@@ -298,6 +319,8 @@ const PATTERN_GLSL = /* glsl */ `
 uniform float uPattern;
 uniform float uSpecies;   // ペンギンの種(0..3)
 uniform float uTimeP;
+// 個体差。x=顔の模様のばらつき(0が標準、±) y=羽色の濃さ(1が標準)
+varying vec2 vTrait;
 
 // v(高さ方向)は断面角のcosなので、同じvは左右両側に対応する。
 // これを利用して「両側の目」を1つの式で描く
@@ -612,9 +635,22 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, float
     // ぼかすと、たちまち小型の鯨に見えてしまう。
     // 種を分けるのは頭の模様で、そこだけ uSpecies で描き分ける。
     //   0=キング 1=ジェンツー 2=アデリー 3=ヒゲ
+    // ---- 個体差 ----
+    // 同じ種でも1羽ずつ模様が違う。とくにジェンツーの眉斑は個体識別に
+    // 使えるほど差が大きく、キングの頬斑も、ヒゲの顎紐の太さも
+    // 個体で違う。全員を同じ顔にすると、増やすほど気味が悪くなる。
+    // fv は -1〜+1 くらいの「その個体のくせ」
+    float fv = vTrait.x;
+    // 羽色の濃さ。換羽が近い個体は日に灼けて褐色に褪せる
+    float tone = vTrait.y;
     vec3 hood  = vec3(0.026, 0.028, 0.034);   // 頭巾。4種とも頭はほぼ真っ黒
     vec3 back  = hood;
     vec3 belly = vec3(0.92, 0.925, 0.92);
+    // 褪せた個体は黒が茶色へ寄り、白が生成りに濁る
+    float fade = clamp(1.0 - tone, 0.0, 1.0);
+    hood  = mix(hood,  vec3(0.085, 0.062, 0.048), fade * 0.75);
+    belly = mix(belly, vec3(0.90, 0.875, 0.82), fade * 0.8);
+    back = hood;
     // キングだけ「背」が青みの濃い灰色を帯びる。頭は黒のままなので、
     // 頭と背で色が違う——これがキングをキングに見せる要のひとつ
     float isKing = 1.0 - min(abs(uSpecies - 0.0), 1.0);
@@ -641,38 +677,52 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, vec3 n, vec3 V, float tint, float part, float
         // 細く垂れる涙形。丸くすると顔に貼ったシールにしか見えない。
         // 色は緑に寄せないこと——青い水中光の下では、少しでも緑を
         // 残した橙はたちまち黄土色に沈む
+        // 個体差: 斑の太さと、喉へどこまで垂れるか。実物でもここは
+        // ずいぶん幅があって、丸く小さい個体から顎の下まで届く個体までいる
         float cv = clamp((0.82 - v) / 0.62, 0.0, 1.4);        // 0=眼の上 1=喉
-        float taper = 0.040 * (1.0 - 0.84 * cv * cv);          // 下ほど細い
+        float taper = 0.040 * (1.0 + 0.30 * fv) * (1.0 - 0.84 * cv * cv);
         float axis = 0.172 - 0.040 * cv * cv;                  // 下ほど前へ寄る
+        float reach = 1.22 + 0.16 * fv;                        // 垂れる先
         float earSpot = smoothstep(taper, taper * 0.40, abs(u - axis))
-                      * smoothstep(-0.02, 0.07, cv) * smoothstep(1.22, 0.96, cv);
+                      * smoothstep(-0.02, 0.07, cv) * smoothstep(reach, reach - 0.26, cv);
         col = mix(col, vec3(1.00, 0.28, 0.01), earSpot);
         // 上胸の黄。橙斑の下端から続き、境目を持たず白へ溶ける
         float bib = smoothstep(0.38, 0.22, u) * smoothstep(0.28, 0.04, v)
                   * smoothstep(0.13, 0.24, u);
-        col = mix(col, vec3(1.00, 0.62, 0.04), bib * 0.9);
+        col = mix(col, vec3(1.00, 0.62, 0.04), bib * (0.9 + 0.22 * fv));
       } else if (uSpecies < 1.5) {
         // ジェンツー: 頭巾は喉まで。目の上から後頭部へ、頭頂を横切る
         // 白い鉢巻きが渡る。眼の上で三角に太くなり、てっぺんで細くつながる
+        // 個体差: ジェンツーの眉斑は個体識別に使えるほど差が大きい。
+        // 頭頂でしっかりつながる個体、細く途切れそうな個体、
+        // 眼の上の三角だけが目立つ個体——ここを揃えると全羽が双子になる
         col = mix(col, hood, smoothstep(0.27, 0.20, u) * smoothstep(0.16, 0.26, v));
-        float band = smoothstep(0.038, 0.010, abs(v - 0.95))
-                   * smoothstep(0.080, 0.125, u) * smoothstep(0.250, 0.190, u);
-        band += smoothstep(0.075, 0.030, length(vec2((u - 0.135) * 3.0, v - 0.80)));
+        float bw = 0.038 * (1.0 + 0.55 * fv);                  // 鉢巻きの太さ
+        float band = smoothstep(bw, bw * 0.26, abs(v - 0.95))
+                   * smoothstep(0.080, 0.125, u) * smoothstep(0.250, 0.190, u)
+                   * smoothstep(-0.55, -0.20, fv);             // 細い個体は途切れる
+        band += smoothstep(0.075 * (1.0 + 0.30 * fv), 0.030, length(vec2((u - 0.135) * 3.0, v - 0.80)));
         col = mix(col, vec3(0.95, 0.955, 0.95), clamp(band, 0.0, 1.0));
       } else if (uSpecies < 2.5) {
         // アデリー: 頭巾が首の付け根まで一様に下り、顔に模様はない。
         // 目のまわりの細い白い輪だけが黒の中に浮かぶ
-        col = mix(col, hood, smoothstep(0.27, 0.20, u));
+        // 個体差: 白い眼輪の太さと、頭巾が首のどこまで下りるか
+        col = mix(col, hood, smoothstep(0.27 + 0.035 * fv, 0.20 + 0.035 * fv, u));
         float er = length(vec2((u - 0.135) * 3.0, v - 0.66));
+        float ew = 0.006 * (1.0 + 0.7 * fv);                   // 輪の太さ
         col = mix(col, vec3(0.94, 0.95, 0.95),
-                  smoothstep(0.060, 0.048, er) * smoothstep(0.030, 0.042, er));
+                  smoothstep(0.054 + ew, 0.054 - ew, er) * smoothstep(0.036 - ew, 0.036 + ew, er));
       } else {
         // ヒゲ: 頭巾は目より上の帽子だけで、顔と喉は白い。
         // その帽子から顎の下へ、耳から耳へ細い黒線が渡る——これが名の由来
         col = mix(col, belly, smoothstep(0.30, 0.23, u) * smoothstep(1.00, 0.78, v));
         col = mix(col, hood, smoothstep(0.74, 0.84, v) * smoothstep(0.32, 0.26, u)
                            + smoothstep(0.10, 0.04, u));
-        float strap = smoothstep(0.034, 0.014, abs(v - 0.26))
+        // 個体差: 顎紐の太さ。細くて今にも切れそうな個体から、
+        // くっきり太い個体までいる。名前の由来そのものなので、
+        // ここが全員同じだと4種のうちで最も双子に見える
+        float sw = 0.034 * (1.0 + 0.45 * fv);
+        float strap = smoothstep(sw, sw * 0.40, abs(v - 0.26))
                     * smoothstep(0.030, 0.065, u) * smoothstep(0.280, 0.225, u);
         col = mix(col, hood, clamp(strap, 0.0, 1.0));
       }

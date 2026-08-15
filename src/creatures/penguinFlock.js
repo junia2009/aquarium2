@@ -257,6 +257,21 @@ export class PenguinFlock {
     this.pose2 = new Float32Array(count * 4);
     this.pose2Attr = new THREE.InstancedBufferAttribute(this.pose2, 4);
     geo.setAttribute('aPose2', this.pose2Attr);
+    // 個体差(見た目)。1羽ずつ違う顔と体格を持たせる。
+    //   x = 太り具合 / y = 顔の模様のくせ / z = 首の長さ(m) / w = 羽色の濃さ
+    // 一様乱数だと全員が「そこそこ違う」になって、かえって平均的な群れに
+    // なる。実際は大多数が標準で、たまに際立った個体がいる。
+    // 一様乱数を2つ足して0中心に寄せ、裾だけ伸ばす
+    const bell = () => (Math.random() + Math.random() - 1);
+    this.trait = new Float32Array(count * 4);
+    for (let i = 0; i < count; i++) {
+      this.trait[i * 4 + 0] = bell() * 0.11;                  // 太り具合
+      this.trait[i * 4 + 1] = bell() * 1.15;                  // 顔のくせ
+      this.trait[i * 4 + 2] = bell() * 0.022 * kind.total;    // 首の長さ
+      // 褪せは少数派。大多数は艶のある黒で、たまに換羽前の褐色がいる
+      this.trait[i * 4 + 3] = 1 - Math.pow(Math.random(), 2.2) * 0.45;
+    }
+    geo.setAttribute('aTrait', new THREE.InstancedBufferAttribute(this.trait, 4));
     parent.add(this.mesh);
 
     // ---- 群れの重心 ----
@@ -287,6 +302,8 @@ export class PenguinFlock {
       // 個体ごとの体格倍率。立ち高さも歩幅も歩調も、これで伸び縮みする。
       // 倍率を掛け忘れると、大きい個体は氷に3cm埋まり、小さい個体は浮く
       const sc = this.info[i * 4 + 2];
+      // せっかちさ。歩調に効くので、姿勢の前に決めておく
+      const haste = 0.84 + Math.random() * 0.34;
       this.members.push({
         pos: new THREE.Vector3(
           center.x + Math.cos(a) * radius * 0.4,
@@ -325,9 +342,12 @@ export class PenguinFlock {
         // --- 歩き ---
         scale: sc,
         // 歩調と速さ。振り子は長いほどゆっくり振れるので、
-        // 大きい個体はゆったり大股に歩く
-        strideT: this.gait.strideT * Math.sqrt(sc),
-        walkSpeed: this.gait.speed * Math.sqrt(sc),
+        // 大きい個体はゆったり大股に歩く。
+        // せっかちな個体は同じ歩幅をより速く刻む。歩調を上げたぶん
+        // 速さも同じ率で上げること——ここを片方だけ変えると
+        // 「歩幅 = 速さ × 接地時間」が崩れて足が地面を滑る
+        strideT: this.gait.strideT * Math.sqrt(sc) / haste,
+        walkSpeed: this.gait.speed * Math.sqrt(sc) * haste,
         stride: Math.random() * Math.PI * 2,   // 歩調の位相
         hipL: 0, hipR: 0, // 左右の脚の振り
         swing: 0,         // 遊脚の縮み(符号でどちらの脚か)
@@ -336,6 +356,21 @@ export class PenguinFlock {
         // --- 立ち止まり ---
         hoverT: 0,
         scull: 0,         // 漕ぎの位相
+
+        // --- 気性 ---
+        // 見た目だけ変えても、全員が同じ間合いで同じように動いていると
+        // やはり双子に見える。せっかちな個体・のんびりした個体、
+        // よく寄ってくる個体・警戒して離れている個体を作る。
+        // どれも「その個体のくせ」であって、状況では変わらない
+        //
+        // せっかち。歩調と、立ち止まっていられる時間に効く
+        haste,
+        // 好奇心。潜水者に寄ってくるかどうかと、寄ってからの粘り
+        nosy: 0.35 + Math.random() * 1.3,
+        // 落ち着きのなさ。立っているときの首振りと向きの変えかた
+        fidget: 0.55 + Math.random() * 1.1,
+        // よちよちの深さ。体を大きく倒す個体とそうでない個体がいる
+        rollAmp: 0.82 + Math.random() * 0.4,
       });
     }
   }
@@ -499,14 +534,19 @@ export class PenguinFlock {
     for (const m of this.members) {
       if (!open(m)) continue;
       if (m !== best && m.pos.distanceTo(best.pos) > 6) continue;
+      // 寄ってくるかどうかは個体による。臆病な個体はその場に留まる。
+      // 全員がいっせいに寄ってくると、群れではなく一個の生き物に見える
+      if (m !== best && m.nosy < 0.6) continue;
       // 漂っていた個体は泳ぎに戻ってから寄ってくる
       m.state = 'swim';
       m.stroking = true;
       m.phaseT = 1.4;
-      m.curiousT = 5.5 + Math.random() * 3.5;
-      m.curX = px + (Math.random() - 0.5) * 2.2;
-      m.curY = py + (Math.random() - 0.5) * 1.4;
-      m.curZ = pz + (Math.random() - 0.5) * 2.2;
+      // 好奇心の強い個体ほど長く付いてまわり、近くまで寄る
+      m.curiousT = (5.5 + Math.random() * 3.5) * m.nosy;
+      const shy = 2.2 / Math.max(m.nosy, 0.5);
+      m.curX = px + (Math.random() - 0.5) * shy;
+      m.curY = py + (Math.random() - 0.5) * shy * 0.64;
+      m.curZ = pz + (Math.random() - 0.5) * shy;
     }
     return true;
   }
@@ -1031,8 +1071,9 @@ export class PenguinFlock {
         m.state = 'onIce';
         m.iceStage = 'land';
         m.slide = Math.hypot(m.vel.x, m.vel.z);
-        m.rest = this.kind.standTime[0]
-               + Math.random() * (this.kind.standTime[1] - this.kind.standTime[0]);
+        // 立っていられる時間。せっかちな個体は先に腰を上げる
+        m.rest = (this.kind.standTime[0]
+               + Math.random() * (this.kind.standTime[1] - this.kind.standTime[0])) / m.haste;
         m.breath = this.kind.dive * (0.8 + Math.random() * 0.4);
         m.wingAmp = 0;
         return this.poseAt(m, i);
@@ -1115,13 +1156,16 @@ export class PenguinFlock {
       // 立ち止まっていても完全には止まらない。重心を左右へ送って揺れる
       m.waddle += (Math.sin(m.lookT * 1.5 + m.seed) * 0.05 - m.waddle) * (1 - Math.exp(-3 * dt));
       this.restLegs(m, dt, 3);
-      // 首は立ち上がりに合わせて折る。ここを止めると嘴が空を指す
+      // 首は立ち上がりに合わせて折る。ここを止めると嘴が空を指す。
+      // 落ち着きのない個体はしきりに首を振り、向きもよく変える。
+      // 同じ周期で全員が首を振っていると、群れが機械仕掛けに見える
       m.lookT += dt;
-      const look = 1.16 + 0.26 * Math.sin(m.lookT * 0.9 + m.seed)
-                        + 0.14 * Math.sin(m.lookT * 2.7 + m.seed * 3);
+      const fg = m.fidget;
+      const look = 1.16 + 0.26 * Math.sin(m.lookT * 0.9 * fg + m.seed) * fg
+                        + 0.14 * Math.sin(m.lookT * 2.7 * fg + m.seed * 3);
       m.neck += (look * Math.min(m.lookT / 1.2, 1) - m.neck) * (1 - Math.exp(-4 * dt));
       // その場でゆっくり向きを変える。棒立ちのままだと置物になる
-      m.heading += Math.sin(m.lookT * 0.42 + m.seed * 2) * 0.5 * dt;
+      m.heading += Math.sin(m.lookT * 0.42 * fg + m.seed * 2) * 0.5 * fg * dt;
       m.rest -= dt;
       if (m.rest <= 0) {
         m.iceStage = 'edge'; m.edgeT = 0; m.sway = 0;
@@ -1213,7 +1257,9 @@ export class PenguinFlock {
     // 荷重の乗っているほうへ倒し込む。+ が左脚(部位6)側。
     // 目分量で位相を合わせると必ずずれるので、荷重配分から直接作る
     const load = this.loadAt(u);
-    const wantRoll = 0.14 * (load[0] - load[1]);
+    // よちよちの深さも個体で違う。大きく倒して歩く個体と、
+    // すり足のようにあまり倒さない個体がいる
+    const wantRoll = 0.14 * m.rollAmp * (load[0] - load[1]);
     m.waddle += (wantRoll - m.waddle) * (1 - Math.exp(-25 * dt));
     // 前へ出ている脚のほうへ骨盤が回る
     m.yaw += ((m.hipR - m.hipL) * 0.09 - m.yaw) * (1 - Math.exp(-12 * dt));
