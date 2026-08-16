@@ -171,6 +171,13 @@ function rockBase(x, z) {
   const j2 = joints(x * 1.35 + 50, z * 1.35);
   y += (j2.id - 0.5) * 0.13;
   y -= Math.pow(1 - Math.min(j2.edge * 5.5, 1), 2) * 0.085;
+  // 3段目。25cm角の細かい割れ。頂点が7cm刻みになったぶん、
+  // ここまで彫っておかないと、細かくした頂点が表すものが無い
+  const j3 = joints(x * 4.0 + 130, z * 4.0);
+  y += (j3.id - 0.5) * 0.045;
+  y -= Math.pow(1 - Math.min(j3.edge * 6.0, 1), 2) * 0.030;
+  // 岩肌そのもののざらつき。10〜30cmの起伏
+  y += fbm3(x * 1.7 + 77, 0, z * 1.7, 2) * 0.055;
   return y;
 }
 
@@ -359,11 +366,28 @@ function shoreUniforms() {
 }
 
 export function createShoreRock(parent) {
-  const size = 190, seg = 384;
+  const size = 190, seg = 480;
   const geo = new THREE.PlaneGeometry(size, size, seg, seg);
   geo.rotateX(-Math.PI / 2);
   const pos = geo.attributes.position;
   const N = seg + 1;
+  const H = size / 2;
+
+  // ---- 頂点を中央に寄せる ----
+  // 190mを均等に割ると1マス50cmになる。カメラは岩の3〜10m先にいるので、
+  // 50cmのマスは画面上で数十ピクセルあり、稜線にポリゴンの折れが出る。
+  // 法線をいくら揺らしてもシルエットは直らない——陰影の問題ではなく
+  // 解像度の問題だから。
+  //
+  // 見たいのは潮間帯(原点から20mほど)で、その外側は粗くてよい。
+  // 同じ頂点数のまま、間隔を中央で細かく・外周で粗くする。
+  // 中央で7cm、外周で1m。格子の並びは変えないので、遮蔽を焼くときの
+  // 隣接インデックスはそのまま使える
+  const warp = (u) => u * (0.20 + 0.80 * u * u);
+  for (let i = 0; i < pos.count; i++) {
+    pos.setX(i, warp(pos.getX(i) / H) * H);
+    pos.setZ(i, warp(pos.getZ(i) / H) * H);
+  }
   for (let i = 0; i < pos.count; i++) {
     pos.setY(i, shoreTerrain(pos.getX(i), pos.getZ(i)));
   }
@@ -376,15 +400,16 @@ export function createShoreRock(parent) {
   // 地形関数を points ぶん呼び直すと数百万回になるので、
   // 格子であることを使って隣の頂点をそのまま読む
   const cav = new Float32Array(pos.count);
-  const H = (ix, iz) => pos.getY(Math.min(Math.max(iz, 0), N - 1) * N
-                              + Math.min(Math.max(ix, 0), N - 1));
+  const gridY = (ix, iz) => pos.getY(Math.min(Math.max(iz, 0), N - 1) * N
+                                   + Math.min(Math.max(ix, 0), N - 1));
   for (let iz = 0; iz < N; iz++) {
     for (let ix = 0; ix < N; ix++) {
-      const y = H(ix, iz);
+      const y = gridY(ix, iz);
       let sum = 0, cnt = 0;
       // 近傍と中距離の2段。近いほうが割れ目、遠いほうが皿を拾う
       for (const k of [1, 3, 7]) {
-        sum += H(ix - k, iz) + H(ix + k, iz) + H(ix, iz - k) + H(ix, iz + k);
+        sum += gridY(ix - k, iz) + gridY(ix + k, iz)
+             + gridY(ix, iz - k) + gridY(ix, iz + k);
         cnt += 4;
       }
       // まわりの平均より何m低いか。0.8mでほぼ真っ黒な窪みとみなす
