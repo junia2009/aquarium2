@@ -9,6 +9,7 @@ import { GREAT_TANK } from './zones/greatTank.js';
 import { DOLPHIN_POOL } from './zones/dolphinPool.js';
 import { ABYSS } from './zones/abyss.js';
 import { ICE_SEA } from './zones/iceSea.js';
+import { SHORE } from './zones/shore.js';
 
 import { setupUI } from './ui.js';
 import { UnderwaterAudio } from './audio.js';
@@ -38,7 +39,7 @@ const audio = new UnderwaterAudio();
 
 // ================= ゾーン =================
 // 各ゾーンは初回訪問時に構築し、以降は表示の切り替えだけで往復する。
-const ZONES = [GREAT_TANK, DOLPHIN_POOL, ABYSS, ICE_SEA];
+const ZONES = [GREAT_TANK, DOLPHIN_POOL, ABYSS, ICE_SEA, SHORE];
 const DEFAULT_SUN = new THREE.Color('#ffefcf');
 const DEFAULT_LAMP = new THREE.Color('#eaf4ff');
 const built = new Map();
