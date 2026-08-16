@@ -102,6 +102,38 @@ function poolCut(x, z) {
   return cut;
 }
 
+// ---- 節理 ----
+// 岩がノイズの丘と決定的に違うのは、「割れている」こと。
+// 岩盤には節理(joint)が走っていて、地表は多角形のブロックの集まりになる。
+// ブロックごとに数cmずつ段差があり、境目には溝が走る。
+//
+// この構造が無いと、どれだけ細かいノイズを足しても
+// 「なめらかな起伏にざらつきを塗ったもの」にしかならない。
+// ボロノイでセルを切り、セルごとに高さをずらして境に溝を掘る。
+//
+// 溝は地形として彫る。色で描くのではなく実際に凹ませておくと、
+// 焼いた遮蔽(cav)が自動的に暗くしてくれる——描画と形が食い違わない
+function hash2(i, j) {
+  const s = Math.sin(i * 127.1 + j * 311.7) * 43758.5453;
+  const t = Math.sin(i * 269.5 + j * 183.3) * 43758.5453;
+  return [s - Math.floor(s), t - Math.floor(t)];
+}
+
+function joints(x, z) {
+  const px = Math.floor(x), pz = Math.floor(z);
+  let f1 = 9, f2 = 9, id = 0;
+  for (let dz = -1; dz <= 1; dz++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const cx = px + dx, cz = pz + dz;
+      const [hx, hz] = hash2(cx, cz);
+      const d = Math.hypot(x - (cx + hx), z - (cz + hz));
+      if (d < f1) { f2 = f1; f1 = d; id = hx * 0.63 + hz * 0.37; }
+      else if (d < f2) { f2 = d; }
+    }
+  }
+  return { id, edge: f2 - f1 };
+}
+
 /**
  * 磯の高さ場。
  * 岩は砂と違って「面」ではなく「割れて積み重なったもの」なので、
@@ -131,6 +163,14 @@ function rockBase(x, z) {
   // 岸に平行な層理面の隙間も一組
   const bed = Math.abs(Math.sin(z * 0.48 + noise3(x * 0.04, 0, z * 0.02) * 2.2));
   y -= Math.pow(1 - Math.min(bed * 8.0, 1), 2) * 0.30 * bench;
+  // 節理。2.4m角のブロックに割り、ブロックごとに段差をつけて境に溝を掘る。
+  // これが岩を「割れたもの」に見せる。さらに細かい割れも一段重ねる
+  const j1 = joints(x * 0.42, z * 0.42);
+  y += (j1.id - 0.5) * 0.40;
+  y -= Math.pow(1 - Math.min(j1.edge * 4.5, 1), 2) * 0.26;
+  const j2 = joints(x * 1.35 + 50, z * 1.35);
+  y += (j2.id - 0.5) * 0.13;
+  y -= Math.pow(1 - Math.min(j2.edge * 5.5, 1), 2) * 0.085;
   return y;
 }
 
@@ -169,144 +209,214 @@ export function localWater(x, z, sea) {
   return Math.max(sea, Math.min(p.rim - 0.06, p.rim));
 }
 
-// ============ 岩 ============
+// ============ 岩の表面 ============
 // 磯の岩の色は、その高さが「1日のうちどれだけ水に浸かるか」で決まる。
 // 上から順に、乾いた岩・黒い地衣類・フジツボ・イガイ・海藻。
 // この帯状分布(zonation)は世界中の岩礁で見られるもので、
 // 磯を磯に見せているのはほとんどこれ。
+//
+// ただし帯だけではハリボテになる。実際そうなった。原因はペンギンの
+// 羽毛のときとまったく同じで、粗さが「色」にしか入っていなかったこと。
+// メッシュは50cm刻みなので、法線を揺らさないかぎり光の当たり方は
+// なめらかなまま——どれだけ色を岩にしても、粘土の塊に見える。
+//
+// 岩を岩に見せているのは3つ。
+//   1. 細かい凹凸。cm単位の起伏が無数に光を拾う
+//   2. 窪みの暗さ。割れ目や皿の底は空が見えないぶん暗い(遮蔽)
+//   3. 転がっている石。磯は「一枚の地形」ではなく、割れた岩の集積
+//
+// 地形も転石も同じ見え方でなければならないので、ここに関数として括り出して
+// 両方のシェーダから呼ぶ。別々に書くと必ず色が食い違う。
+const SHORE_SURFACE = (n) => /* glsl */ `
+uniform float uTide;
+uniform float uWater;
+uniform float uWetTop;
+uniform vec4 uPools[${n}];
+
+// 岩肌の細かい凹凸。3段重ねて、cm単位まで落とす
+float rockBump(vec2 p) {
+  return fbm(p * 2.6) * 0.55 + fbm(p * 9.5) * 0.30 + fbm(p * 31.0) * 0.15;
+}
+
+// 法線を岩肌の起伏で曲げる。遠くではちらつくので距離で消す
+vec3 rockNormal(vec3 wp, vec3 n, float amt) {
+  if (amt < 0.01) return n;
+  float e = 0.055;
+  float b0 = rockBump(wp.xz);
+  float bx = rockBump(wp.xz + vec2(e, 0.0));
+  float bz = rockBump(wp.xz + vec2(0.0, e));
+  vec3 g = vec3(-(bx - b0) / e, 0.0, -(bz - b0) / e);
+  return normalize(n + g * amt);
+}
+
+/**
+ * 磯の岩の見え方。地形にも転石にも同じものを使う。
+ * cav は窪み具合(0=平ら 1=深い窪み)。遮蔽の代わりに使う
+ */
+vec3 shoreSurface(vec3 wp, vec3 nIn, float cav, float bumpAmt) {
+  float h = wp.y;
+  vec3 n = rockNormal(wp, normalize(nIn), bumpAmt);
+
+  // ---- 地色 ----
+  // 反射率は低く保つこと。乾いた岩でも0.2〜0.3、濡れれば0.1を切る。
+  // ここを0.5にしていたら、水上の直射日光で真っ白に飛んだ
+  float grain = fbm(wp.xz * 0.55) * 0.5 + fbm(wp.xz * 2.4) * 0.3;
+  float fine = rockBump(wp.xz);
+  // 日本の磯の岩はたいてい灰色(安山岩・凝灰岩)で、褐色ではない。
+  // ここを茶色にしていたら全体が砂丘のような色になった
+  vec3 dry = mix(vec3(0.104, 0.106, 0.107), vec3(0.188, 0.190, 0.188), grain);
+  // 層理。堆積岩は高さ方向に色の縞が出る
+  dry = mix(dry, vec3(0.140, 0.138, 0.132), fbm(vec2(wp.x * 0.22, wp.y * 1.6)) * 0.5);
+  // 鉄分のしみ。一様に掛けると岩ぜんたいが錆色になるので、
+  // 狭い範囲に濃く出す。まだらであることに意味がある
+  dry = mix(dry, vec3(0.235, 0.140, 0.070),
+            smoothstep(0.66, 0.80, fbm(wp.xz * 0.31 + 21.0)) * 0.72);
+  // 濡れて乾いたあとに残る塩と、削れて出た新しい面の白っぽさ
+  dry = mix(dry, vec3(0.315, 0.312, 0.300),
+            smoothstep(0.62, 0.78, fbm(wp.xz * 0.85 + 7.0)) * 0.45);
+  // 細かい凹凸そのものの陰影。法線だけでなく色も少し振る
+  dry *= 0.86 + 0.28 * fine;
+
+  // ---- 帯状分布 ----
+  // 基準は平均潮位に固定する。いまの水位を基準にすると、
+  // 波が来るたびにフジツボの帯が上下に泳いでしまう
+  float rel = h - ${TIDE.mean.toFixed(2)};
+  float weed = smoothstep(-0.30, -1.30, rel) * (0.55 + 0.45 * fbm(wp.xz * 0.38));
+  float mussel = smoothstep(-1.05, -0.55, rel) * smoothstep(0.15, -0.25, rel)
+               * smoothstep(0.20, 0.32, fbm(wp.xz * 0.46));
+  float barn = smoothstep(-0.15, 0.30, rel) * smoothstep(1.35, 0.75, rel)
+             * smoothstep(0.18, 0.30, fbm(wp.xz * 0.58));
+  float lichen = smoothstep(1.10, 1.70, rel) * smoothstep(3.4, 2.2, rel)
+               * smoothstep(0.26, 0.44, fbm(wp.xz * 0.32));
+
+  vec3 col = dry;
+  col = mix(col, vec3(0.038, 0.034, 0.028), lichen * 0.95);
+  // フジツボは石灰質の殻。粒立ちがあるので、細かいノイズで白を散らす
+  col = mix(col, vec3(0.760, 0.735, 0.680) * (0.72 + 0.5 * fine), barn * 0.96);
+  col = mix(col, vec3(0.022, 0.022, 0.036), mussel * 0.95);
+  col = mix(col, vec3(0.034, 0.048, 0.020), weed * 0.95);
+  col = mix(col, vec3(0.098, 0.176, 0.068),
+            weed * smoothstep(0.52, 0.74, fbm(wp.xz * 0.72)) * 0.7);
+
+  // 上を向いた面ほど生き物が付く……のだが、ここを厳しくしすぎると
+  // 帯が消える。段々に削れた岩は法線が寝ていないので、
+  // smoothstep(0.35, 0.85, n.y) では全面が「壁」と判定されて
+  // 帯が15%まで薄まり、一様な灰色の岩になっていた。
+  // 実際のフジツボもイガイも垂直な岩壁にびっしり付く
+  float up = smoothstep(0.02, 0.55, n.y);
+  col = mix(dry, col, 0.38 + 0.62 * up);
+
+  // ---- 濡れ ----
+  float sub = smoothstep(0.05, -0.10, h - uWater);
+  float damp = smoothstep(0.02, -0.55, h - uWetTop);
+  float inPool = 0.0;
+  for (int i = 0; i < ${n}; i++) {
+    vec4 pl = uPools[i];
+    inPool = max(inPool, smoothstep(pl.z, pl.z * 0.90, length(wp.xz - pl.xy))
+                       * smoothstep(0.04, -0.10, h - pl.w));
+  }
+  float wet = max(max(sub, inPool), damp * 0.72);
+  col *= mix(1.0, 0.58, wet);
+  // 窪みは乾きにくい。割れ目の底に水が残っているのが磯の見え方
+  col *= mix(1.0, 0.72, cav * (1.0 - wet) * 0.6);
+
+  // ---- 遮蔽 ----
+  // 割れ目や皿の底は空が見えないぶん暗い。これが無いと、
+  // どれだけ凹凸を作っても平らな板に模様を描いたようにしか見えない
+  float ao = 1.0 - cav * 0.62;
+
+  vec3 viewDir = normalize(cameraPosition - wp);
+  // 濡れた岩は光るが鏡ではない。0.55にしていたら潮だまりの皿で
+  // ハイライトが広がり、岩に空いた穴が発光しているように見えた
+  vec3 lit = underwaterLight(col * ao, n, wp, viewDir,
+                             mix(8.0, 42.0, wet), mix(0.015, 0.10, wet));
+
+  // ---- 泡 ----
+  // 水際の白。波が砕けた線と、引いたあとに残る泡の名残
+  float lineF = smoothstep(0.30, 0.0, abs(h - uWater))
+              * (0.45 + 0.55 * fbm(vec2(wp.x * 3.4, wp.z * 3.4 + uTime * 1.6)));
+  float left = smoothstep(0.0, 0.45, h - uWater) * smoothstep(0.75, 0.10, h - uWater)
+             * smoothstep(0.45, 0.75, fbm(vec2(wp.x * 5.0, wp.z * 5.0 - uTime * 0.7)));
+  float foam = clamp(lineF * 0.85 + left * 0.6, 0.0, 1.0) * up;
+  lit = mix(lit, vec3(0.92, 0.95, 0.96), foam);
+
+  return applyUnderwaterFog(lit, wp);
+}
+`;
+
+/** 岩と転石が共有するユニフォーム */
+function shoreUniforms() {
+  return {
+    ...baseUniforms(),
+    uTide: { value: TIDE.mean },
+    uWater: { value: TIDE.mean },
+    uWetTop: { value: TIDE.mean },
+    // 潮だまり (x, z, 半径, 水面の高さ)。岩のほうにも渡さないと、
+    // 溜まりの中の岩が「乾いた岩」に塗られる。覗きこんで見えているのは
+    // 水の膜ではなく、ほとんど「濡れて黒くなった底」のほうだから
+    uPools: { value: POOLS.map((p) => new THREE.Vector4(p.x, p.z, p.r, p.rim - 0.06)) },
+  };
+}
+
 export function createShoreRock(parent) {
   const size = 190, seg = 384;
   const geo = new THREE.PlaneGeometry(size, size, seg, seg);
   geo.rotateX(-Math.PI / 2);
   const pos = geo.attributes.position;
+  const N = seg + 1;
   for (let i = 0; i < pos.count; i++) {
     pos.setY(i, shoreTerrain(pos.getX(i), pos.getZ(i)));
   }
   geo.computeVertexNormals();
 
+  // ---- 窪み具合を焼く ----
+  // まわりより低いところは空が見えないぶん暗い。これを入れないと、
+  // 割れ目も皿の底も同じ明るさで、凹凸が「模様」にしか見えない。
+  //
+  // 地形関数を points ぶん呼び直すと数百万回になるので、
+  // 格子であることを使って隣の頂点をそのまま読む
+  const cav = new Float32Array(pos.count);
+  const H = (ix, iz) => pos.getY(Math.min(Math.max(iz, 0), N - 1) * N
+                              + Math.min(Math.max(ix, 0), N - 1));
+  for (let iz = 0; iz < N; iz++) {
+    for (let ix = 0; ix < N; ix++) {
+      const y = H(ix, iz);
+      let sum = 0, cnt = 0;
+      // 近傍と中距離の2段。近いほうが割れ目、遠いほうが皿を拾う
+      for (const k of [1, 3, 7]) {
+        sum += H(ix - k, iz) + H(ix + k, iz) + H(ix, iz - k) + H(ix, iz + k);
+        cnt += 4;
+      }
+      // まわりの平均より何m低いか。0.8mでほぼ真っ黒な窪みとみなす
+      cav[iz * N + ix] = Math.min(Math.max((sum / cnt - y) / 0.8, 0), 1);
+    }
+  }
+  geo.setAttribute('aCav', new THREE.BufferAttribute(cav, 1));
+
   const mat = new THREE.ShaderMaterial({
-    uniforms: {
-      ...baseUniforms(),
-      // 潮位。帯の位置がこれで上下する
-      uTide: { value: TIDE.mean },
-      // いまの水際(潮位＋波)。濡れの境目
-      uWater: { value: TIDE.mean },
-      // 直前まで水が来ていた高さ。ここまでは濡れている
-      uWetTop: { value: TIDE.mean },
-      // 潮だまり (x, z, 半径, 水面の高さ)。
-      // 岩のほうにも渡さないと、溜まりの中の岩が「乾いた岩」に塗られる。
-      // 水の膜を上に貼るだけでは水に見えない——覗きこんで見えているのは
-      // ほとんど「濡れて黒くなった底」のほうだから
-      uPools: { value: POOLS.map((p) => new THREE.Vector4(p.x, p.z, p.r, p.rim - 0.06)) },
-    },
+    uniforms: shoreUniforms(),
     vertexShader: /* glsl */ `
+      attribute float aCav;
       varying vec3 vW;
       varying vec3 vN;
+      varying float vCav;
       void main() {
         vec4 wp = modelMatrix * vec4(position, 1.0);
         vW = wp.xyz;
         vN = normalize(mat3(modelMatrix) * normal);
+        vCav = aCav;
         gl_Position = projectionMatrix * viewMatrix * wp;
       }
     `,
-    fragmentShader: UW_FRAG_PRELUDE + /* glsl */ `
-      uniform float uTide;
-      uniform float uWater;
-      uniform float uWetTop;
-      uniform vec4 uPools[${POOLS.length}];
+    fragmentShader: UW_FRAG_PRELUDE + SHORE_SURFACE(POOLS.length) + /* glsl */ `
       varying vec3 vW;
       varying vec3 vN;
-
+      varying float vCav;
       void main() {
-        vec3 n = normalize(vN);
-        float h = vW.y;
-
-        // ---- 岩の地色 ----
-        // 一色で塗ると樹脂の塊になる。粒の粗さと、層に沿った縞を入れる。
-        //
-        // 反射率は低く保つこと。乾いた岩でも0.2〜0.3、濡れれば0.1を切る。
-        // ここを0.5にしていたら、水上の直射日光で真っ白に飛んで
-        // 帯状分布が一切見えなくなった(砂丘のような絵になった)
-        float grain = fbm(vW.xz * 0.55) * 0.5 + fbm(vW.xz * 2.4) * 0.3;
-        float strata = fbm(vec2(vW.x * 0.22, vW.y * 1.6));
-        vec3 dry  = mix(vec3(0.120, 0.113, 0.104), vec3(0.205, 0.194, 0.178), grain);
-        dry = mix(dry, vec3(0.158, 0.142, 0.124), strata * 0.5);
-
-        // ---- 帯状分布 ----
-        // 高さを「潮位からの差」で測る。潮が動けば帯も動く……のではなく、
-        // 帯は動かない。生き物は平均的な水位に合わせて住み着いているので、
-        // 基準は平均潮位(uTide ではなく固定の平均)であるべき。
-        // ここを uWater にすると、波が来るたびにフジツボの帯が
-        // 上下に泳いでしまう
-        float rel = h - ${TIDE.mean.toFixed(2)};
-
-        // 海藻帯(潮下帯)。いつも水の中。褐藻の暗いオリーブ
-        float weed = smoothstep(-0.30, -1.30, rel)
-                   * (0.55 + 0.45 * fbm(vW.xz * 0.38));
-        // イガイ床(潮間帯下部)。青黒い殻がびっしり
-        float mussel = smoothstep(-1.05, -0.55, rel) * smoothstep(0.15, -0.25, rel)
-                     * smoothstep(0.20, 0.32, fbm(vW.xz * 0.46));
-        // フジツボ帯(潮間帯上部)。白い石灰質の殻
-        float barn = smoothstep(-0.15, 0.30, rel) * smoothstep(1.35, 0.75, rel)
-                   * smoothstep(0.18, 0.30, fbm(vW.xz * 0.58));
-        // 地衣類帯(飛沫帯)。しぶきだけが届く高さに黒い膜が張る。
-        // これがあると岩の上端が急に「海岸」に見える
-        float lichen = smoothstep(1.10, 1.70, rel) * smoothstep(3.4, 2.2, rel)
-                     * smoothstep(0.26, 0.44, fbm(vW.xz * 0.32));
-
-        vec3 col = dry;
-        col = mix(col, vec3(0.038, 0.034, 0.028), lichen * 0.95);    // 地衣類
-        col = mix(col, vec3(0.760, 0.735, 0.680), barn * 0.96);       // フジツボ
-        col = mix(col, vec3(0.022, 0.022, 0.036), mussel * 0.95);     // イガイ
-        col = mix(col, vec3(0.034, 0.048, 0.020), weed * 0.95);       // 海藻
-        // 海藻帯には緑藻の斑も混ぜる。褐藻一色だと黒い泥に見える
-        col = mix(col, vec3(0.098, 0.176, 0.068),
-                  weed * smoothstep(0.52, 0.74, fbm(vW.xz * 0.72)) * 0.7);
-
-        // 上を向いた面ほど生き物が付く……のだが、ここを厳しくしすぎると
-        // 帯が消える。段々に削れた岩は法線が寝ていないので、
-        // smoothstep(0.35, 0.85, n.y) では全面が「壁」と判定されて
-        // 帯が15%まで薄まり、一様な灰色の岩になっていた。
-        // 実際のフジツボもイガイも垂直な岩壁にびっしり付く。
-        // 裸のままなのは、天井になった庇と、波に削られ続ける面だけ
-        float up = smoothstep(0.02, 0.55, n.y);
-        col = mix(dry, col, 0.38 + 0.62 * up);
-
-        // ---- 濡れ ----
-        // 水没しているところ、波が届いたばかりのところ、乾いたところ。
-        // 濡れた岩は暗く艶が出る。これが無いと潮が引いても絵が変わらない
-        float sub = smoothstep(0.05, -0.10, h - uWater);        // いま水の下
-        float damp = smoothstep(0.02, -0.55, h - uWetTop);      // さっきまで濡れていた
-        // 潮だまりの中。海が引いてもここだけは水の下に残る
-        float inPool = 0.0;
-        for (int i = 0; i < ${POOLS.length}; i++) {
-          vec4 pl = uPools[i];
-          float d = length(vW.xz - pl.xy);
-          inPool = max(inPool, smoothstep(pl.z, pl.z * 0.90, d)
-                             * smoothstep(0.04, -0.10, h - pl.w));
-        }
-        float wet = max(max(sub, inPool), damp * 0.72);
-        col *= mix(1.0, 0.58, wet);
-
-        vec3 viewDir = normalize(cameraPosition - vW);
-        // 濡れた岩はよく光る。乾いた岩はほとんど光らない
-        // 濡れた岩は光るが、鏡ではない。強度を0.55にしていたら、
-        // 潮だまりのような凹んだ面でハイライトが皿いっぱいに広がって、
-        // 岩に空いた穴が発光しているように見えた。濡れた岩の鏡面反射は
-        // せいぜい0.1程度で、効くのは「艶が出る」ところまで
-        vec3 lit = underwaterLight(col, n, vW, viewDir, mix(8.0, 42.0, wet), mix(0.015, 0.10, wet));
-
-        // ---- 泡 ----
-        // 水際の白。波が砕けた線と、引いたあとに残る泡の名残。
-        // 泡は水際にぴたりと張り付くのではなく、少し上に残る
-        float lineF = smoothstep(0.30, 0.0, abs(h - uWater))
-                    * (0.45 + 0.55 * fbm(vec2(vW.x * 3.4, vW.z * 3.4 + uTime * 1.6)));
-        float left = smoothstep(0.0, 0.45, h - uWater) * smoothstep(0.75, 0.10, h - uWater)
-                   * smoothstep(0.45, 0.75, fbm(vec2(vW.x * 5.0, vW.z * 5.0 - uTime * 0.7)));
-        float foam = clamp(lineF * 0.85 + left * 0.6, 0.0, 1.0) * up;
-        lit = mix(lit, vec3(0.92, 0.95, 0.96), foam);
-
-        gl_FragColor = vec4(applyUnderwaterFog(lit, vW), 1.0);
+        // 細かい凹凸は近くでだけ。遠くで出すと画面がざらついて
+        // 岩ではなくノイズになる
+        float amt = 0.55 * (1.0 - smoothstep(6.0, 34.0, distance(cameraPosition, vW)));
+        gl_FragColor = vec4(shoreSurface(vW, vN, vCav, amt), 1.0);
         ${UW_FRAG_OUTPUT}
       }
     `,
@@ -317,6 +427,91 @@ export function createShoreRock(parent) {
   parent.add(mesh);
   return { mesh, mat };
 }
+
+// ============ 転石 ============
+// 磯は「一枚の地形」ではなく、割れた岩が積み重なった場所。
+// 波に転がされた石が platform の上に散らばっていて、これが無いと
+// どれだけ地形を作りこんでも「一枚の起伏」にしか見えない。
+//
+// 角は取れているが丸くはない。正20面体の頂点をばらして平面で囲むと、
+// 「割れて、少し転がされた石」の形になる。
+function boulderGeometry(seed) {
+  let s = seed * 9301 + 49297;
+  const rnd = () => { s = (s * 9301 + 49297) % 233280; return s / 233280; };
+  const g = new THREE.IcosahedronGeometry(1, 1).toNonIndexed();
+  const p = g.getAttribute('position');
+  // 頂点をまとめて動かす。面ごとにばらすと砕けた砂利になってしまう
+  const key = new Map();
+  for (let i = 0; i < p.count; i++) {
+    const k = `${p.getX(i).toFixed(3)},${p.getY(i).toFixed(3)},${p.getZ(i).toFixed(3)}`;
+    if (!key.has(k)) key.set(k, 0.62 + rnd() * 0.62);
+    const f = key.get(k);
+    p.setXYZ(i, p.getX(i) * f, p.getY(i) * f * 0.72, p.getZ(i) * f);
+  }
+  g.computeVertexNormals();   // 平らな面で囲まれた塊にする
+  return g;
+}
+
+export function createBoulders(parent, count = 190) {
+  let s = 20250816;
+  const rnd = () => { s = (s * 9301 + 49297) % 233280; return s / 233280; };
+  const geo = boulderGeometry(7);
+  const mat = new THREE.ShaderMaterial({
+    uniforms: shoreUniforms(),
+    vertexShader: /* glsl */ `
+      varying vec3 vW;
+      varying vec3 vN;
+      varying float vCav;
+      void main() {
+        vec4 wp = modelMatrix * instanceMatrix * vec4(position, 1.0);
+        vW = wp.xyz;
+        vN = normalize(mat3(modelMatrix) * mat3(instanceMatrix) * normal);
+        // 石の下側は地面との隙間で暗い。接地しているように見せるのは
+        // 影ではなくこれ
+        vCav = smoothstep(0.25, -0.75, vN.y) * 0.85;
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }
+    `,
+    fragmentShader: UW_FRAG_PRELUDE + SHORE_SURFACE(POOLS.length) + /* glsl */ `
+      varying vec3 vW;
+      varying vec3 vN;
+      varying float vCav;
+      void main() {
+        float amt = 0.75 * (1.0 - smoothstep(5.0, 26.0, distance(cameraPosition, vW)));
+        gl_FragColor = vec4(shoreSurface(vW, vN, vCav, amt), 1.0);
+        ${UW_FRAG_OUTPUT}
+      }
+    `,
+  });
+
+  const mesh = new THREE.InstancedMesh(geo, mat, count);
+  mesh.frustumCulled = false;
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
+  const sv = new THREE.Vector3(), pv = new THREE.Vector3();
+  let placed = 0;
+  for (let i = 0; i < count * 6 && placed < count; i++) {
+    const x = (rnd() - 0.5) * 74;
+    const z = -26 + rnd() * 46;
+    // 潮だまりの中には置かない。皿の底に岩を積むと水が見えなくなる
+    if (poolAt(x, z)) continue;
+    const y = shoreTerrain(x, z);
+    // 大きい石は下のほう(波に転がされて溜まる)、上は小石だけ
+    const high = Math.min(Math.max((y - TIDE.mean) / 3.0, 0), 1);
+    const size = (0.22 + rnd() * rnd() * 1.15) * (1 - high * 0.55);
+    e.set(rnd() * 0.7 - 0.35, rnd() * Math.PI * 2, rnd() * 0.7 - 0.35);
+    q.setFromEuler(e);
+    // 少し埋める。地面にちょんと乗せると浮いて見える
+    pv.set(x, y - size * 0.30, z);
+    sv.set(size * (0.85 + rnd() * 0.5), size, size * (0.85 + rnd() * 0.5));
+    m.compose(pv, q, sv);
+    mesh.setMatrixAt(placed++, m);
+  }
+  mesh.count = placed;
+  mesh.instanceMatrix.needsUpdate = true;
+  parent.add(mesh);
+  return { mesh, mat };
+}
+
 
 // ============ 潮だまりの水面 ============
 // 海が引いても、窪みの水は縁の高さで残る。海の一枚板とは別に、

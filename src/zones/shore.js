@@ -3,7 +3,8 @@ import { U, WORLD } from '../env.js';
 import { createWaterSurface } from '../environment/surface.js';
 import { createGodRays } from '../environment/effects.js';
 import {
-  shoreTerrain, createShoreRock, createTidePools, tideAt, waterAt, localWater, POOLS, TIDE,
+  shoreTerrain, createShoreRock, createBoulders, createTidePools,
+  tideAt, waterAt, localWater, POOLS, TIDE,
 } from '../environment/shore.js';
 import { CollisionWorld } from '../collision.js';
 import { SHORE_SPECIES } from '../species.js';
@@ -50,6 +51,8 @@ export const SHORE = {
   build(root, audio) {
     const surface = createWaterSurface(root);
     const rock = createShoreRock(root);
+    // 転石。磯は一枚の起伏ではなく、割れた岩が積み重なった場所
+    const stones = createBoulders(root);
     const pools = createTidePools(root);
     // 光芒は沖側の深いところにだけ立てる。岩の上に立てると
     // 岩を突き抜ける光の柱になる
@@ -93,9 +96,11 @@ export const SHORE = {
         // 水面(一枚板)と、その高さを参照する全マテリアル
         surface.position.y = water;
         U.uSurfaceY.value = water;
-        rock.mat.uniforms.uTide.value = tide;
-        rock.mat.uniforms.uWater.value = water;
-        rock.mat.uniforms.uWetTop.value = wetTop;
+        for (const m of [rock.mat, stones.mat]) {
+          m.uniforms.uTide.value = tide;
+          m.uniforms.uWater.value = water;
+          m.uniforms.uWetTop.value = wetTop;
+        }
         pools.update(water);
         godRays.update(camera);
       },
