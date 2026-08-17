@@ -1,7 +1,13 @@
 import * as THREE from 'three';
 import { baseUniforms, U } from '../env.js';
 import { UW_FRAG_PRELUDE, UW_FRAG_OUTPUT } from '../glsl.js';
-import { shoreTerrain, poolAt, localWater } from '../environment/shore.js';
+// 高さは meshHeightAt() から取る。shoreTerrain() ではない。
+// shoreTerrain() は連続関数で、幅4cmの節理の溝にもきちんと落ちる。
+// けれども実際に描かれている岩は7cm刻みの格子で、その溝を持っていない。
+// 関数の高さに置くと、生き物は「描かれていない窪み」に沈む——実測で
+// 最大22cm。甲幅4cmのカニが自分の体の5倍も埋まっていた。
+// 「常にめり込んでる」「薄っぺらく見える」はこれが原因だった。
+import { meshHeightAt, poolAt, localWater } from '../environment/shore.js';
 
 // ============ 磯の生き物 ============
 //
@@ -28,9 +34,11 @@ const _n = new THREE.Vector3();
 const _sv = new THREE.Vector3();
 const _bait = new THREE.Vector3();
 
+// 傾きも「描かれている面」から測る。関数から測ると、画面には無い溝の
+// 壁に沿って体が傾き、平らな岩の上で急に横倒しになる
 export function rockNormalAt(x, z, e = 0.18, out = _n) {
-  const dx = shoreTerrain(x + e, z) - shoreTerrain(x - e, z);
-  const dz = shoreTerrain(x, z + e) - shoreTerrain(x, z - e);
+  const dx = meshHeightAt(x + e, z) - meshHeightAt(x - e, z);
+  const dz = meshHeightAt(x, z + e) - meshHeightAt(x, z - e);
   return out.set(-dx, 2 * e, -dz).normalize();
 }
 
@@ -306,6 +314,12 @@ const CRAB_VERT = /* glsl */ `
 export class CrabColony {
   constructor(parent, { count = 26 } = {}) {
     this.geo = crabGeometry();
+    // 脚先が岩に触れる高さ。ここは手で決めた数字を使ってはいけない。
+    // 甲羅の厚みから当て推量で 0.16 と置いていたが、いちばん低いのは
+    // 甲羅ではなく歩脚の先(-0.17)で、脚が岩に刺さったまま歩いていた。
+    // 幾何を測って、そのぶんだけ持ち上げる
+    this.geo.computeBoundingBox();
+    this.foot = -this.geo.boundingBox.min.y;
     this.info = new Float32Array(count * 4);
     this.geo.setAttribute('aInfo', new THREE.InstancedBufferAttribute(this.info, 4));
     this.mat = shoreCreatureMaterial({}, CRAB_VERT, LIT_FRAG);
@@ -330,7 +344,7 @@ export class CrabColony {
       // 幾何は甲幅1.0で作ってあるので、そのまま実寸を入れる
       const body = 0.032 + Math.random() * Math.random() * 0.042;
       this.members.push({
-        x, z, y: shoreTerrain(x, z),
+        x, z, y: meshHeightAt(x, z),
         homeX: x, homeZ: z,
         heading: Math.random() * Math.PI * 2,
         // 横歩きなので、進む向きは体の向きの真横
@@ -451,12 +465,12 @@ export class CrabColony {
         //
         // カニは4cmの体で数cmの段を平気で越える。見るべきは
         // 「これから進む先30cmの傾き」で、閾値もそれに合わせる
-        const ny = shoreTerrain(nx, nz);
+        const ny = meshHeightAt(nx, nz);
         // イソガニは垂直な岩壁でも平気で登る。ここで止めたいのは
         // 「壁を突き抜けて歩く」ことだけなので、閾値はうんと甘くてよい。
         // 0.34mにしていたときは、節理の段のたびに引っかかって
         // 迂回をくり返し、餌の40cm手前まで来たきり届かなかった
-        const ahead = shoreTerrain(m.x + vx * 0.3, m.z + vz * 0.3);
+        const ahead = meshHeightAt(m.x + vx * 0.3, m.z + vz * 0.3);
         if (Math.abs(ahead - m.y) < 0.85) {
           m.x = nx; m.z = nz; m.y = ny;
         } else {
@@ -467,8 +481,8 @@ export class CrabColony {
       }
 
       const n = rockNormalAt(m.x, m.z);
-      // 甲羅の厚みぶん浮かせる。岩にめり込ませない
-      placeOnRock(_m, m.x, m.y + m.body * 0.16, m.z, m.heading, m.body, n);
+      // 脚先が岩に乗る高さに置く
+      placeOnRock(_m, m.x, m.y + m.body * this.foot, m.z, m.heading, m.body, n);
       this.mesh.setMatrixAt(i, _m);
       // 歩いていないときは脚を止める。ずっと漕いでいると水車になる
       this.info[i * 4 + 1] = m.speed > 0 ? Math.min(m.speed / (m.body * 4), 1.6) : 0;
@@ -598,7 +612,7 @@ export class AnemoneBed {
     for (let i = 0; i < count * 60 && placed < count; i++) {
       const x = (Math.random() - 0.5) * 40;
       const z = -10 + Math.random() * 22;
-      const y = shoreTerrain(x, z);
+      const y = meshHeightAt(x, z);
       // 潮間帯の下半分にしか付かない。乾く時間が長すぎると生きられない
       if (y > 16.5 || y < 14.0) continue;
       // 潮だまりの中と縁には特に多い
@@ -843,7 +857,7 @@ export function createSeaStars(parent, count = 34) {
   return new ClingBed(parent, starGeometry(), count, 'ARMS', () => {
     const x = (Math.random() - 0.5) * 40;
     const z = -12 + Math.random() * 22;
-    const y = shoreTerrain(x, z);
+    const y = meshHeightAt(x, z);
     // 潮下帯から潮間帯の下部。乾く場所には出てこない
     if (y > 16.2 || y < 13.2) return null;
     return { x, z, y, size: 0.055 + Math.random() * 0.035, lift: 0.004 };
@@ -854,10 +868,12 @@ export function createUrchins(parent, count = 40) {
   return new ClingBed(parent, urchinGeometry(), count, 'SPINES', () => {
     const x = (Math.random() - 0.5) * 44;
     const z = -18 + Math.random() * 22;
-    const y = shoreTerrain(x, z);
+    const y = meshHeightAt(x, z);
     // ウニはさらに下。いつも水につかっているところにしかいない
     if (y > 15.7 || y < 12.5) return null;
-    return { x, z, y, size: 0.048 + Math.random() * 0.026, lift: -0.008 };
+    // 殻の底はすでに幾何のほうで少し下(-0.04)にある。さらに埋めると
+    // 直径6cmのウニが穴に落ちたように見える。乗せるだけでよい
+    return { x, z, y, size: 0.048 + Math.random() * 0.026, lift: 0 };
   });
 }
 

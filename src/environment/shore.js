@@ -199,6 +199,68 @@ for (const p of POOLS) {
   p.floor = lo - p.depth;
 }
 
+// ---- 描かれている高さ ----
+// 岩は190mを480分割した格子で描いていて、頂点と頂点のあいだは
+// 線形補間される。一方 shoreTerrain() は連続関数なので、両者は食い違う。
+// とくに節理の溝は幅4cmしかないので、7cm刻みの頂点はその底を拾えず、
+// 関数だけが深く落ちる。
+//
+// 生き物を shoreTerrain() の高さに置くと、この差のぶんだけ岩に沈む。
+// 実測で -22cm〜+12cm ずれていた。カニは甲幅3〜7cmなので、
+// 自分の体の3倍も埋まるか、宙に浮くかのどちらかになっていた。
+// 「常にめり込んでいる」「薄っぺらい」の正体はこれ。
+//
+// 流氷でペンギンが氷にめり込んだときとまったく同じ構図で、
+// 教訓も同じ——描くものと、その上に立たせるものは、
+// 同じ高さの出どころを見ていなければならない。
+const MESH_SIZE = 190, MESH_SEG = 480;
+const MESH_HALF = MESH_SIZE / 2;
+const meshWarp = (u) => u * (0.20 + 0.80 * u * u);
+const GRID = new Float64Array(MESH_SEG + 1);
+for (let i = 0; i <= MESH_SEG; i++) GRID[i] = meshWarp((i / MESH_SEG) * 2 - 1) * MESH_HALF;
+
+/** 座標 v を含む格子セルの番号と、その中での位置(0〜1) */
+function meshCell(v, out) {
+  if (v <= GRID[0]) { out.i = 0; out.t = 0; return out; }
+  if (v >= GRID[MESH_SEG]) { out.i = MESH_SEG - 1; out.t = 1; return out; }
+  let lo = 0, hi = MESH_SEG;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (GRID[mid] <= v) lo = mid; else hi = mid;
+  }
+  out.i = lo;
+  out.t = (v - GRID[lo]) / (GRID[lo + 1] - GRID[lo]);
+  return out;
+}
+const _cx = { i: 0, t: 0 }, _cz = { i: 0, t: 0 };
+
+/**
+ * いま画面に描かれている岩の高さ。
+ * 生き物を置くときは必ずこちらを使う。shoreTerrain() は
+ * メッシュを作るときだけのもの。
+ *
+ * 4隅を双線形に混ぜてはいけない。1マスは四角ではなく三角2枚で、
+ * 対角線で折れている。双線形はその折れを無視して四角の「捻れ」の
+ * 半分ぶんずれる——実測でまだ3cmあり、甲幅3cmのカニ1匹ぶんだった。
+ * PlaneGeometry の分割は (a,b,d)(b,c,d)、つまり対角は
+ * 「x+ 側の手前」と「z+ 側の奥」を結ぶ線。tx+tz で三角を選び、
+ * その3頂点が張る平面をそのまま読む
+ */
+export function meshHeightAt(x, z) {
+  meshCell(x, _cx); meshCell(z, _cz);
+  const x0 = GRID[_cx.i], x1 = GRID[_cx.i + 1];
+  const z0 = GRID[_cz.i], z1 = GRID[_cz.i + 1];
+  const tx = _cx.t, tz = _cz.t;
+  if (tx + tz <= 1) {
+    // 手前側の三角。(x0,z0) (x1,z0) (x0,z1)
+    const h00 = shoreTerrain(x0, z0);
+    return h00 + (shoreTerrain(x1, z0) - h00) * tx + (shoreTerrain(x0, z1) - h00) * tz;
+  }
+  // 奥側の三角。(x1,z1) (x0,z1) (x1,z0)
+  const h11 = shoreTerrain(x1, z1);
+  return h11 + (shoreTerrain(x0, z1) - h11) * (1 - tx) + (shoreTerrain(x1, z0) - h11) * (1 - tz);
+}
+
 /** そこが潮だまりの中なら、その定義を返す */
 export function poolAt(x, z) {
   for (const p of POOLS) if (Math.hypot(x - p.x, z - p.z) < p.r) return p;
@@ -380,7 +442,7 @@ function shoreUniforms() {
 }
 
 export function createShoreRock(parent) {
-  const size = 190, seg = 480;
+  const size = MESH_SIZE, seg = MESH_SEG;
   const geo = new THREE.PlaneGeometry(size, size, seg, seg);
   geo.rotateX(-Math.PI / 2);
   const pos = geo.attributes.position;
@@ -397,10 +459,11 @@ export function createShoreRock(parent) {
   // 同じ頂点数のまま、間隔を中央で細かく・外周で粗くする。
   // 中央で7cm、外周で1m。格子の並びは変えないので、遮蔽を焼くときの
   // 隣接インデックスはそのまま使える
-  const warp = (u) => u * (0.20 + 0.80 * u * u);
+  // 歪めかたは meshHeightAt と共有する。ここがずれたら
+  // 「描かれている高さ」を返せなくなる
   for (let i = 0; i < pos.count; i++) {
-    pos.setX(i, warp(pos.getX(i) / H) * H);
-    pos.setZ(i, warp(pos.getZ(i) / H) * H);
+    pos.setX(i, meshWarp(pos.getX(i) / H) * H);
+    pos.setZ(i, meshWarp(pos.getZ(i) / H) * H);
   }
   for (let i = 0; i < pos.count; i++) {
     pos.setY(i, shoreTerrain(pos.getX(i), pos.getZ(i)));
@@ -533,7 +596,9 @@ export function createBoulders(parent, count = 190) {
     const z = -26 + rnd() * 46;
     // 潮だまりの中には置かない。皿の底に岩を積むと水が見えなくなる
     if (poolAt(x, z)) continue;
-    const y = shoreTerrain(x, z);
+    // 転石も「描かれている岩の高さ」に乗せる。関数の高さに置くと
+    // 節理の溝ぶん(最大22cm)沈み、直径40cmの石が半分埋まる
+    const y = meshHeightAt(x, z);
     // 大きい石は下のほう(波に転がされて溜まる)、上は小石だけ
     const high = Math.min(Math.max((y - TIDE.mean) / 3.0, 0), 1);
     const size = (0.22 + rnd() * rnd() * 1.15) * (1 - high * 0.55);

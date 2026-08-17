@@ -3,7 +3,7 @@ import { U, WORLD } from '../env.js';
 import { createWaterSurface } from '../environment/surface.js';
 import { createGodRays } from '../environment/effects.js';
 import {
-  shoreTerrain, createShoreRock, createBoulders, createTidePools,
+  meshHeightAt, createShoreRock, createBoulders, createTidePools,
   tideAt, waterAt, localWater, POOLS, TIDE,
 } from '../environment/shore.js';
 import { CollisionWorld } from '../collision.js';
@@ -29,7 +29,9 @@ export const SHORE = {
   name: '磯',
   sub: 'ROCKY SHORE',
   icon: '🦀',
-  terrain: shoreTerrain,
+  // 地形として外へ出すのは「描かれている高さ」。生き物もカメラも
+  // 餌も、画面に見えている岩と同じ一つの高さを見ていなければならない
+  terrain: meshHeightAt,
   env: {
     // 浅い岩礁の水。砂ではなく岩と海藻の上なので、青緑に寄る
     fogColor: new THREE.Color('#1c6a70'),
@@ -99,7 +101,7 @@ export const SHORE = {
       __cloud: bits,
       onFeed(p) {
         // 岩の上に置く。空中に撒いても意味がない
-        const y = shoreTerrain(p.x, p.z);
+        const y = meshHeightAt(p.x, p.z);
         _feed.set(p.x, y + 0.12, p.z);
         bits.drop(_feed, 60, 0.5);
         crabs.noticeFeed(bits);
@@ -139,7 +141,7 @@ export const SHORE = {
         // 潮位ではなく波の打ち上げまで入れた水際を渡すこと——
         // 波が来た一瞬だけイソギンチャクが開くのが、実際の磯の見え方
         // 餌は岩の上に落ちて止まる。海底ではなく「その場の岩の高さ」
-        bits.update(dt, shoreTerrain);
+        bits.update(dt, meshHeightAt);
         crabs.update(dt, water);
         anemones.update(dt, water);
         stars.update(dt, water);
