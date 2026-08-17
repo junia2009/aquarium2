@@ -7,6 +7,7 @@ import {
   tideAt, waterAt, localWater, POOLS, TIDE,
 } from '../environment/shore.js';
 import { CollisionWorld } from '../collision.js';
+import { CrabColony, AnemoneBed, createSeaStars, createUrchins } from '../creatures/shoreLife.js';
 import { SHORE_SPECIES } from '../species.js';
 
 // ============ 磯ゾーン ============
@@ -62,6 +63,14 @@ export const SHORE = {
 
     const world = new CollisionWorld();
 
+    // --- 生き物 ---
+    // 磯の住人はほとんどが泳がない。岩に張り付き、脚で歩き、
+    // 潮が引けば体を縮めて水の戻りを待つ
+    const crabs = new CrabColony(root, { count: 26 });
+    const anemones = new AnemoneBed(root, { count: 120 });
+    const stars = createSeaStars(root);
+    const urchins = createUrchins(root);
+
     // 直前まで水が届いていた高さ。波が引いたあとも岩はしばらく濡れている。
     // これを持たないと、波が去った瞬間に岩がからりと乾いて嘘になる
     let wetTop = TIDE.mean;
@@ -75,6 +84,14 @@ export const SHORE = {
       followTargets: {
         // 潮だまりは動かないが、図鑑から見にいけたほうがいい
         tidepool: { get: () => POOL_VIEW, dist: [3.0, 7.0] },
+        crab: { get: () => _crabAt(crabs), dist: [0.35, 1.1] },
+      },
+      // 検証用
+      __life: { crabs, anemones, stars, urchins },
+      onTap(ray, hit) {
+        // カニは近づくと岩陰へ走る。磯でカニを見つけたときに
+        // 必ず起きることなので、これが無いと歩いている置物になる
+        if (hit) crabs.scareAt(hit, 6);
       },
       onEnter() {
         // 潮位を共有ユニフォームへ。以後 update が毎フレーム更新する
@@ -102,6 +119,13 @@ export const SHORE = {
           m.uniforms.uWetTop.value = wetTop;
         }
         pools.update(water);
+        // 生き物は「いまの水位」を見て振る舞いを変える。
+        // 潮位ではなく波の打ち上げまで入れた水際を渡すこと——
+        // 波が来た一瞬だけイソギンチャクが開くのが、実際の磯の見え方
+        crabs.update(dt, water);
+        anemones.update(dt, water);
+        stars.update(dt, water);
+        urchins.update(dt, water);
         godRays.update(camera);
       },
     };
@@ -113,3 +137,11 @@ const POOL_VIEW = new THREE.Vector3(POOLS[0].x, POOLS[0].rim - 0.4, POOLS[0].z);
 
 // 生き物側から使う。潮だまりの中では海が引いても水が残る
 export { localWater };
+
+// 図鑑で「イソガニ」を選んだときの追跡先。いま歩いている個体を優先する
+const _crabPos = new THREE.Vector3();
+function _crabAt(crabs) {
+  let best = crabs.members[0];
+  for (const m of crabs.members) if (m.speed > 0) { best = m; break; }
+  return _crabPos.set(best.x, best.y + 0.05, best.z);
+}
