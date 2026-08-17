@@ -240,19 +240,31 @@ uniform float uWater;
 uniform float uWetTop;
 uniform vec4 uPools[${n}];
 
-// 岩肌の細かい凹凸。3段重ねて、cm単位まで落とす
+// 岩肌の細かい凹凸。返すのは「起伏の高さ(メートル)」。
+// 単位を決めておかないと、勾配を法線に足すときの大きさが決まらない。
+//
+// ここを 0.55 / 0.30 / 0.15 という無次元の値にしていたのが、
+// 岩が薄っぺらく見えた原因だった。いちばん細かい成分は周期3cmなので、
+// 高さ0.15mの起伏が3cmごとに上下することになり、勾配は9を超える。
+// それを法線に足せば、元の面の向きは完全に消える。
+// 結果、どの面も同じ明るさになって、立体感がまるごと失われていた。
+//
+// 実際の岩肌の凹凸は、粗いうねりで3cm、細かい粒で数mm。
 float rockBump(vec2 p) {
-  return fbm(p * 2.6) * 0.55 + fbm(p * 9.5) * 0.30 + fbm(p * 31.0) * 0.15;
+  return fbm(p * 2.2) * 0.058 + fbm(p * 8.0) * 0.021 + fbm(p * 22.0) * 0.008;
 }
 
 // 法線を岩肌の起伏で曲げる。遠くではちらつくので距離で消す
 vec3 rockNormal(vec3 wp, vec3 n, float amt) {
   if (amt < 0.01) return n;
-  float e = 0.055;
+  // 差分の幅は、いちばん細かい成分(周期4.5cm)より小さく取る。
+  // 大きいとその成分を飛ばしてしまい、勾配が出鱈目になる
+  float e = 0.018;
   float b0 = rockBump(wp.xz);
   float bx = rockBump(wp.xz + vec2(e, 0.0));
   float bz = rockBump(wp.xz + vec2(0.0, e));
-  vec3 g = vec3(-(bx - b0) / e, 0.0, -(bz - b0) / e);
+  // 勾配は無次元(面の傾きそのもの)。だいたい0.3=17度に収まる
+  vec3 g = vec3(-(bx - b0), 0.0, -(bz - b0)) / e;
   return normalize(n + g * amt);
 }
 
@@ -268,7 +280,9 @@ vec3 shoreSurface(vec3 wp, vec3 nIn, float cav, float bumpAmt) {
   // 反射率は低く保つこと。乾いた岩でも0.2〜0.3、濡れれば0.1を切る。
   // ここを0.5にしていたら、水上の直射日光で真っ白に飛んだ
   float grain = fbm(wp.xz * 0.55) * 0.5 + fbm(wp.xz * 2.4) * 0.3;
-  float fine = rockBump(wp.xz);
+  // 色のむらに使うほうは 0〜1 に戻して使う。
+  // rockBump はメートルを返すようになったので、そのままでは効かない
+  float fine = fbm(wp.xz * 8.0);
   // 日本の磯の岩はたいてい灰色(安山岩・凝灰岩)で、褐色ではない。
   // ここを茶色にしていたら全体が砂丘のような色になった
   vec3 dry = mix(vec3(0.104, 0.106, 0.107), vec3(0.188, 0.190, 0.188), grain);
@@ -276,8 +290,8 @@ vec3 shoreSurface(vec3 wp, vec3 nIn, float cav, float bumpAmt) {
   dry = mix(dry, vec3(0.140, 0.138, 0.132), fbm(vec2(wp.x * 0.22, wp.y * 1.6)) * 0.5);
   // 鉄分のしみ。一様に掛けると岩ぜんたいが錆色になるので、
   // 狭い範囲に濃く出す。まだらであることに意味がある
-  dry = mix(dry, vec3(0.235, 0.140, 0.070),
-            smoothstep(0.66, 0.80, fbm(wp.xz * 0.31 + 21.0)) * 0.72);
+  dry = mix(dry, vec3(0.205, 0.140, 0.088),
+            smoothstep(0.66, 0.82, fbm(wp.xz * 0.31 + 21.0)) * 0.50);
   // 濡れて乾いたあとに残る塩と、削れて出た新しい面の白っぽさ
   dry = mix(dry, vec3(0.315, 0.312, 0.300),
             smoothstep(0.62, 0.78, fbm(wp.xz * 0.85 + 7.0)) * 0.45);
