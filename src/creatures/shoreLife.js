@@ -26,6 +26,7 @@ const _fwd = new THREE.Vector3();
 const _side = new THREE.Vector3();
 const _n = new THREE.Vector3();
 const _sv = new THREE.Vector3();
+const _bait = new THREE.Vector3();
 
 export function rockNormalAt(x, z, e = 0.18, out = _n) {
   const dx = shoreTerrain(x + e, z) - shoreTerrain(x - e, z);
@@ -313,6 +314,13 @@ export class CrabColony {
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     parent.add(this.mesh);
 
+    this.feed = null;
+    this.feedT = 0;
+    // 検証用。餌に口が届いた個体数と、食べた累計。
+    // 「寄ってきているのに食べていない」のか「そもそも届いていない」のかは、
+    // 外から見ても区別できない。この2つを出しておかないと切り分けられない
+    this.ate = 0;
+    this.reached = 0;
     this.members = [];
     for (let i = 0; i < count; i++) {
       // 潮間帯の棚のあたりに散らす
@@ -330,6 +338,7 @@ export class CrabColony {
         speed: 0, body,
         rest: Math.random() * 2.0,
         scare: 0,
+        detour: 0,
       });
       this.info[i * 4 + 0] = Math.random() * Math.PI * 2;
       this.info[i * 4 + 1] = 0;
@@ -339,29 +348,71 @@ export class CrabColony {
     this.infoAttr = this.geo.getAttribute('aInfo');
   }
 
+  /**
+   * 餌が撒かれた。カニは匂いに気づいて集まってくる。
+   * 磯でエサを置くと、どこにいたのか分からないカニが次々に出てくる
+   */
+  noticeFeed(cloud) { this.feed = cloud; this.feedT = 26; }
+
   /** ダイバーが近づいた。近くの個体は岩陰へ走る */
   scareAt(p, radius = 6) {
     for (const m of this.members) {
       const d = Math.hypot(m.x - p.x, m.z - p.z);
       if (d < radius) {
         m.scare = 2.2 + Math.random() * 2.0;
-        // 相手と反対の方へ、横歩きで逃げる
-        m.heading = Math.atan2(p.z - m.z, p.x - m.x);
-        m.dir = Math.random() < 0.5 ? 1 : -1;
+        // 相手と反対の方へ、横歩きで逃げる。
+        // 向きの決め方は餌を追うときと同じ規約にそろえる
+        m.heading = Math.atan2(m.x - p.x, m.z - p.z) - Math.PI * 0.5;
+        m.dir = 1;
       }
     }
   }
 
   update(dt, sea) {
+    // 餌が撒かれているあいだは、そこへ向かうのが最優先
+    if (this.feedT > 0) this.feedT -= dt;
+    const bait = this.feedT > 0 && this.feed && this.feed.active
+      ? this.feed.focus(_bait) : null;
+    this.reached = 0;
     for (let i = 0; i < this.members.length; i++) {
       const m = this.members[i];
       const water = localWater(m.x, m.z, sea);
       const submerged = m.y < water - 0.02;
 
+      if (m.detour > 0) m.detour -= dt;
+
       if (m.scare > 0) {
         // 逃走。カニは驚くと本気で速い。甲幅の10倍/秒くらい出す
         m.scare -= dt;
         m.speed = m.body * 11;
+      } else if (bait && m.detour <= 0) {
+        // 餌へ向かう。届いたら食べる。
+        //
+        // 迂回中(detour)は上書きしないこと。段差に阻まれて向きを変えても、
+        // 次のフレームでここが餌の方向へ戻してしまうと、
+        // 「曲がる→戻す→また阻まれる」を延々くり返してその場で固まる。
+        // 実際そうなって、カニが餌の48cm手前でぴたりと止まった
+        const d = Math.hypot(bait.x - m.x, bait.z - m.z);
+        // 届く距離。カニは体の前へはさみを伸ばして拾うので、
+        // 甲羅が触れるまで詰める必要はない。ここを甲幅の3.5倍(4cmの個体で
+        // 11cm)にしていたら、段差に阻まれて13cm手前で足踏みし、
+        // いつまでも食べられなかった
+        if (d > m.body * 6.0) {
+          // 横歩きなので、体の向きは進みたい方向の直角にとる。
+          // 引くほうへ回すこと——+π/2 にすると進む向きが真逆になり、
+          // 餌から遠ざかっていく(実際そうなった)。
+          // 移動は (cos(heading), -sin(heading)) なので、
+          // 進みたい角 θ に対して heading = θ - π/2
+          m.heading = Math.atan2(bait.x - m.x, bait.z - m.z) - Math.PI * 0.5;
+          m.dir = 1;
+          m.speed = m.body * 5.5;
+          m.rest = 0.4;
+        } else {
+          // 届いた。はさみは体より前に出るので、口の届く範囲は甲幅より広い
+          m.speed = 0;
+          this.reached++;
+          this.ate += this.feed.eatNear(_v.set(m.x, m.y + m.body * 0.2, m.z), m.body * 8.0);
+        }
       } else {
         m.rest -= dt;
         if (m.rest <= 0) {
@@ -401,11 +452,17 @@ export class CrabColony {
         // カニは4cmの体で数cmの段を平気で越える。見るべきは
         // 「これから進む先30cmの傾き」で、閾値もそれに合わせる
         const ny = shoreTerrain(nx, nz);
+        // イソガニは垂直な岩壁でも平気で登る。ここで止めたいのは
+        // 「壁を突き抜けて歩く」ことだけなので、閾値はうんと甘くてよい。
+        // 0.34mにしていたときは、節理の段のたびに引っかかって
+        // 迂回をくり返し、餌の40cm手前まで来たきり届かなかった
         const ahead = shoreTerrain(m.x + vx * 0.3, m.z + vz * 0.3);
-        if (Math.abs(ahead - m.y) < 0.34) {
+        if (Math.abs(ahead - m.y) < 0.85) {
           m.x = nx; m.z = nz; m.y = ny;
         } else {
+          // 阻まれた。しばらくこの向きで迂回する
           m.heading += 1.1;
+          m.detour = 0.8;
         }
       }
 

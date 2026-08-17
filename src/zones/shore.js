@@ -7,6 +7,7 @@ import {
   tideAt, waterAt, localWater, POOLS, TIDE,
 } from '../environment/shore.js';
 import { CollisionWorld } from '../collision.js';
+import { FeedCloud } from '../creatures/feed.js';
 import { CrabColony, AnemoneBed, createSeaStars, createUrchins } from '../creatures/shoreLife.js';
 import { SHORE_SPECIES } from '../species.js';
 
@@ -66,6 +67,12 @@ export const SHORE = {
     // --- 生き物 ---
     // 磯の住人はほとんどが泳がない。岩に張り付き、脚で歩き、
     // 潮が引けば体を縮めて水の戻りを待つ
+    // 餌は砕いた貝や魚の身。磯でこれを岩に置くと、どこにいたのか
+    // 分からないカニが次々に出てくる。沈むだけで自分では泳がない
+    const bits = new FeedCloud(root, 'detritus');
+    // 磯の餌は水面より高い岩の上に載る。既定の「水面より上へ行かせない」
+    // 制限を外さないと、岩に埋まって誰も食べられない
+    bits.ceiling = 1e4;
     const crabs = new CrabColony(root, { count: 26 });
     const anemones = new AnemoneBed(root, { count: 120 });
     const stars = createSeaStars(root);
@@ -87,7 +94,16 @@ export const SHORE = {
         crab: { get: () => _crabAt(crabs), dist: [0.35, 1.1] },
       },
       // 検証用
-      __life: { crabs, anemones, stars, urchins },
+      __life: { crabs, anemones, stars, urchins, bits },
+      feedLeft: () => bits.n,
+      __cloud: bits,
+      onFeed(p) {
+        // 岩の上に置く。空中に撒いても意味がない
+        const y = shoreTerrain(p.x, p.z);
+        _feed.set(p.x, y + 0.12, p.z);
+        bits.drop(_feed, 60, 0.5);
+        crabs.noticeFeed(bits);
+      },
       onTap(ray, hit) {
         // カニは近づくと岩陰へ走る。磯でカニを見つけたときに
         // 必ず起きることなので、これが無いと歩いている置物になる
@@ -122,6 +138,8 @@ export const SHORE = {
         // 生き物は「いまの水位」を見て振る舞いを変える。
         // 潮位ではなく波の打ち上げまで入れた水際を渡すこと——
         // 波が来た一瞬だけイソギンチャクが開くのが、実際の磯の見え方
+        // 餌は岩の上に落ちて止まる。海底ではなく「その場の岩の高さ」
+        bits.update(dt, shoreTerrain);
         crabs.update(dt, water);
         anemones.update(dt, water);
         stars.update(dt, water);
@@ -139,6 +157,7 @@ const POOL_VIEW = new THREE.Vector3(POOLS[0].x, POOLS[0].rim - 0.4, POOLS[0].z);
 export { localWater };
 
 // 図鑑で「イソガニ」を選んだときの追跡先。いま歩いている個体を優先する
+const _feed = new THREE.Vector3();
 const _crabPos = new THREE.Vector3();
 function _crabAt(crabs) {
   let best = crabs.members[0];

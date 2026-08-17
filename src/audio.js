@@ -188,6 +188,46 @@ export class UnderwaterAudio {
     };
     this._scheduleCreak = scheduleCreak;
 
+    // 磯で聞こえるのは、寄せて砕けて引く波。
+    // ほかのゾーンの環境音は「途切れずに続くざわめき」だが、
+    // これだけは形のある一発ずつの出来事で、数秒おきに繰り返す。
+    //
+    // 砕ける音は白色雑音の塊ではない。寄せるときに低い唸りが近づき、
+    // 砕けた瞬間に高域が立ち、引くときは砂利を転がす細かい音が残る。
+    // 帯域を時間で動かさないと、シャワーの音にしかならない。
+    const scheduleWave = () => {
+      if (!this.enabled || this.zone !== 'shore') { this.waveTimer = null; return; }
+      const ctx = this.ctx;
+      const t0 = ctx.currentTime;
+      const swell = 1.6 + Math.random() * 1.4;    // 寄せ
+      const wash = 2.2 + Math.random() * 2.0;     // 砕けてから引くまで
+      const src = ctx.createBufferSource();
+      // 波の砕ける音には白色雑音が要る。下地に使っているブラウンノイズは
+      // 高域がほとんど無いので、帯域を上へ振っても音が明るくならない
+      src.buffer = this._whiteNoise();
+      src.loop = true;
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.Q.value = 0.7;
+      // 寄せ: 低く遠い唸り → 砕け: 一気に高域まで開く → 引き: また落ちる
+      bp.frequency.setValueAtTime(180, t0);
+      bp.frequency.exponentialRampToValueAtTime(1500 + Math.random() * 900, t0 + swell);
+      bp.frequency.exponentialRampToValueAtTime(320, t0 + swell + wash);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t0);
+      // 砕ける瞬間だけ急に立ち上がる。左右対称の山にすると波に聞こえない
+      g.gain.exponentialRampToValueAtTime(0.05 + Math.random() * 0.05, t0 + swell * 0.92);
+      g.gain.exponentialRampToValueAtTime(0.014, t0 + swell + wash * 0.35);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + swell + wash);
+      src.connect(bp).connect(g).connect(this.master);
+      g.connect(this._reverb());
+      src.start(t0);
+      src.stop(t0 + swell + wash + 0.1);
+      // 次の波。周期は一定ではなく、たまに大きいのが続けて来る
+      this.waveTimer = setTimeout(scheduleWave, (swell + wash) * 1000 * (0.55 + Math.random() * 0.5));
+    };
+    this._scheduleWave = scheduleWave;
+
     this.zone = this.zone || 'sea';
     this._applyZone();
   }
@@ -204,18 +244,35 @@ export class UnderwaterAudio {
   _applyZone() {
     const abyss = this.zone === 'abyss';
     const ice = this.zone === 'iceSea';
+    const shore = this.zone === 'shore';
     const now = this.ctx.currentTime;
     // 深海のざわめきは、浅い海よりさらに低くこもる。
-    // 氷の海は逆に、蓋をされた空間なので高域がよく残って響く
-    this.waterLP.frequency.setTargetAtTime(abyss ? 85 : ice ? 420 : 240, now, 1.5);
+    // 氷の海は逆に、蓋をされた空間なので高域がよく残って響く。
+    // 磯は水の外に頭を出している場所なので、こもりがいちばん浅い
+    this.waterLP.frequency.setTargetAtTime(abyss ? 85 : ice ? 420 : shore ? 900 : 240, now, 1.5);
     this.waterLFO.gain.setTargetAtTime(abyss ? 22 : ice ? 130 : 90, now, 1.5);
-    this.master.gain.setTargetAtTime(abyss ? 0.13 : 0.16, now, 1.5);
+    // 磯は波そのものが主役なので、下地のざわめきは絞る
+    this.master.gain.setTargetAtTime(abyss ? 0.13 : shore ? 0.10 : 0.16, now, 1.5);
     clearTimeout(this.bubbleTimer); this.bubbleTimer = null;
     clearTimeout(this.rumbleTimer); this.rumbleTimer = null;
     clearTimeout(this.creakTimer); this.creakTimer = null;
+    clearTimeout(this.waveTimer); this.waveTimer = null;
     if (abyss) this._scheduleRumble();
-    else this._scheduleBubble();
+    else if (!shore) this._scheduleBubble();
     if (ice) this._scheduleCreak();
+    if (shore) this._scheduleWave();
+  }
+
+  // 白色雑音。砕ける波に使う。1本を使いまわす
+  _whiteNoise() {
+    if (this.whiteBuf) return this.whiteBuf;
+    const ctx = this.ctx;
+    const len = Math.floor(ctx.sampleRate * 3);
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    this.whiteBuf = buf;
+    return buf;
   }
 
   // 海の残響。水中は高域が早く減衰するので、暗く長い尾を引く

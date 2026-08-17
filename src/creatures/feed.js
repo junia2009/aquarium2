@@ -67,6 +67,12 @@ export class FeedCloud {
     this.k = FEED_KINDS[kind] || FEED_KINDS.plankton;
     this.n = 0;                       // 生きている粒の数
     this.credit = 0;                  // このフレームに残っている口数
+    // 粒がこれより上へは行けない高さ。ふつうは水面。
+    // ただし磯のように「水面より高い岩の上」へ撒くゾーンがあるので、
+    // 世界共通の水面で決め打ちにはしない——決め打ちにしていたせいで、
+    // 岩の上に置いた餌が水面(16m)まで沈んで岩に埋まり、
+    // すぐそばまで来たカニがいつまでも食べられなかった
+    this.ceiling = WORLD.surfaceY;
     this.pos = [];
     this.vel = [];
     this.age = new Float32Array(MAX);
@@ -294,7 +300,7 @@ export class FeedCloud {
         const fy = floorAt(p.x, p.z) + 0.06;
         if (p.y < fy) { p.y = fy; v.y = 0; v.x *= 0.4; v.z *= 0.4; }
       }
-      if (p.y > WORLD.surfaceY - 0.05) { p.y = WORLD.surfaceY - 0.05; v.y = Math.min(v.y, 0); }
+      if (p.y > this.ceiling - 0.05) { p.y = this.ceiling - 0.05; v.y = Math.min(v.y, 0); }
 
       // 撒きはじめは湧いて出るように、終わりは溶けるように
       this.fade[i] = Math.min(this.age[i] * 4, 1)
