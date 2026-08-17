@@ -88,18 +88,35 @@ export const POOLS = [
   { x: 0.5, z: 6.5, r: 1.4, depth: 0.20 },
 ];
 
-/** 潮だまりの窪み。地形から引く深さを返す */
-function poolCut(x, z) {
-  let cut = 0;
+/**
+ * 潮だまりの皿。
+ *
+ * 「地形から一定の深さを引く」やり方はやめた。傾いた岩の上では
+ * それは窪みにならない。実際そうなって、皿の中央が自分のこぼれ口より
+ * 1.3m 高い「斜面のくぼみ」ができ、水は溜まりようがなかった。
+ *
+ * 深さではなく、目標の高さまで削る。中央は floor、縁で rim へ戻る皿。
+ * 岩がそれより低いところは埋めない(岩を足すと地形が盛り上がる)。
+ * こうすれば、どんな傾きの上でも必ず水の溜まる窪みになる
+ */
+function poolFloorAt(x, z, base) {
+  let y = base;
   for (const p of POOLS) {
     const d = Math.hypot(x - p.x, z - p.z);
-    if (d > p.r * 1.35) continue;
-    // 縁は立ち上がり、中は平らな皿。縁を鋭くしないと水が溜まって見えない
-    const u = Math.min(d / p.r, 1.35);
-    const bowl = u < 1 ? 1 - u * u * u : 0;
-    cut = Math.max(cut, bowl * p.depth);
+    // 効き目は半径の1.5倍まで伸ばす。半径ぴったりで打ち切ると、
+    // そこに垂直な壁が立つ。周りの岩が縁より1m高い窪みでは、
+    // 円筒形の穴を岩にドリルで開けたような形になっていた
+    const R = p.r * 1.5;
+    if (d >= R) continue;
+    const u = Math.min(d / p.r, 1);
+    // 皿。中央は底、縁で rim
+    const dish = p.floor + (p.rim - p.floor) * u * u * u;
+    // 縁の外では地形の高さへ戻していく
+    const t = Math.min(Math.max((d - p.r) / (R - p.r), 0), 1);
+    const w = 1 - t * t * (3 - 2 * t);
+    y = Math.min(y, dish * w + base * (1 - w));
   }
-  return cut;
+  return y;
 }
 
 // ---- 節理 ----
@@ -134,23 +151,37 @@ function joints(x, z) {
   return { id, edge: f2 - f1 };
 }
 
+// fbm3 は 0〜1 のあいだを動くので、平均は0ではない。値はオクターブ数で
+// 決まる(2段 0.375 / 3段 0.437 / 4段 0.468。実測)。
+//
+// 高さに足すときは、これを引いてからでなければならない。
+// 引き忘れていたせいで、上の4つの fbm 項だけで地形が +0.98m 持ち上がり、
+// 干満(14.9〜17.1m)のなかにあるはずの潮間帯の棚が 17.9m にあった。
+// 潮がひと巡りしても水際は画面の外にしか現れず、手前はいつでも
+// からからに乾いた岩の平原だった。「磯に見えない」の半分はこれ。
+const FBM_MEAN = [0, 0.250, 0.375, 0.437, 0.468];
+const fbmC = (x, z, oct) => fbm3(x, 0, z, oct) - FBM_MEAN[oct];
+
 /**
  * 磯の高さ場。
  * 岩は砂と違って「面」ではなく「割れて積み重なったもの」なので、
  * なめらかなノイズだけだと粘土の丘になる。段(ベンチ)と割れ目を入れる。
  */
 function rockBase(x, z) {
-  let y = profileAt(z);
-  // 岬と入り江。岸に沿った起伏で、まっすぐな斜面に見えないようにする
-  const bay = Math.sin(x * 0.075) * 1.5 + Math.sin(x * 0.031 + 2.2) * 2.3;
+  // 岬と入り江。これは「高さを足す」のではなく「断面を前後にずらす」。
+  // 高さで足していたときは、たまたま見える範囲(x -30..16)で
+  // sin がずっと正で、平均 +1.4m の下駄を履いていた。
+  // そもそも岬とは岸の線が沖へ張り出すことなので、z をずらすのが正しい。
+  // こうすると水際そのものが蛇行し、高さには下駄を履かせない
+  const cape = Math.sin(x * 0.075) * 5.0 + Math.sin(x * 0.031 + 2.2) * 7.5;
+  let y = profileAt(z + cape);
   // 潮間帯の棚のあたりでだけ強く効かせる。沖と陸では薄める
   const bench = Math.exp(-Math.pow((z - 2) / 16, 2));
-  y += bay * (0.35 + 0.65 * bench);
   // 岩塊。粗いうねりから細かい凹凸まで3段。ここを1段で済ませると
   // 「なめらかな丘」になり、どれだけ色を岩にしても砂丘に見える
-  y += fbm3(x * 0.055, 0, z * 0.055, 3) * 1.5;
-  y += fbm3(x * 0.17 + 11, 0, z * 0.17, 3) * 0.55;
-  y += fbm3(x * 0.52 + 41, 0, z * 0.52, 2) * 0.16;
+  y += fbmC(x * 0.055, z * 0.055, 3) * 1.5;
+  y += fbmC(x * 0.17 + 11, z * 0.17, 3) * 0.55;
+  y += fbmC(x * 0.52 + 41, z * 0.52, 2) * 0.16;
   // 段。堆積岩の層が波に削られると階段状の棚になる。
   // 高さを量子化するだけで、粘土の丘が割れた岩に変わる。
   // 磯全体に効かせること——潮間帯だけ段にすると、そこだけ床材に見える
@@ -177,27 +208,68 @@ function rockBase(x, z) {
   y += (j3.id - 0.5) * 0.045;
   y -= Math.pow(1 - Math.min(j3.edge * 6.0, 1), 2) * 0.030;
   // 岩肌そのもののざらつき。10〜30cmの起伏
-  y += fbm3(x * 1.7 + 77, 0, z * 1.7, 2) * 0.055;
+  y += fbmC(x * 1.7 + 77, z * 1.7, 2) * 0.055;
   return y;
 }
 
 /** 磯の高さ場(潮だまりの窪みまで入れた最終形) */
 export function shoreTerrain(x, z) {
-  return rockBase(x, z) - poolCut(x, z);
+  const base = rockBase(x, z);
+  // POOLS の rim/floor が決まるのは下の探索のあと。それまでは素の岩
+  return poolsReady ? poolFloorAt(x, z, base) : base;
 }
+let poolsReady = false;
 
 // 縁の高さは地形から測る。手で置くと必ず地形とずれて、
 // 「水面が岩にめり込んでいる」か「宙に浮いている」かのどちらかになる。
 // いちばん低い縁がこぼれ口になり、そこまでしか水は溜まらない
-for (const p of POOLS) {
+function rimAt(x, z, r) {
   let lo = Infinity;
   for (let i = 0; i < 32; i++) {
     const a = (i / 32) * Math.PI * 2;
-    lo = Math.min(lo, rockBase(p.x + Math.cos(a) * p.r * 1.04, p.z + Math.sin(a) * p.r * 1.04));
+    lo = Math.min(lo, rockBase(x + Math.cos(a) * r * 1.04, z + Math.sin(a) * r * 1.04));
   }
-  p.rim = lo;
-  p.floor = lo - p.depth;
+  return lo;
 }
+
+// ---- 置く場所も地形から探す ----
+// x,z を手で決めて縁の高さだけ測る、というやり方をしていた。
+// そのあと地形の底上げを直したら、地形が1.7m下がって、
+// 大きい2つの溜まりの底が干潮面(14.9m)より低くなった。
+// 世界じゅうに敷いてある海の一枚板が底から顔を出して白く光る、
+// 以前に一度踏んだ穴を、そのまま踏み直したことになる。
+//
+// 潮だまりとは「潮が引いているあいだ水が残っている窪み」で、
+// 成立する条件は高さで決まっている。
+//   ・縁が満潮(17.1m)より低い  → 満潮には水没して海と繋がる
+//   ・底が干潮(14.9m)より高い  → 引いても水が残る
+//   ・縁が平均潮位より少し上    → 何時間も干上がって見える
+// なら、その高さの場所を地形に探させればよい。手で置いてはいけない。
+//
+// 岸に直交する z 方向が高さの勾配なので、x は活かして z だけを動かす。
+// 見た目の散らばりは保たれる
+const POOL_BAND = [TIDE.mean + 0.15, TIDE.mean + 0.90];
+const POOL_TARGET = (POOL_BAND[0] + POOL_BAND[1]) / 2;
+for (const p of POOLS) {
+  let bestZ = p.z, bestRim = rimAt(p.x, p.z, p.r), bestCost = Infinity;
+  for (let i = 0; i <= 72; i++) {
+    // 元の位置を中心に ±9m。近いほうを優先する(意図した配置を壊さない)
+    const z = p.z + (i / 72 * 2 - 1) * 9.0;
+    const rim = rimAt(p.x, z, p.r);
+    if (rim < POOL_BAND[0] || rim > POOL_BAND[1]) continue;
+    // もともと窪んでいる場所を選ぶ。中央が縁より高い斜面に皿を切ると、
+    // 削り取る量が1mを超えて、岩に丸い穴を開けたようになる
+    const mound = rockBase(p.x, z) - rim;
+    const cost = Math.abs(rim - POOL_TARGET) + mound * 0.9 + Math.abs(z - p.z) * 0.06;
+    if (cost < bestCost) { bestCost = cost; bestZ = z; bestRim = rim; }
+  }
+  p.z = bestZ;
+  p.rim = bestRim;
+  // 底は必ず干潮面より上。探索が空振りしても、ここで守られる
+  p.floor = Math.max(bestRim - p.depth, TIDE.mean - TIDE.amp + 0.10);
+  p.depth = bestRim - p.floor;
+}
+poolsReady = true;
 
 // ---- 描かれている高さ ----
 // 岩は190mを480分割した格子で描いていて、頂点と頂点のあいだは
@@ -367,15 +439,26 @@ vec3 shoreSurface(vec3 wp, vec3 nIn, float cav, float bumpAmt) {
   float weed = smoothstep(-0.30, -1.30, rel) * (0.55 + 0.45 * fbm(wp.xz * 0.38));
   float mussel = smoothstep(-1.05, -0.55, rel) * smoothstep(0.15, -0.25, rel)
                * smoothstep(0.20, 0.32, fbm(wp.xz * 0.46));
+  // フジツボ。しきい値を 0.18〜0.30 にしていたら、fbm はほぼ常に
+  // これを超えるので、帯のなかが「一面びっしり」の板になっていた。
+  // マスクだけを描かせて確かめたら、手前の岩ぜんたいが100%だった。
+  // 実際の被度は4〜8割で、素の岩が筋や面で抜ける。2段の斑で抜かす
   float barn = smoothstep(-0.15, 0.30, rel) * smoothstep(1.35, 0.75, rel)
-             * smoothstep(0.18, 0.30, fbm(wp.xz * 0.58));
+             * smoothstep(0.30, 0.58, fbm(wp.xz * 0.58))
+             * (0.42 + 0.58 * smoothstep(0.34, 0.62, fbm(wp.xz * 1.9)));
   float lichen = smoothstep(1.10, 1.70, rel) * smoothstep(3.4, 2.2, rel)
                * smoothstep(0.26, 0.44, fbm(wp.xz * 0.32));
 
   vec3 col = dry;
-  col = mix(col, vec3(0.038, 0.034, 0.028), lichen * 0.95);
-  // フジツボは石灰質の殻。粒立ちがあるので、細かいノイズで白を散らす
-  col = mix(col, vec3(0.760, 0.735, 0.680) * (0.72 + 0.5 * fine), barn * 0.96);
+  col = mix(col, vec3(0.046, 0.042, 0.035), lichen * 0.92);
+  // フジツボは石灰質の殻。粒立ちがあるので、細かいノイズで白を散らす。
+  //
+  // 反射率は 0.76 ではなく 0.42。0.76 にしていたら、水上の直射日光
+  // (環境光+直射で照度が約1.9)を掛けた時点で1を超え、トーンマッピングで
+  // 真っ白に飛んで、磯が雪原に見えていた。
+  // フジツボの殻は白いが、殻と殻のあいだは影なので、面としての
+  // 反射率は 0.3〜0.4 にしかならない
+  col = mix(col, vec3(0.420, 0.406, 0.376) * (0.62 + 0.55 * fine), barn * 0.90);
   col = mix(col, vec3(0.022, 0.022, 0.036), mussel * 0.95);
   col = mix(col, vec3(0.034, 0.048, 0.020), weed * 0.95);
   col = mix(col, vec3(0.098, 0.176, 0.068),
