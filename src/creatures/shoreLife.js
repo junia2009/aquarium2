@@ -8,6 +8,7 @@ import { UW_FRAG_PRELUDE, UW_FRAG_OUTPUT } from '../glsl.js';
 // 最大22cm。甲幅4cmのカニが自分の体の5倍も埋まっていた。
 // 「常にめり込んでる」「薄っぺらく見える」はこれが原因だった。
 import { meshHeightAt, poolAt, localWater } from '../environment/shore.js';
+import { ContactShadows } from '../environment/contactShadow.js';
 
 // ============ 磯の生き物 ============
 //
@@ -335,6 +336,10 @@ export class CrabColony {
     // 外から見ても区別できない。この2つを出しておかないと切り分けられない
     this.ate = 0;
     this.reached = 0;
+    // 接地影。歩くので毎フレーム置き直す。
+    // 板の直径は甲幅の2.4倍——カニの footprint は甲羅ではなく脚の張りで
+    // 決まり、脚は左右へ甲幅ぶんずつ伸びている
+    this.shadow = new ContactShadows(parent, count, U.uSunDir.value);
     this.members = [];
     for (let i = 0; i < count; i++) {
       // 潮間帯の棚のあたりに散らす
@@ -484,10 +489,13 @@ export class CrabColony {
       // 脚先が岩に乗る高さに置く
       placeOnRock(_m, m.x, m.y + m.body * this.foot, m.z, m.heading, m.body, n);
       this.mesh.setMatrixAt(i, _m);
+      // 甲羅の中心は甲幅の 0.20 ぶん浮いている。そのぶん影がずれる
+      this.shadow.place(i, m.x, m.y, m.z, m.body * 2.4, m.body * 0.20, n);
       // 歩いていないときは脚を止める。ずっと漕いでいると水車になる
       this.info[i * 4 + 1] = m.speed > 0 ? Math.min(m.speed / (m.body * 4), 1.6) : 0;
     }
     this.mesh.instanceMatrix.needsUpdate = true;
+    this.shadow.commit(this.members.length);
     this.infoAttr.needsUpdate = true;
   }
 }
@@ -606,6 +614,8 @@ export class AnemoneBed {
     this.mesh = new THREE.InstancedMesh(this.geo, this.mat, count);
     this.mesh.frustumCulled = false;
     parent.add(this.mesh);
+    // イソギンチャクは動かないので、影は置いたら置いたまま
+    const shadow = new ContactShadows(parent, count, U.uSunDir.value);
 
     this.items = [];
     let placed = 0;
@@ -622,6 +632,9 @@ export class AnemoneBed {
       const n = rockNormalAt(x, z);
       placeOnRock(_m, x, y, z, Math.random() * 6.283, size, n);
       this.mesh.setMatrixAt(placed, _m);
+      // 触手を広げたぶんまで含めて、影は体の 1.9 倍。
+      // 丸い体は自分の影を隠すので、物の輪郭より広く取ること
+      shadow.place(placed, x, y, z, size * 1.9, size * 0.45, n);
       this.info[placed * 4 + 0] = Math.random() * 6.283;
       this.info[placed * 4 + 1] = 1;
       this.info[placed * 4 + 2] = size;
@@ -629,6 +642,7 @@ export class AnemoneBed {
       this.items.push({ x, z, y, open: 1 });
       placed++;
     }
+    shadow.commit(placed);
     this.mesh.count = placed;
     this.mesh.instanceMatrix.needsUpdate = true;
     this.infoAttr = this.geo.getAttribute('aInfo');
@@ -822,6 +836,10 @@ class ClingBed {
     this.mesh = new THREE.InstancedMesh(geo, this.mat, count);
     this.mesh.frustumCulled = false;
     parent.add(this.mesh);
+    // 張り付いて動かないので、影も置いたまま。
+    // 板の直径と浮き上がりは種ごとに違う(ヒトデは平たく、ウニは丸い)ので
+    // place() が返してくる
+    const shadow = new ContactShadows(parent, count, U.uSunDir.value);
     this.items = [];
     let placed = 0;
     for (let i = 0; i < count * 60 && placed < count; i++) {
@@ -830,6 +848,7 @@ class ClingBed {
       const n = rockNormalAt(s.x, s.z);
       placeOnRock(_m, s.x, s.y + (s.lift || 0), s.z, Math.random() * 6.283, s.size, n);
       this.mesh.setMatrixAt(placed, _m);
+      shadow.place(placed, s.x, s.y, s.z, s.size * s.shadow, s.size * s.hover, n);
       this.info[placed * 4 + 0] = Math.random() * 6.283;
       this.info[placed * 4 + 1] = 1;
       this.info[placed * 4 + 2] = s.size;
@@ -837,6 +856,7 @@ class ClingBed {
       this.items.push(s);
       placed++;
     }
+    shadow.commit(placed);
     this.mesh.count = placed;
     this.mesh.instanceMatrix.needsUpdate = true;
     this.infoAttr = geo.getAttribute('aInfo');
@@ -860,7 +880,9 @@ export function createSeaStars(parent, count = 34) {
     const y = meshHeightAt(x, z);
     // 潮下帯から潮間帯の下部。乾く場所には出てこない
     if (y > 16.2 || y < 13.2) return null;
-    return { x, z, y, size: 0.055 + Math.random() * 0.035, lift: 0.004 };
+    // ヒトデは腕まで岩に密着している。影は体と同じ広さで、ほぼ浮かない
+    return { x, z, y, size: 0.055 + Math.random() * 0.035, lift: 0.004,
+             shadow: 1.15, hover: 0.03 };
   });
 }
 
@@ -873,7 +895,10 @@ export function createUrchins(parent, count = 40) {
     if (y > 15.7 || y < 12.5) return null;
     // 殻の底はすでに幾何のほうで少し下(-0.04)にある。さらに埋めると
     // 直径6cmのウニが穴に落ちたように見える。乗せるだけでよい
-    return { x, z, y, size: 0.048 + Math.random() * 0.026, lift: 0 };
+    // ウニは殻が丸いので中心が浮く。棘は光を通すので、影は棘の広がりより
+    // ずっと狭く、殻の接地面のまわりだけ濃い
+    return { x, z, y, size: 0.048 + Math.random() * 0.026, lift: 0,
+             shadow: 1.9, hover: 0.45 };
   });
 }
 

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { baseUniforms, U, WORLD } from '../env.js';
 import { UW_FRAG_PRELUDE, UW_FRAG_OUTPUT, UW_SKY } from '../glsl.js';
 import { fbm3, noise3 } from '../noise.js';
+import { ContactShadows } from './contactShadow.js';
 
 // ============ 磯(岩礁海岸) ============
 //
@@ -621,19 +622,28 @@ export function createShoreRock(parent) {
 // 角は取れているが丸くはない。正20面体の頂点をばらして平面で囲むと、
 // 「割れて、少し転がされた石」の形になる。
 function boulderGeometry(seed) {
-  let s = seed * 9301 + 49297;
-  const rnd = () => { s = (s * 9301 + 49297) % 233280; return s / 233280; };
-  const g = new THREE.IcosahedronGeometry(1, 1).toNonIndexed();
+  // 面の数。もとは detail=1(80面)を非インデックス化して平らな面のまま
+  // 使っていた。地表に出るのが直径の2割だけだった頃はそれで足りたが、
+  // 4割出すようにしたら、1m先で角ばった水晶のかたまりに見えた。
+  //
+  // 転石は波に転がされて丸くなった石なので、稜線があってはいけない。
+  // 面を増やし、法線もつないで滑らかにする。肌のざらつきは
+  // 断面ではなく shoreSurface() の法線ゆらぎのほうで出す
+  // ——地形のときに学んだのと同じ切り分け
+  const g = new THREE.IcosahedronGeometry(1, 2);   // 320面
   const p = g.getAttribute('position');
-  // 頂点をまとめて動かす。面ごとにばらすと砕けた砂利になってしまう
-  const key = new Map();
+  const o = seed * 3.7;
   for (let i = 0; i < p.count; i++) {
-    const k = `${p.getX(i).toFixed(3)},${p.getY(i).toFixed(3)},${p.getZ(i).toFixed(3)}`;
-    if (!key.has(k)) key.set(k, 0.62 + rnd() * 0.62);
-    const f = key.get(k);
-    p.setXYZ(i, p.getX(i) * f, p.getY(i) * f * 0.72, p.getZ(i) * f);
+    const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+    // 向きの滑らかな関数で膨らませる。頂点ごとの乱数だと棘になる。
+    // 粗い瘤で±20%、細かい起伏で±6%
+    const f = 1.0
+      + fbmC(x * 1.6 + o, z * 1.6 + y * 1.6, 3) * 0.40
+      + fbmC(x * 4.3 + o + 31, z * 4.3 + y * 4.3, 2) * 0.12;
+    // 縦を潰す。転がって落ち着いた石は平たい
+    p.setXYZ(i, x * f, y * f * 0.72, z * f);
   }
-  g.computeVertexNormals();   // 平らな面で囲まれた塊にする
+  g.computeVertexNormals();
   return g;
 }
 
@@ -651,8 +661,8 @@ export function createBoulders(parent, count = 190) {
         vec4 wp = modelMatrix * instanceMatrix * vec4(position, 1.0);
         vW = wp.xyz;
         vN = normalize(mat3(modelMatrix) * mat3(instanceMatrix) * normal);
-        // 石の下側は地面との隙間で暗い。接地しているように見せるのは
-        // 影ではなくこれ
+        // 石の下側は地面との隙間で暗い。石そのものの側の遮蔽で、
+        // 地面側に落ちる接地影(ContactShadows)と対になっている
         vCav = smoothstep(0.25, -0.75, vN.y) * 0.85;
         gl_Position = projectionMatrix * viewMatrix * wp;
       }
@@ -671,6 +681,10 @@ export function createBoulders(parent, count = 190) {
 
   const mesh = new THREE.InstancedMesh(geo, mat, count);
   mesh.frustumCulled = false;
+  // 転石の接地影。地形にいちばん効くのはここ——生き物は数cmだが、
+  // 石は20cm〜1mあって、いつでも画面に写っている
+  const shadow = new ContactShadows(parent, count, U.uSunDir.value);
+  const nv = new THREE.Vector3();
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
   const sv = new THREE.Vector3(), pv = new THREE.Vector3();
   let placed = 0;
@@ -687,14 +701,34 @@ export function createBoulders(parent, count = 190) {
     const size = (0.22 + rnd() * rnd() * 1.15) * (1 - high * 0.55);
     e.set(rnd() * 0.7 - 0.35, rnd() * Math.PI * 2, rnd() * 0.7 - 0.35);
     q.setFromEuler(e);
-    // 少し埋める。地面にちょんと乗せると浮いて見える
-    pv.set(x, y - size * 0.30, z);
+    // 埋める量。0.30(直径の3割)にしていたのは、置く高さがまだ
+    // shoreTerrain() だった時代の埋め合わせだった。当時は最大22cm
+    // 勝手に沈んでいたので、そのうえ3割埋めれば地表に出るのは2割だけ。
+    // 直径35cmの石が7cmの瘤にしかならず、岩肌のざらつき(±5.5cm)に
+    // 埋もれて、190個あるのに1つも見えていなかった。
+    //
+    // 高さが正確になり、接地影も付いたので、素直に「載せる」。
+    // 少し落ち着いたぶんだけ埋めて、直径の4割強を地表に出す
+    pv.set(x, y - size * 0.08, z);
     sv.set(size * (0.85 + rnd() * 0.5), size, size * (0.85 + rnd() * 0.5));
     m.compose(pv, q, sv);
+    // 半径 R の丸い石が高度 θ の日射で落とす影は、短径 R・長径 R/sinθ の
+    // 楕円で、足元から R/tanθ ずれる。ここは R = size/2、sinθ = 0.86 なので
+    // 影のいちばん遠い縁は接地点から 1.77R = 0.89*size にある。
+    //
+    // 最初これを直径 size*1.25(=1.25R)で置いたら、影が石の輪郭より
+    // 内側にしか出ず、石自身にすっかり隠れた。差分を測っても
+    // 「影を入れても画面が1画素も変わらない」という結果になった。
+    // 影は物の影より広くなければ見えない
+    const e2 = 0.14;
+    nv.set(-(meshHeightAt(x + e2, z) - meshHeightAt(x - e2, z)), 2 * e2,
+           -(meshHeightAt(x, z + e2) - meshHeightAt(x, z - e2))).normalize();
+    shadow.place(placed, x, y, z, size * 1.30, size * 0.50, nv);
     mesh.setMatrixAt(placed++, m);
   }
   mesh.count = placed;
   mesh.instanceMatrix.needsUpdate = true;
+  shadow.commit(placed);
   parent.add(mesh);
   return { mesh, mat };
 }
