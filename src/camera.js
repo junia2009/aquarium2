@@ -42,8 +42,20 @@ export class DiveCamera {
     this.pinchDist = 0;
     this.follow = null; // { getter, minD, maxD }
     this.world = null;  // 衝突ワールド(岩などをすり抜けない)
+    // 地面からどれだけ上まで降りられるか。
+    //
+    // 既定の0.9mは「潜っている人の体の半径」で、水中のゾーンではこれでよい。
+    // ただし磯のように被写体が数cmの生き物だと、0.9m上からでは
+    // 甲幅5cmのカニが画面の3%にしかならず、追跡しても何も見えない。
+    // 見るものの大きさはゾーンごとに桁が違うので、ゾーンごとに決める
+    this.clearance = 0.9;
 
     this._bind();
+  }
+
+  /** 地面からの最低の高さ。ゾーンを切り替えるたびに設定しなおす */
+  setClearance(v) {
+    this.clearance = v;
   }
 
   lookAt(p) {
@@ -195,7 +207,7 @@ export class DiveCamera {
     if (this.world) this.world.pushOut(this.pos, 0.6, this.glide);
 
     // ---- 世界の境界(砂・水面・遠すぎ防止) ----
-    const floorLimit = sandHeight(this.pos.x, this.pos.z) + 0.9;
+    const floorLimit = sandHeight(this.pos.x, this.pos.z) + this.clearance;
     if (this.pos.y < floorLimit) this.pos.y = floorLimit;
     // 水面は抜けられる。上空は見晴らし台くらいの高さで止める
     if (this.pos.y > WORLD.surfaceY + 26) this.pos.y = WORLD.surfaceY + 26;

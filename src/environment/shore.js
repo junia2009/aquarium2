@@ -731,6 +731,7 @@ export function createBoulders(parent, count = 190) {
 
   const stone = new Float32Array(count * 4);
   geo.setAttribute('aStone', new THREE.InstancedBufferAttribute(stone, 4));
+  const bodies = [];
   const mesh = new THREE.InstancedMesh(geo, mat, count);
   mesh.frustumCulled = false;
   // 転石の接地影。地形にいちばん効くのはここ——生き物は数cmだが、
@@ -790,6 +791,12 @@ export function createBoulders(parent, count = 190) {
     stone[placed * 4 + 2] = lith[2] * j;
     stone[placed * 4 + 3] = growth;
 
+    // ぶつかる形。楕円体の半径は幾何と同じ(縦は 0.72 倍に潰してある)
+    if (size >= 0.70) {
+      bodies.push({ x: pv.x, y: pv.y, z: pv.z,
+                    rx: sv.x * 0.5, ry: sv.y * 0.36, rz: sv.z * 0.5 });
+    }
+
     mesh.setMatrixAt(placed++, m);
   }
   mesh.count = placed;
@@ -797,7 +804,11 @@ export function createBoulders(parent, count = 190) {
   geo.getAttribute('aStone').needsUpdate = true;
   shadow.commit(placed);
   parent.add(mesh);
-  return { mesh, mat };
+  // 大きい石だけ、ぶつかる形を外へ渡す。カメラが地面の35cm上まで
+  // 降りられるようになったので、入れておかないと巨礫をすり抜ける。
+  // 小石まで入れるとカメラが礫の海に押されて動けなくなるので、
+  // 「すり抜けたら気づく大きさ」だけにする
+  return { mesh, mat, bodies };
 }
 
 

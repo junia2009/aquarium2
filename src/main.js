@@ -71,6 +71,9 @@ function enterZone(key, { moveCamera = true } = {}) {
 
   // 地形・水の色・光をゾーンのものへ
   setTerrain(zone.def.terrain);
+  // カメラが地面からどれだけ上まで降りられるか。見るものの大きさが
+  // ゾーンごとに桁違いなので、ここもゾーンが決める
+  diveCam.setClearance(zone.def.clearance ?? 0.9);
   const e = zone.def.env;
   U.uFogColor.value.copy(e.fogColor);
   U.uFogDensity.value = e.fogDensity;

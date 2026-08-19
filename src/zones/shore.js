@@ -75,6 +75,10 @@ export const SHORE = {
   // いちばん大きい潮だまりの縁を基準に組み立てて、地形が動いても
   // 「溜まりを覗きこむ」という意図のほうが残るようにする
   camera: START_CAM,
+  // 磯の主役は甲幅3〜7cmの生き物。既定の0.9mでは高すぎて、
+  // 追いかけてもカニが画面の3%にしかならない。35cmまで降りられるように、
+  // かわりに大きい転石を衝突判定に入れて、すり抜けないようにしてある
+  clearance: 0.35,
   tap: 'クリック: カニが岩陰へ逃げる / 潮は3分でひと巡りします',
   species: SHORE_SPECIES,
 
@@ -91,6 +95,12 @@ export const SHORE = {
     });
 
     const world = new CollisionWorld();
+    // 大きい転石はすり抜けない。カメラが地面の35cmまで降りられるので、
+    // 入れていないと巨礫の中を素通りしてしまう
+    const _b = new THREE.Vector3();
+    for (const s of stones.bodies) {
+      world.addStatic(_b.set(s.x, s.y, s.z), s.rx, s.ry, s.rz);
+    }
 
     // --- 生き物 ---
     // 磯の住人はほとんどが泳がない。岩に張り付き、脚で歩き、
@@ -127,16 +137,20 @@ export const SHORE = {
             if (!followed) followed = pickCrab(crabs, lastCam);
             return _crabPos.set(followed.x, followed.y + 0.05, followed.z);
           },
-          // カメラは地形の 0.9m 上までしか降りられない(camera.js の床)。
-          // 下限はそれより上に取る。0.35m と書いてあっても実際には
-          // 届かないだけで害はないが、読んだ人が誤解する。
-          // 上限は近く保つこと——2.2m まで引くと甲幅5cmのカニは画面の
-          // 2%(1100px 中 22px)にしかならず、追う意味がなくなる
-          dist: [0.95, 1.30],
+          // 床(このゾーンでは地形の35cm上)より下は書かない。届かない
+          // 下限を書いても枝が発火しないだけだが、読んだ人が誤解する。
+          //
+          // 上限は近く保つこと。カニは甲幅3〜7cm しかないので、
+          // 距離がそのまま「見えるかどうか」になる:
+          //   2.20m → 画面の 2%(1100px 中 22px)。何がいるのか分からない
+          //   1.30m → 4%
+          //   0.62m → 8%(90px)。脚の動きが見える
+          dist: [0.42, 0.62],
         },
       },
       // 検証用
       __life: { crabs, anemones, stars, urchins, bits },
+      __stones: stones,
       feedLeft: () => bits.n,
       __cloud: bits,
       onFeed(p) {
