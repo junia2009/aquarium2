@@ -835,8 +835,16 @@ export class AnemoneBed {
 // だから「止まっている」のではなく「遅い」を実装する。
 function starGeometry() {
   const M = new Buf();
-  const TOP = [0.115, 0.135, 0.165];   // 背面。青灰
-  const TOP2 = [0.36, 0.155, 0.070];   // 橙の斑
+  // イトマキヒトデの背は「青灰の地に橙のまだら」で、この2色の差が
+  // そのまま見た目を決めている。
+  //
+  // 前は 青灰(0.115,0.135,0.165) と 橙(0.36,0.155,0.070) にしていたが、
+  // 水中の光(上向き面で 0.853,1.072,0.967)を掛けたときの輝度が
+  // 0.136 と 0.189 —— わずか1.39倍しか違わなかった。
+  // 色相は違っても明暗がほぼ同じなので、少し離れると混ざって
+  // 「のっぺりした暗い塊」になる。差を2.1倍まで開く
+  const TOP = [0.085, 0.105, 0.150];   // 背面。青灰
+  const TOP2 = [0.46, 0.175, 0.065];   // 橙の斑
   const UNDER = [0.42, 0.33, 0.20];    // 腹面は淡い
   const ARMS = 5;
 
@@ -871,7 +879,8 @@ function starGeometry() {
       const x = Math.cos(a) * r, z = Math.sin(a) * r;
       // 斑。イトマキヒトデは青灰の地に橙がまだらに乗る
       const mot = Math.sin(x * 19 + z * 13) + Math.sin(x * 7 - z * 23) * 0.7;
-      rt.push(M.v(x, topY(t, a), z, mot > 0.45 ? TOP2 : TOP, { aArm: t }));
+      // 閾値0.45では橙が31%。実物はもう少し橙が多い
+      rt.push(M.v(x, topY(t, a), z, mot > 0.30 ? TOP2 : TOP, { aArm: t }));
       rb.push(M.v(x, 0, z, UNDER, { aArm: t }));
     }
     top.push(rt); bot.push(rb);
