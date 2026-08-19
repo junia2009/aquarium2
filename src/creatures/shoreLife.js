@@ -637,65 +637,102 @@ export class CrabColony {
 // 開閉は水位ひとつで決まるので、地形の高さと潮位を比べるだけでよい。
 function anemoneGeometry() {
   const M = new Buf();
-  const COL = [0.30, 0.075, 0.065];    // 柱部。暗い赤褐色
+  const COL = [0.26, 0.085, 0.070];    // 柱部。暗い赤褐色
+  const WART = [0.30, 0.20, 0.16];     // 疣。貝殻の欠片をくっつけて白っぽい
   const DISC = [0.20, 0.145, 0.055];   // 口盤
   const TENT = [0.34, 0.30, 0.115];    // 触手。緑がかった褐色
-  // aOpen: 0=閉じても動かない部分 1=開くと伸びる部分
-  // 柱部
+
+  // ---- 柱部 ----
+  // ただの円錐にしていたら、素焼きの植木鉢に見えた。
+  // 磯のイソギンチャク(ヨロイイソギンチャク等)の体側には疣(いぼ)が
+  // 縦の列に並んでいて、そこに貝殻や砂粒をくっつけている。
+  // 一つ一つは数mmだが、これがあるかないかで
+  // 「生きもの」か「陶器」かが決まる
+  const ROWS = 7, AROUND = 20;
   const rows = [];
-  for (let i = 0; i <= 4; i++) {
-    const t = i / 4;
-    const r = 0.5 * (0.92 - 0.18 * t * t);
+  for (let i = 0; i <= ROWS; i++) {
+    const t = i / ROWS;
+    // 樽形。付け根がいちばん太く、口盤の手前でいったん締まる
+    const r = 0.5 * (0.96 - 0.10 * t - 0.14 * t * t);
     const row = [];
-    for (let k = 0; k < 12; k++) {
-      const a = (k / 12) * Math.PI * 2;
-      row.push(M.v(Math.cos(a) * r, t * 0.52, Math.sin(a) * r,
-                   i === 4 ? DISC : COL, { aOpen: t * 0.35, aRad: 0 }));
+    for (let k = 0; k < AROUND; k++) {
+      const a = (k / AROUND) * Math.PI * 2;
+      // 疣。縦の列に並べ、上下方向にも粒を並べる。
+      // 周方向の周期を頂点数と揃えてはいけない——AROUND/2 にしていたら
+      // 全頂点でちょうど sin が 0 になり、疣が1つも出ていなかった
+      const wart = Math.max(Math.sin(a * 5) * Math.sin(t * Math.PI * 5.5), 0);
+      const rr = r * (1 + wart * 0.10);
+      row.push(M.v(Math.cos(a) * rr, t * 0.50, Math.sin(a) * rr,
+                   i === ROWS ? DISC : (wart > 0.55 ? WART : COL),
+                   { aOpen: t * 0.35, aRad: 0 }));
     }
     rows.push(row);
   }
-  for (let i = 0; i < 4; i++) {
-    for (let k = 0; k < 12; k++) {
-      const k2 = (k + 1) % 12;
+  for (let i = 0; i < ROWS; i++) {
+    for (let k = 0; k < AROUND; k++) {
+      const k2 = (k + 1) % AROUND;
       M.quad(rows[i][k], rows[i][k2], rows[i + 1][k2], rows[i + 1][k]);
     }
   }
-  // 口盤のふた
-  const mid = M.v(0, 0.52, 0, DISC, { aOpen: 0.35, aRad: 0 });
-  for (let k = 0; k < 12; k++) M.tri(rows[4][k], rows[4][(k + 1) % 12], mid);
+  // ---- 口盤 ----
+  // 平らな蓋ではなく、中央がわずかに窪んで口がある
+  const discIn = [];
+  for (let k = 0; k < AROUND; k++) {
+    const a = (k / AROUND) * Math.PI * 2;
+    discIn.push(M.v(Math.cos(a) * 0.13, 0.492, Math.sin(a) * 0.13,
+                    DISC, { aOpen: 0.35, aRad: 0 }));
+  }
+  for (let k = 0; k < AROUND; k++) {
+    const k2 = (k + 1) % AROUND;
+    M.quad(rows[ROWS][k], rows[ROWS][k2], discIn[k2], discIn[k]);
+  }
+  const mouth = M.v(0, 0.478, 0, DISC, { aOpen: 0.35, aRad: 0 });
+  for (let k = 0; k < AROUND; k++) M.tri(discIn[k], discIn[(k + 1) % AROUND], mouth);
 
-  // 触手。3列に並べる。閉じるときは口盤の内側へ引き込まれる。
-  //
-  // 平らな三角形で済ませたら、花びらを貼りつけた造花になった。
-  // イソギンチャクの触手は先の丸い細い指で、断面がある。
-  // 三角柱にするだけで一気に触手に見える
-  for (let ring = 0; ring < 3; ring++) {
-    const rr = 0.30 - ring * 0.082;
-    const n = 18 - ring * 4;
+  // ---- 触手 ----
+  // 4重の輪。外側ほど長く、内側は短い。実物は数十本あって、
+  // 1列だけだと茨の冠になる。先は尖らせないこと——
+  // イソギンチャクの触手の先は丸い
+  const WHORL = [
+    { r: 0.34, n: 16, len: 0.42, w: 0.036 },
+    { r: 0.28, n: 13, len: 0.36, w: 0.032 },
+    { r: 0.22, n: 10, len: 0.29, w: 0.028 },
+    { r: 0.16, n: 7,  len: 0.22, w: 0.024 },
+  ];
+  const SIDES = 5;
+  for (let wi = 0; wi < WHORL.length; wi++) {
+    const { r: rr, n, len, w } = WHORL[wi];
     for (let k = 0; k < n; k++) {
-      const a = (k / n) * Math.PI * 2 + ring * 0.42;
+      const a = (k / n) * Math.PI * 2 + wi * 0.37;
       const ca = Math.cos(a), sa = Math.sin(a);
-      // 付け根から外へ倒れながら伸びる。3点の折れ線に肉をつける
+      // 付け根から外へ倒れながら伸び、先で少し持ち上がる
       const pts = [
-        [ca * rr, 0.50, sa * rr, 0.15, 0.038],
-        [ca * (rr + 0.16), 0.66, sa * (rr + 0.16), 0.55, 0.030],
-        [ca * (rr + 0.30), 0.68, sa * (rr + 0.30), 0.85, 0.019],
-        [ca * (rr + 0.40), 0.62, sa * (rr + 0.40), 1.00, 0.006],
+        [ca * rr, 0.50, sa * rr, 0.10, w],
+        [ca * (rr + len * 0.40), 0.50 + len * 0.34, sa * (rr + len * 0.40), 0.45, w * 0.82],
+        [ca * (rr + len * 0.78), 0.50 + len * 0.44, sa * (rr + len * 0.78), 0.80, w * 0.58],
+        [ca * (rr + len * 1.00), 0.50 + len * 0.36, sa * (rr + len * 1.00), 1.00, w * 0.30],
       ];
       let prev = null;
-      for (const [px, py, pz, rad, w] of pts) {
-        const ring3 = [];
-        for (let j = 0; j < 3; j++) {
-          const th = (j / 3) * Math.PI * 2;
-          ring3.push(M.v(px - sa * Math.cos(th) * w, py + Math.sin(th) * w, pz + ca * Math.cos(th) * w,
-                         TENT, { aOpen: 0.2 + 0.8 * rad, aRad: rad }));
+      for (const [px, py, pz, rad, ww] of pts) {
+        const ring = [];
+        for (let j = 0; j < SIDES; j++) {
+          const th = (j / SIDES) * Math.PI * 2;
+          ring.push(M.v(px - sa * Math.cos(th) * ww,
+                        py + Math.sin(th) * ww,
+                        pz + ca * Math.cos(th) * ww,
+                        TENT, { aOpen: 0.2 + 0.8 * rad, aRad: rad }));
         }
-        if (prev) for (let j = 0; j < 3; j++) {
-          const j2 = (j + 1) % 3;
-          M.quad(prev[j], prev[j2], ring3[j2], ring3[j]);
+        if (prev) for (let j = 0; j < SIDES; j++) {
+          const j2 = (j + 1) % SIDES;
+          M.quad(prev[j], prev[j2], ring[j2], ring[j]);
         }
-        prev = ring3;
+        prev = ring;
       }
+      // 先端は丸く閉じる
+      const last = pts[pts.length - 1];
+      const tip = M.v(last[0] + ca * 0.012, last[1] + 0.004, last[2] + sa * 0.012,
+                      TENT, { aOpen: 1.0, aRad: 1.0 });
+      for (let j = 0; j < SIDES; j++) M.tri(prev[j], prev[(j + 1) % SIDES], tip);
     }
   }
   return M.geo({ aCol: 3 });
@@ -798,126 +835,132 @@ export class AnemoneBed {
 // だから「止まっている」のではなく「遅い」を実装する。
 function starGeometry() {
   const M = new Buf();
-  const TOP = [0.30, 0.115, 0.075];    // 背面。橙褐色
-  const TOP2 = [0.17, 0.150, 0.140];   // 青灰の斑
-  const UNDER = [0.42, 0.31, 0.17];    // 腹面は淡い
+  const TOP = [0.115, 0.135, 0.165];   // 背面。青灰
+  const TOP2 = [0.36, 0.155, 0.070];   // 橙の斑
+  const UNDER = [0.42, 0.33, 0.20];    // 腹面は淡い
   const ARMS = 5;
 
-  // 腕を1本ずつ作る。円盤を花びら状に凹ませる作り方だと、
-  // 腕が幅広で先が丸い「花」になってしまった。
-  // ヒトデの腕は付け根が太く、先へまっすぐ細って尖る。
-  // 中央の盤が少し盛り上がり、腕はそこから下がっていく
-  const RIB = 7;                       // 腕を輪切りにする数
-  const HALF = 6;                      // 断面の点数(片側)
-  const centre = [];
-  for (let k = 0; k < ARMS * 2; k++) {
-    const a = (k / (ARMS * 2)) * Math.PI * 2;
-    centre.push(null);                 // あとで埋める
-  }
+  // 磯でいちばん見るのはイトマキヒトデ。細い5本腕の星ではなく、
+  // 腕と腕のあいだに膜が張った「ふくらんだ五角形」をしている。
+  // 腕の先までの長さと、腕のあいだの谷の長さの比が 1.8 ほどしかない。
+  //
+  // 尖った星形にすると、しかも縁をナイフのように薄くすると、
+  // 折り紙を岩に貼ったように見える。実際そうなっていた。
+  // ヒトデは薄い紙ではなく、厚みのある座布団
+  const R_ARM = 0.50;        // 腕の先まで
+  const R_WEB = 0.285;       // 腕と腕のあいだ
+  const H0 = 0.125;          // 中央の厚み。直径の 1/8
+  const AROUND = 45, RINGS = 6;
+  const edgeR = (a) => R_WEB + (R_ARM - R_WEB) * (0.5 + 0.5 * Math.cos(a * ARMS));
+  // 上面。中央が高く、縁で落ちる。腕の上にはわずかな稜線がある
+  // 腕の稜線は中心では効かせない。t を掛け忘れていたら、
+  // 中央のハブ1点と最初の輪の高さが腕ごとに4cmずれて、
+  // 甲の真ん中に星形の窪みが開いた
+  const topY = (t, a) => H0 * Math.pow(Math.max(1 - t * t, 0), 0.55)
+                            * (1 + 0.16 * t * Math.cos(a * ARMS)) + 0.010;
 
-  const hub = M.v(0, 0.105, 0, TOP, { aArm: 0 });
+  const hubT = M.v(0, topY(0, 0), 0, TOP, { aArm: 0 });
   const hubB = M.v(0, 0, 0, UNDER, { aArm: 0 });
-  const armRings = [];
-  for (let n = 0; n < ARMS; n++) {
-    const ang = (n / ARMS) * Math.PI * 2;
-    const ca = Math.cos(ang), sa = Math.sin(ang);
-    const rings = [];
-    for (let i = 0; i <= RIB; i++) {
-      const t = i / RIB;                             // 0=付け根 1=先端
-      const rad = 0.18 + t * 0.82;
-      // 幅。付け根で広く、先で尖る
-      const w = (0.30 - 0.28 * Math.pow(t, 1.35)) * (1 - 0.15 * t);
-      // 高さ。中央が厚く、先は薄い
-      const h = 0.085 * Math.pow(1 - t, 1.4) + 0.012;
-      const ring = { top: [], bot: [] };
-      for (let k = -HALF; k <= HALF; k++) {
-        const u = k / HALF;                          // -1..1 腕の幅方向
-        const lx = rad, lz = u * w;
-        const px = ca * lx - sa * lz, pz = sa * lx + ca * lz;
-        // 断面はかまぼこ。縁は薄い
-        const dome = h * Math.sqrt(Math.max(1 - u * u, 0));
-        const mottle = Math.sin(px * 22 + pz * 17);
-        ring.top.push(M.v(px, dome + 0.008, pz, mottle > 0.35 ? TOP2 : TOP, { aArm: t }));
-        ring.bot.push(M.v(px, 0, pz, UNDER, { aArm: t }));
-      }
-      rings.push(ring);
+  const top = [], bot = [];
+  for (let i = 1; i <= RINGS; i++) {
+    const t = i / RINGS;
+    const rt = [], rb = [];
+    for (let k = 0; k < AROUND; k++) {
+      const a = (k / AROUND) * Math.PI * 2;
+      const r = edgeR(a) * t;
+      const x = Math.cos(a) * r, z = Math.sin(a) * r;
+      // 斑。イトマキヒトデは青灰の地に橙がまだらに乗る
+      const mot = Math.sin(x * 19 + z * 13) + Math.sin(x * 7 - z * 23) * 0.7;
+      rt.push(M.v(x, topY(t, a), z, mot > 0.45 ? TOP2 : TOP, { aArm: t }));
+      rb.push(M.v(x, 0, z, UNDER, { aArm: t }));
     }
-    armRings.push(rings);
-    // 腕の面を張る
-    for (let i = 0; i < RIB; i++) {
-      for (let k = 0; k < HALF * 2; k++) {
-        M.quad(rings[i].top[k], rings[i].top[k + 1], rings[i + 1].top[k + 1], rings[i + 1].top[k]);
-        M.quad(rings[i].bot[k + 1], rings[i].bot[k], rings[i + 1].bot[k], rings[i + 1].bot[k + 1]);
-      }
-      // 側面(縁)
-      M.quad(rings[i].top[0], rings[i].bot[0], rings[i + 1].bot[0], rings[i + 1].top[0]);
-      const e = HALF * 2;
-      M.quad(rings[i].bot[e], rings[i].top[e], rings[i + 1].top[e], rings[i + 1].bot[e]);
-    }
-    // 先端を閉じる
-    const last = rings[RIB];
-    for (let k = 0; k < HALF * 2; k++) M.quad(last.top[k], last.bot[k], last.bot[k + 1], last.top[k + 1]);
-    // 付け根を中央の盤へつなぐ
-    const first = rings[0];
-    for (let k = 0; k < HALF * 2; k++) {
-      M.tri(hub, first.top[k], first.top[k + 1]);
-      M.tri(hubB, first.bot[k + 1], first.bot[k]);
+    top.push(rt); bot.push(rb);
+  }
+  for (let k = 0; k < AROUND; k++) {
+    const k2 = (k + 1) % AROUND;
+    M.tri(hubT, top[0][k], top[0][k2]);
+    M.tri(hubB, bot[0][k2], bot[0][k]);
+  }
+  for (let i = 0; i < RINGS - 1; i++) {
+    for (let k = 0; k < AROUND; k++) {
+      const k2 = (k + 1) % AROUND;
+      M.quad(top[i][k], top[i][k2], top[i + 1][k2], top[i + 1][k]);
+      M.quad(bot[i][k2], bot[i][k], bot[i + 1][k], bot[i + 1][k2]);
     }
   }
-  // 隣りあう腕のあいだの谷を埋める
-  for (let n = 0; n < ARMS; n++) {
-    const a = armRings[n][0], b = armRings[(n + 1) % ARMS][0];
-    const e = HALF * 2;
-    M.tri(hub, a.top[e], b.top[0]);
-    M.tri(hubB, b.bot[0], a.bot[e]);
+  // 縁。厚みを閉じる
+  const e = RINGS - 1;
+  for (let k = 0; k < AROUND; k++) {
+    const k2 = (k + 1) % AROUND;
+    M.quad(top[e][k], top[e][k2], bot[e][k2], bot[e][k]);
   }
   return M.geo({ aCol: 3 });
 }
-
 // ================================================================ ウニ
 //
-// ムラサキウニ。殻の直径4〜5cm、棘を入れると10cm近い。
+// バフンウニ。潮だまりでいちばん多い。殻の直径3〜4cm。
 // 岩の窪みに嵌まって動かない。棘は生きていて、影が差すと一斉に動く。
 function urchinGeometry() {
   const M = new Buf();
   const TEST = [0.055, 0.048, 0.075];    // 殻。ほとんど黒に近い紫
   const SPINE = [0.105, 0.075, 0.135];
   const body = { aSpine: 0 };
-  dome(M, 0, 0.30, 0, 0.5, 0.34, 0.5, TEST, 6, body);
-  // 棘。殻の上半分から放射状に生やす。三角柱1本で足りる
+
+  // バフンウニ。磯の潮だまりでいちばん多い。ムラサキウニのような
+  // 長い棘ではなく、短い棘がびっしり生えた「毬」で、
+  // 殻も球ではなく上下に潰れている(高さは直径の半分ほど)。
+  //
+  // 長い棘をまばらに生やすと、ウニではなくウイルスの模式図になる。
+  // 見た目を決めているのは棘の長さではなく密度のほう
+  const TR = 0.42, TH = 0.24;            // 殻。直径0.84 高さ0.48
+  const N = 165, LEN = 0.20;             // 棘は直径の1/4しかない
+  dome(M, 0, TH, 0, TR, TH, TR, TEST, 7, body);
+
   let s = 12345;
   const rnd = () => { s = (s * 9301 + 49297) % 233280; return s / 233280; };
-  for (let i = 0; i < 84; i++) {
-    // 球面上に一様に散らす(下半分は岩に接するので生やさない)
-    const u = rnd() * 1.55 - 0.42;
-    const th = Math.acos(Math.max(Math.min(u, 1), -1));
-    const ph = rnd() * Math.PI * 2;
-    const nx = Math.sin(th) * Math.cos(ph), ny = Math.cos(th), nz = Math.sin(th) * Math.sin(ph);
-    const bx = nx * 0.5, by = 0.30 + ny * 0.34, bz = nz * 0.5;
-    const len = 0.34 + rnd() * 0.30;
-    const w = 0.026;
-    // 棘の根元の3点と先端1点
-    const t1 = Math.abs(nx) < 0.9 ? [1, 0, 0] : [0, 0, 1];
-    const ax = [ny * t1[2] - nz * t1[1], nz * t1[0] - nx * t1[2], nx * t1[1] - ny * t1[0]];
+  for (let i = 0; i < N; i++) {
+    // 黄金角でまく。乱数だと固まったり空いたりして、density が読めない
+    const u = 1 - (i / (N - 1)) * 1.45;   // 上から下四分の三まで
+    const rr = Math.sqrt(Math.max(1 - u * u, 0));
+    const th = i * 2.39996;
+    const nx = Math.cos(th) * rr, ny = u, nz = Math.sin(th) * rr;
+    // 殻の上の点と、そこでの外向き。回転楕円体なので位置ベクトルとは違う
+    const bx = nx * TR, by = TH + ny * TH, bz = nz * TR;
+    let ox = nx / TR, oy = ny / TH, oz = nz / TR;
+    const ol = Math.hypot(ox, oy, oz) || 1;
+    ox /= ol; oy /= ol; oz /= ol;
+    const len = LEN * (0.80 + 0.42 * rnd());
+    // 断面をつくる2軸
+    const t1 = Math.abs(oy) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+    let ax = [oy * t1[2] - oz * t1[1], oz * t1[0] - ox * t1[2], ox * t1[1] - oy * t1[0]];
     const al = Math.hypot(...ax) || 1;
-    const bx2 = [ny * ax[2] / al - nz * ax[1] / al, nz * ax[0] / al - nx * ax[2] / al,
-                 nx * ax[1] / al - ny * ax[0] / al];
-    const ring = [];
-    for (let k = 0; k < 3; k++) {
-      const a = (k / 3) * Math.PI * 2;
-      const ox = (ax[0] / al * Math.cos(a) + bx2[0] * Math.sin(a)) * w;
-      const oy = (ax[1] / al * Math.cos(a) + bx2[1] * Math.sin(a)) * w;
-      const oz = (ax[2] / al * Math.cos(a) + bx2[2] * Math.sin(a)) * w;
-      ring.push(M.v(bx + ox, by + oy, bz + oz, SPINE, { aSpine: 0 }));
+    ax = [ax[0] / al, ax[1] / al, ax[2] / al];
+    const bx2 = [oy * ax[2] - oz * ax[1], oz * ax[0] - ox * ax[2], ox * ax[1] - oy * ax[0]];
+    // 付け根に疣(いぼ)、中ほどで細り、先は丸い。4角でも小さいので丸く見える
+    const SIDES = 4;
+    const steps = [[0.00, 0.021], [0.45, 0.012]];
+    let prev = null;
+    for (const [f, w] of steps) {
+      const px = bx + ox * len * f, py = by + oy * len * f, pz = bz + oz * len * f;
+      const ring = [];
+      for (let k = 0; k < SIDES; k++) {
+        const a = (k / SIDES) * Math.PI * 2;
+        const c = Math.cos(a) * w, d = Math.sin(a) * w;
+        ring.push(M.v(px + ax[0] * c + bx2[0] * d,
+                      py + ax[1] * c + bx2[1] * d,
+                      pz + ax[2] * c + bx2[2] * d, SPINE, { aSpine: f }));
+      }
+      if (prev) for (let k = 0; k < SIDES; k++) {
+        const k2 = (k + 1) % SIDES;
+        M.quad(prev[k], prev[k2], ring[k2], ring[k]);
+      }
+      prev = ring;
     }
-    const tip = M.v(bx + nx * len, by + ny * len, bz + nz * len, SPINE, { aSpine: 1 });
-    for (let k = 0; k < 3; k++) M.tri(ring[k], ring[(k + 1) % 3], tip);
+    const tip = M.v(bx + ox * len, by + oy * len, bz + oz * len, SPINE, { aSpine: 1 });
+    for (let k = 0; k < SIDES; k++) M.tri(prev[k], prev[(k + 1) % SIDES], tip);
   }
   return M.geo({ aCol: 3 });
 }
-
-// 張り付いて動かない(ように見える)ものの共通シェーダ。
-// aInfo.y をゆらぎの強さに使う
 const CLING_VERT = /* glsl */ `
   uniform float uTime;
   attribute vec3 aCol;
@@ -1020,10 +1063,11 @@ export function createUrchins(parent, count = 40) {
     if (y > 15.7 || y < 12.5) return null;
     // 殻の底はすでに幾何のほうで少し下(-0.04)にある。さらに埋めると
     // 直径6cmのウニが穴に落ちたように見える。乗せるだけでよい
-    // ウニは殻が丸いので中心が浮く。棘は光を通すので、影は棘の広がりより
-    // ずっと狭く、殻の接地面のまわりだけ濃い
+    // 棘を短くしたぶん、体そのものが小さくなった。影も合わせる——
+    // 影は殻の接地面のまわりだけで、棘の広がりまで覆わない
+    // (棘のあいだは光が抜ける)。浮きは殻の中心の高さ 0.24
     return { x, z, y, size: 0.048 + Math.random() * 0.026, lift: 0,
-             shadow: 1.9, hover: 0.45 };
+             shadow: 1.35, hover: 0.24 };
   });
 }
 
