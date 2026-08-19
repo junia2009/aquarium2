@@ -149,129 +149,254 @@ function dome(M, cx, cy, cz, rx, ry, rz, col, seg = 6, extra = null) {
 // 前へ出そうとすると隣の脚とぶつかる。だから先に行く側の脚が伸びて
 // 岩をつかみ、体を引き寄せ、反対側の脚が押す——漕ぐような歩き方になる。
 //
-// この寸法(4cm)を1m先から見るとき、脚先の数mmのずれは見えない。
-// ペンギンのときは接地足の滑りを歩幅の3%まで詰めたが、ここは
-// 正弦波の伸縮で足りる。作りこむ場所を間違えないこと。
+// 追跡カメラが 63cm まで寄れるようになったので、甲幅5cmのカニが
+// 画面の8%(90px)を占める。1m以上離れる前提で作った「先へ行くほど
+// 細くなる棒」の脚では、この距離に耐えない。節と関節を作り直した。
+// 接地足の滑りはペンギンのように詰めていない——横歩きの脚は
+// 正弦波の伸縮で足りる。作りこむ場所は距離が決める。
 const CRAB_LEGS = 4;      // 片側の歩脚の数
+
+
+// 実寸の目安(甲幅 W = 1.0 とする)。イソガニ・ヒライソガニなどの
+// イワガニ科は、ワタリガニのような丸い甲羅ではなく「四角い」甲羅を持つ。
+// 前縁がまっすぐで、左右の縁もほぼ平行、そこに2〜3個の歯が出る。
+// 楕円の饅頭にすると、カニではなく甲虫に見える。
+const CARA_W = 0.50;      // 甲羅の半幅
+const CARA_F = 0.40;      // 前縁の z
+const CARA_B = -0.46;     // 後縁の z
+const CARA_H = 0.145;     // 甲羅の高さ(上面のいちばん高いところ)
+const CARA_D = 0.055;     // 腹側の深さ
+
+/**
+ * 甲羅の輪郭。a は 0〜1 で一周する。
+ * 角の丸い四角(スーパー楕円)を土台に、前側の縁へ歯を出す。
+ */
+function caraOutline(a, out) {
+  const th = a * Math.PI * 2;
+  const c = Math.cos(th), s = Math.sin(th);
+  // 指数を上げるほど四角くなる。2 で楕円、4 で角の丸い四角
+  const n = 2 / 4.2;
+  let x = Math.sign(c) * Math.pow(Math.abs(c), n) * CARA_W;
+  let z = Math.sign(s) * Math.pow(Math.abs(s), n);
+  z = z > 0 ? z * CARA_F : z * -CARA_B;
+  // 前側方の歯。イワガニ科は眼窩の外角のうしろに2つ切れこみがある
+  if (z > 0.02) {
+    const tooth = Math.sin((z / CARA_F) * Math.PI * 2.6) * 0.016;
+    x += Math.sign(x) * tooth;
+  }
+  return out ? out.set(x, 0, z) : [x, z];
+}
+
+/** 甲羅の上面/腹側の高さ。s は中心0・縁1 */
+const caraTop = (s) => CARA_H * Math.pow(Math.max(1 - s * s, 0), 0.55);
+const caraBot = (s) => -CARA_D * Math.pow(Math.max(1 - s * s, 0), 0.28);
+
+/**
+ * 節のある肢を1本作る。
+ *
+ * これがカニらしさのほとんどを決める。歩脚は「先へ行くほど細くなる棒」
+ * ではない。付根から順に 座節・長節(merus)・腕節・前節・指節(dactylus)で、
+ * いちばん太いのは長節、いちばん細いのは針のような指節。
+ * 太さを一様に減らすだけだと蜘蛛の脚になる。
+ *
+ * 節と節のあいだも真っ直ぐではなく、関節のところが瘤のように張る。
+ * ここでは各区間の途中に細い点を挟むことで、関節側が相対的に
+ * 膨らんで見えるようにしている。
+ *
+ * @param pts   [x,y,z] の並び。関節の位置
+ * @param rad   各点の [横半径, 縦半径]。断面は平たい楕円
+ * @param waist 区間の中央をどれだけ絞るか(1で絞らない)
+ */
+function limb(M, pts, rad, col, tipCol, extra, sides = 7, waist = 0.86) {
+  // 区間の中央に点を足して、関節に瘤を作る
+  const P = [], R = [];
+  for (let i = 0; i < pts.length; i++) {
+    P.push(pts[i]); R.push(rad[i]);
+    if (i < pts.length - 1) {
+      const q = pts[i + 1];
+      P.push([(pts[i][0] + q[0]) / 2, (pts[i][1] + q[1]) / 2, (pts[i][2] + q[2]) / 2]);
+      R.push([(rad[i][0] + rad[i + 1][0]) / 2 * waist,
+              (rad[i][1] + rad[i + 1][1]) / 2 * waist]);
+    }
+  }
+  const n = P.length;
+  const t = new THREE.Vector3(), sd = new THREE.Vector3(), up = new THREE.Vector3();
+  const UP = new THREE.Vector3(0, 1, 0);
+  let prev = null;
+  for (let i = 0; i < n; i++) {
+    // 断面は進行方向に直交させる。指節は急に下を向くので、
+    // yz 平面の輪で決め打ちすると断面が軸を含んでしまい形が壊れる
+    const a = P[Math.max(i - 1, 0)], b = P[Math.min(i + 1, n - 1)];
+    t.set(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+    if (t.lengthSq() < 1e-12) t.set(1, 0, 0);
+    t.normalize();
+    sd.crossVectors(t, UP);
+    if (sd.lengthSq() < 1e-8) sd.set(0, 0, 1);
+    sd.normalize();
+    up.crossVectors(sd, t).normalize();
+    const seg = i / (n - 1);
+    const c = seg > 0.86 ? tipCol : col;
+    const ring = [];
+    for (let k = 0; k < sides; k++) {
+      const ang = (k / sides) * Math.PI * 2;
+      const cw = Math.cos(ang) * R[i][0], ch = Math.sin(ang) * R[i][1];
+      ring.push(M.v(P[i][0] + sd.x * cw + up.x * ch,
+                    P[i][1] + sd.y * cw + up.y * ch,
+                    P[i][2] + sd.z * cw + up.z * ch,
+                    c, { ...extra, aSeg: seg }));
+    }
+    if (prev) for (let k = 0; k < sides; k++) {
+      const k2 = (k + 1) % sides;
+      M.quad(prev[k], prev[k2], ring[k2], ring[k]);
+    }
+    prev = ring;
+  }
+  // 先端を閉じる
+  const last = P[n - 1];
+  const tip = M.v(last[0], last[1], last[2], tipCol, { ...extra, aSeg: 1 });
+  for (let k = 0; k < sides; k++) M.tri(prev[k], prev[(k + 1) % sides], tip);
+}
 
 function crabGeometry() {
   const M = new Buf();
   const SHELL = [0.20, 0.115, 0.075];   // 甲羅。緑がかった暗褐色
   const SHELL2 = [0.28, 0.175, 0.110];
+  const BELLY = [0.30, 0.24, 0.19];     // 腹側は淡い
   const LEG = [0.24, 0.135, 0.085];
   const CLAW = [0.34, 0.20, 0.13];
   const TIP = [0.10, 0.075, 0.055];
-  const EYE = [0.02, 0.018, 0.02];
-  // aLeg: 脚の位相オフセット(0で本体=動かない) / aSeg: 付け根0 先1
+  const EYE = [0.015, 0.013, 0.016];
   const body = { aLeg: 0, aSeg: 0 };
 
   // ---- 甲羅 ----
-  // 横に広く、前後に短く、上下に平たい。前縁のほうがわずかに広い
-  const rows = [];
-  const SEG = 9;
-  for (let i = 0; i <= SEG; i++) {
-    const t = i / SEG;                       // 0=後 1=前
-    const w = 0.5 * (0.62 + 0.44 * Math.sin(t * Math.PI * 0.92 + 0.28));
-    const row = [];
-    for (let k = 0; k < 14; k++) {
-      const a = (k / 14) * Math.PI * 2;
-      // 断面。上に膨らみ、下は平ら
-      const cy = Math.sin(a);
-      const y = (cy > 0 ? cy * 0.16 : cy * 0.055);
-      row.push(M.v(Math.cos(a) * w, y * (0.55 + 0.45 * Math.sin(t * Math.PI)),
-                   -0.30 + t * 0.60,
-                   cy > 0.2 ? SHELL : SHELL2, body));
+  // 角の丸い四角を、中心から縁へ何枚かの輪で埋める。
+  // 上面と腹側を別々に張って、縁で綴じる
+  const AROUND = 22, SHELLS = 4;
+  const _o = new THREE.Vector3();
+  const ringsTop = [], ringsBot = [];
+  for (let r = 0; r <= SHELLS; r++) {
+    const s = r / SHELLS;
+    const rt = [], rb = [];
+    for (let k = 0; k < AROUND; k++) {
+      caraOutline(k / AROUND, _o);
+      // 縁のほうがわずかに広い(前側方が張り出す)甲羅の形
+      const x = _o.x * s, z = _o.z * s;
+      rt.push(M.v(x, caraTop(s), z, s > 0.82 ? SHELL2 : SHELL, body));
+      rb.push(M.v(x, caraBot(s), z, BELLY, body));
     }
-    rows.push(row);
+    ringsTop.push(rt); ringsBot.push(rb);
   }
-  for (let i = 0; i < SEG; i++) {
-    for (let k = 0; k < 14; k++) {
-      const k2 = (k + 1) % 14;
-      M.quad(rows[i][k], rows[i][k2], rows[i + 1][k2], rows[i + 1][k]);
+  for (let r = 0; r < SHELLS; r++) {
+    for (let k = 0; k < AROUND; k++) {
+      const k2 = (k + 1) % AROUND;
+      M.quad(ringsTop[r][k], ringsTop[r][k2], ringsTop[r + 1][k2], ringsTop[r + 1][k]);
+      M.quad(ringsBot[r + 1][k], ringsBot[r + 1][k2], ringsBot[r][k2], ringsBot[r][k]);
     }
+  }
+  // 縁を綴じる。甲羅の厚みが出る
+  for (let k = 0; k < AROUND; k++) {
+    const k2 = (k + 1) % AROUND;
+    M.quad(ringsTop[SHELLS][k], ringsTop[SHELLS][k2],
+           ringsBot[SHELLS][k2], ringsBot[SHELLS][k]);
   }
 
   // ---- 歩脚 ----
-  // 付け根から外へ、いったん上がってから下りて、先が尖る。
-  // まっすぐ外へ伸ばすと櫛の歯になる
+  // 4対。長さは前から2番目・3番目が長い。実物もそうで、
+  // いちばん後ろの脚がいちばん短い
+  // 長さは脚の張り出しから決める。イソガニは甲幅3.5cmで脚を広げた
+  // 差し渡しが9〜10cm——甲幅の2.7倍ほど。つまり中心から片側1.35W。
+  // 先端は rx + 0.96L に来るので、いちばん長い脚で L≒0.95。
+  // ここを1.50にしていたら差し渡しが甲幅の3.8倍になり、
+  // 節を作り直しても蜘蛛のままだった
+  const LEG_LEN = [0.80, 0.95, 0.88, 0.68];
+  const LEG_Z = [0.16, 0.02, -0.14, -0.30];
   for (const side of [-1, 1]) {
     for (let i = 0; i < CRAB_LEGS; i++) {
-      const t = i / (CRAB_LEGS - 1);
-      const rz = 0.16 - t * 0.42;                    // 前から後ろへ並ぶ
-      const rx = side * 0.5 * (0.72 + 0.18 * Math.sin(t * 3));
-      // 脚は外へ長く伸ばす。下へ伸ばすと蜘蛛になる。
-      // カニは「平たくて幅の広いもの」で、脚もほとんど横へ張っている
-      const len = 0.92 * (0.82 + 0.34 * Math.sin(t * 2.4 + 0.5));
-      // 位相。隣どうしは半周ずらす(交互に持ち上げる)
+      const L = LEG_LEN[i], rz = LEG_Z[i];
+      // 付根は甲羅の縁。輪郭から取るとぴたりと生える
+      const rx = side * (CARA_W * 0.92);
+      const y0 = -0.02;
+      const s = side;
+      // 隣どうしは半周ずらす(交互に持ち上げる)
       const phase = (i % 2 === 0 ? 0 : Math.PI) + (side > 0 ? 0 : Math.PI);
-      // 3節。外へ→上へ、外へ→下へ、先端
-      const pts = [
-        [rx, 0.01, rz],
-        [rx + side * len * 0.38, 0.10, rz - 0.04],
-        [rx + side * len * 0.80, -0.02, rz - 0.09],
-        [rx + side * len * 1.0, -0.16, rz - 0.12],
-      ];
-      let prev = null;
-      for (let s = 0; s < pts.length; s++) {
-        const seg = s / (pts.length - 1);
-        const r = 0.055 * (1 - seg * 0.72);
-        const ring = [];
-        for (let k = 0; k < 5; k++) {
-          const a = (k / 5) * Math.PI * 2;
-          // 断面は平たい楕円。丸い棒にすると蜘蛛の脚になる
-          ring.push(M.v(pts[s][0], pts[s][1] + Math.sin(a) * r * 0.62,
-                        pts[s][2] + Math.cos(a) * r * 1.35,
-                        s === pts.length - 1 ? TIP : LEG, { aLeg: phase, aSeg: seg }));
-        }
-        if (prev) for (let k = 0; k < 5; k++) {
-          const k2 = (k + 1) % 5;
-          M.quad(prev[k], prev[k2], ring[k2], ring[k]);
-        }
-        prev = ring;
-      }
+      const ex = { aLeg: phase };
+      // 外へ出て、いったん上がり(長節)、そこから下りて接地する。
+      // 上がりきったところが膝で、カニを横から見たときの山になる
+      limb(M, [
+        [rx,                 y0,             rz],                 // 座節
+        [rx + s * 0.24 * L,  y0 + 0.13 * L,  rz - 0.03 * L],      // 長節の腹
+        [rx + s * 0.44 * L,  y0 + 0.17 * L,  rz - 0.06 * L],      // 長節/腕節の関節
+        [rx + s * 0.63 * L,  y0 + 0.10 * L,  rz - 0.10 * L],      // 腕節/前節の関節
+        [rx + s * 0.83 * L,  y0 - 0.06 * L,  rz - 0.13 * L],      // 前節/指節の関節
+        [rx + s * 0.96 * L,  y0 - 0.22 * L,  rz - 0.16 * L],      // 指節の先(接地)
+      ], [
+        [0.082, 0.058],   // 座節。太い
+        [0.094, 0.062],   // 長節がいちばん太い
+        [0.074, 0.050],
+        [0.058, 0.040],
+        [0.034, 0.026],
+        [0.005, 0.005],   // 指節の先は針
+      ], LEG, TIP, ex, 7);
     }
   }
 
-  // ---- はさみ(鉗脚) ----
-  // 前方の左右に、脚より太いものが1対。カニに見えるかどうかはこれ次第
+  // ---- 鉗脚(はさみ) ----
+  // カニに見えるかどうかはここで決まる。歩脚より太く、
+  // 掌節(palm)が大きく膨らみ、そこから不動指が伸び、
+  // 可動指が上から噛み合う。指のあいだに隙間が見えること
   for (const side of [-1, 1]) {
-    const rx = side * 0.34, rz = 0.24;
+    const s = side;
+    // 前側方の角から出す。前へ出しすぎると体から浮いて、
+    // 低く置きすぎると牙のようにぶら下がって見える
+    const bx = s * 0.30, bz = 0.20;
     const ph = side > 0 ? 0.6 : 0.6 + Math.PI;
-    // 体の前に構える。下へ垂らすと牙に見える
-    const pts = [[rx, 0.02, rz], [rx + side * 0.14, 0.07, rz + 0.16], [rx + side * 0.10, 0.05, rz + 0.34]];
-    let prev = null;
-    for (let s = 0; s < pts.length; s++) {
-      const seg = s / (pts.length - 1);
-      const r = 0.075 * (1 - seg * 0.25);
-      const ring = [];
-      for (let k = 0; k < 6; k++) {
-        const a = (k / 6) * Math.PI * 2;
-        ring.push(M.v(pts[s][0] + Math.cos(a) * r * 0.7, pts[s][1] + Math.sin(a) * r,
-                      pts[s][2], CLAW, { aLeg: ph, aSeg: seg * 0.45 }));
-      }
-      if (prev) for (let k = 0; k < 6; k++) {
-        const k2 = (k + 1) % 6;
-        M.quad(prev[k], prev[k2], ring[k2], ring[k]);
-      }
-      prev = ring;
-    }
-    // 指。上下2本に割れている
-    const tipE = { aLeg: ph, aSeg: 0.45 };
-    for (const dy of [0.05, -0.05]) {
-      const a = M.v(rx + side * 0.05, 0.05 + dy * 0.5, rz + 0.34, CLAW, tipE);
-      const b = M.v(rx + side * 0.15, 0.05 + dy, rz + 0.34, CLAW, tipE);
-      const c = M.v(rx + side * 0.11, 0.05 + dy * 0.3, rz + 0.50, TIP, tipE);
-      M.tri(a, b, c);
-    }
+    const ex = { aLeg: ph };
+    // 長節と腕節。体の前へ短く出す
+    limb(M, [
+      [bx, 0.010, bz],
+      [bx + s * 0.055, 0.045, bz + 0.10],
+      [bx + s * 0.045, 0.050, bz + 0.19],
+    ], [[0.080, 0.066], [0.074, 0.062], [0.066, 0.058]], CLAW, CLAW, ex, 7, 0.94);
+
+    // 掌。左右に平たく、縦に高い板。ここを球にすると鉗脚が
+    // 「前にぶら下がった玉」になり、牙のように見える。
+    // 実物の掌節は横から見ると三角形に近い、薄くて背の高い形
+    // 掌は体の高さのまま、やや内へ寄せて構える。実物のカニは
+    // 左右の鋏を胸の前で内向きに合わせている
+    const px = bx + s * 0.035, py = 0.050, pz = bz + 0.28;
+    dome(M, px, py, pz, 0.052, 0.092, 0.125, CLAW, 6, { ...ex, aSeg: 0.4 });
+
+    // 不動指(掌から前へ)と可動指(上から噛み合う)。
+    // 2本のあいだに隙間を残すこと。閉じきると鋏に見えない
+    // 不動指は掌の下縁からほぼ水平に前へ。可動指は上から下りてきて、
+    // 先で噛み合う。あいだの隙間が見えることが「鋏」の条件
+    limb(M, [
+      [px, py - 0.048, pz + 0.085],
+      [px - s * 0.016, py - 0.054, pz + 0.165],
+      [px - s * 0.038, py - 0.046, pz + 0.235],
+    ], [[0.036, 0.030], [0.024, 0.020], [0.004, 0.004]], CLAW, TIP, { ...ex }, 6, 0.95);
+    limb(M, [
+      [px, py + 0.054, pz + 0.080],
+      [px - s * 0.016, py + 0.006, pz + 0.158],
+      [px - s * 0.038, py - 0.036, pz + 0.228],
+    ], [[0.032, 0.028], [0.022, 0.018], [0.004, 0.004]], CLAW, TIP, { ...ex }, 6, 0.95);
   }
 
   // ---- 眼 ----
-  // 短い柄の先に黒い球。ここがあると急に生き物になる
+  // 短い柄の先に黒い球。柄は甲羅の前側方の角(眼窩)から出る。
+  // ここがあると急に生き物になる
   for (const side of [-1, 1]) {
-    dome(M, side * 0.15, 0.11, 0.27, 0.032, 0.038, 0.032, EYE, 3, body);
+    const ex = { aLeg: 0 };
+    // 眼球は甲幅の5%ほど(0.025)。0.031にしていたらピンポン玉に見えた
+    limb(M, [
+      [side * 0.21, 0.060, 0.325],
+      [side * 0.240, 0.082, 0.352],
+    ], [[0.017, 0.017], [0.015, 0.015]], SHELL2, SHELL2, ex, 5, 1.0);
+    dome(M, side * 0.248, 0.090, 0.363, 0.025, 0.025, 0.025, EYE, 4, body);
   }
   return M.geo({ aCol: 3 });
 }
+
 
 const CRAB_VERT = /* glsl */ `
   uniform float uTime;
