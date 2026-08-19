@@ -4,7 +4,7 @@ import { createWaterSurface } from '../environment/surface.js';
 import { createGodRays } from '../environment/effects.js';
 import {
   meshHeightAt, createShoreRock, createBoulders, createTidePools,
-  tideAt, waterAt, localWater, POOLS, TIDE,
+  tideAt, waterAt, localWater, poolAt, POOLS, TIDE,
 } from '../environment/shore.js';
 import { CollisionWorld } from '../collision.js';
 import { FeedCloud } from '../creatures/feed.js';
@@ -147,6 +147,20 @@ export const SHORE = {
           //   0.62m → 8%(90px)。脚の動きが見える
           dist: [0.42, 0.62],
         },
+        // 動かない3種。動かなくても「1個体に決める」ことは要る——
+        // 毎フレーム選び直せば、動かない相手でもカメラは飛ぶ。
+        //
+        // イソギンチャクは潮だまりの中にいる個体を優先する。溜まりの中なら
+        // 潮が引いても水があり、触手が開いている。干上がった個体を追わせると、
+        // 縮んだ団子を眺めることになる。
+        //
+        // ウニには同じ条件を付けない。ウニは潮だまりより下(潮下帯)に
+        // 置いてあるので、溜まりの中の個体は1匹もいない——条件を書いても
+        // 全数から選び直されるだけで、読む人を誤解させる。
+        // そして潮下帯にいるということは、そもそも常に水中にいる
+        anemone: clingTarget(() => anemones.items, 0.55, [0.40, 0.58], inPool),
+        seastar: clingTarget(() => stars.items, 0.10, [0.45, 0.68]),
+        urchin: clingTarget(() => urchins.items, 0.26, [0.45, 0.70]),
       },
       // 検証用
       __life: { crabs, anemones, stars, urchins, bits },
@@ -228,6 +242,49 @@ const _crabPos = new THREE.Vector3();
 let followed = null;
 // カメラのいる場所。追う個体を選ぶときに近いほうを選びたい
 const lastCam = new THREE.Vector3();
+
+/** その個体が潮だまりの中にいるか */
+const inPool = (it) => !!poolAt(it.x, it.z);
+
+/**
+ * 張り付いて動かない生き物の追跡先を作る。
+ *
+ * 動かない相手でも「1個体に決める」ことは必要。毎フレーム選び直せば、
+ * 相手が動かなくてもカメラのほうが飛ぶ——カニで踏んだのと同じ穴。
+ *
+ * @param items  個体の配列を返す関数(構築後にしか存在しないため)
+ * @param yFrac  注視点を体の大きさの何倍だけ持ち上げるか。
+ *               ヒトデは平たいのでほぼ0、イソギンチャクは触手の位置まで上げる
+ * @param dist   [下限, 上限]。床(地形+0.35m)より下は書かない
+ * @param prefer 優先したい個体の条件。該当が無ければ全体から選ぶ
+ */
+function clingTarget(items, yFrac, dist, prefer) {
+  let picked = null;
+  const pick = () => {
+    const all = items();
+    if (!all.length) return null;
+    const pool = prefer ? all.filter(prefer) : all;
+    const src = pool.length ? pool : all;
+    // 大きいほうの半分から、カメラに近いものを選ぶ
+    const sorted = src.slice().sort((a, b) => (b.size || 0) - (a.size || 0));
+    const half = sorted.slice(0, Math.max(4, Math.ceil(sorted.length / 2)));
+    let best = half[0], bd = Infinity;
+    for (const it of half) {
+      const d = Math.hypot(it.x - lastCam.x, it.z - lastCam.z);
+      if (d < bd) { bd = d; best = it; }
+    }
+    return best;
+  };
+  return {
+    start: () => { picked = pick(); },
+    get: () => {
+      if (!picked) picked = pick();
+      if (!picked) return _crabPos.set(0, TIDE.mean, 0);
+      return _crabPos.set(picked.x, picked.y + (picked.size || 0.05) * yFrac, picked.z);
+    },
+    dist,
+  };
+}
 
 /** 追うに値するカニを1匹選ぶ。大きめの個体から、カメラに近いもの */
 function pickCrab(crabs, near) {
