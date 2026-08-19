@@ -407,7 +407,18 @@ vec3 rockNormal(vec3 wp, vec3 n, float amt) {
  * 磯の岩の見え方。地形にも転石にも同じものを使う。
  * cav は窪み具合(0=平ら 1=深い窪み)。遮蔽の代わりに使う
  */
-vec3 shoreSurface(vec3 wp, vec3 nIn, float cav, float bumpAmt) {
+/**
+ * 岩盤にも転石にも同じものを使うが、2つだけ違いを受け取る。
+ *
+ * lith   … 岩種による色みの倍率。岩盤は vec3(1) で「この磯の岩の色」。
+ *          転石は流れ着いた石なので、玄武岩・凝灰岩・石英と色がばらつく
+ * growth … 生き物の付きやすさ。岩盤は 1。
+ *          転石は波に転がされるので、フジツボもイガイも定着できない。
+ *          動かない substrate にしか帯状分布は生まれない——
+ *          これは見た目の都合ではなく、そういう理屈でそうなっている
+ */
+vec3 shoreSurfaceEx(vec3 wp, vec3 nIn, float cav, float bumpAmt,
+                    vec3 lith, float growth) {
   float h = wp.y;
   vec3 n = rockNormal(wp, normalize(nIn), bumpAmt);
 
@@ -432,6 +443,8 @@ vec3 shoreSurface(vec3 wp, vec3 nIn, float cav, float bumpAmt) {
             smoothstep(0.62, 0.78, fbm(wp.xz * 0.85 + 7.0)) * 0.45);
   // 細かい凹凸そのものの陰影。法線だけでなく色も少し振る
   dry *= 0.86 + 0.28 * fine;
+  // 岩種。転石だけがここで色を変える
+  dry *= lith;
 
   // ---- 帯状分布 ----
   // 基準は平均潮位に固定する。いまの水位を基準にすると、
@@ -449,6 +462,8 @@ vec3 shoreSurface(vec3 wp, vec3 nIn, float cav, float bumpAmt) {
              * (0.42 + 0.58 * smoothstep(0.34, 0.62, fbm(wp.xz * 1.9)));
   float lichen = smoothstep(1.10, 1.70, rel) * smoothstep(3.4, 2.2, rel)
                * smoothstep(0.26, 0.44, fbm(wp.xz * 0.32));
+  // 転がる石には付かない
+  weed *= growth; mussel *= growth; barn *= growth; lichen *= growth;
 
   vec3 col = dry;
   col = mix(col, vec3(0.046, 0.042, 0.035), lichen * 0.92);
@@ -508,6 +523,11 @@ vec3 shoreSurface(vec3 wp, vec3 nIn, float cav, float bumpAmt) {
   lit = mix(lit, vec3(0.92, 0.95, 0.96), foam);
 
   return applyUnderwaterFog(lit, wp);
+}
+
+/** 岩盤。この磯の岩の色で、生き物も普通に付く */
+vec3 shoreSurface(vec3 wp, vec3 nIn, float cav, float bumpAmt) {
+  return shoreSurfaceEx(wp, nIn, cav, bumpAmt, vec3(1.0), 1.0);
 }
 `;
 
@@ -654,9 +674,12 @@ export function createBoulders(parent, count = 190) {
   const mat = new THREE.ShaderMaterial({
     uniforms: shoreUniforms(),
     vertexShader: /* glsl */ `
+      // xyz: 岩種の色み倍率 / w: 生き物の付きやすさ
+      attribute vec4 aStone;
       varying vec3 vW;
       varying vec3 vN;
       varying float vCav;
+      varying vec4 vStone;
       void main() {
         vec4 wp = modelMatrix * instanceMatrix * vec4(position, 1.0);
         vW = wp.xyz;
@@ -664,6 +687,7 @@ export function createBoulders(parent, count = 190) {
         // 石の下側は地面との隙間で暗い。石そのものの側の遮蔽で、
         // 地面側に落ちる接地影(ContactShadows)と対になっている
         vCav = smoothstep(0.25, -0.75, vN.y) * 0.85;
+        vStone = aStone;
         gl_Position = projectionMatrix * viewMatrix * wp;
       }
     `,
@@ -671,14 +695,42 @@ export function createBoulders(parent, count = 190) {
       varying vec3 vW;
       varying vec3 vN;
       varying float vCav;
+      varying vec4 vStone;
       void main() {
         float amt = 0.75 * (1.0 - smoothstep(5.0, 26.0, distance(cameraPosition, vW)));
-        gl_FragColor = vec4(shoreSurface(vW, vN, vCav, amt), 1.0);
+        gl_FragColor = vec4(
+          shoreSurfaceEx(vW, vN, vCav, amt, vStone.rgb, vStone.a), 1.0);
         ${UW_FRAG_OUTPUT}
       }
     `,
   });
 
+  // ---- 岩種 ----
+  // 転石は「そこで割れた岩」ではなく「流れ着いた石」なので、岩盤と
+  // 同じ色をしている必要がない。実際の磯の石は必ず何種類か混じっていて、
+  // その混ざりぐあいが「岩盤の上に石が載っている」と教えている。
+  // 岩盤とまったく同じ色・同じ陰影で塗っていたら、地表に出しても
+  // 岩と石の見分けがつかなかった。
+  //
+  // 日本の太平洋岸の磯にあるあたり。倍率は岩盤の灰色(反射率0.10〜0.19)に
+  // 掛ける値なので、いちばん白い石英でも 0.19*1.95 = 0.37 に収まる
+  const LITH = [
+    { c: [1.00, 1.00, 1.00], w: 34 },   // 安山岩。岩盤と同じ、割れて落ちたもの
+    { c: [0.70, 0.73, 0.80], w: 20 },   // 玄武岩。青みの濃い灰
+    { c: [1.52, 1.46, 1.30], w: 20 },   // 凝灰岩。乾くと白っぽい黄土
+    { c: [1.34, 1.02, 0.78], w: 15 },   // 鉄分で赤褐色に染まったもの
+    { c: [0.55, 0.58, 0.56], w:  7 },   // 黒っぽい緻密な石
+    { c: [1.95, 1.92, 1.84], w:  4 },   // 石英。ときどき白いのが混じる
+  ];
+  const LITH_TOTAL = LITH.reduce((a, l) => a + l.w, 0);
+  const pickLith = (u) => {
+    let t = u * LITH_TOTAL;
+    for (const l of LITH) { t -= l.w; if (t <= 0) return l.c; }
+    return LITH[0].c;
+  };
+
+  const stone = new Float32Array(count * 4);
+  geo.setAttribute('aStone', new THREE.InstancedBufferAttribute(stone, 4));
   const mesh = new THREE.InstancedMesh(geo, mat, count);
   mesh.frustumCulled = false;
   // 転石の接地影。地形にいちばん効くのはここ——生き物は数cmだが、
@@ -724,10 +776,25 @@ export function createBoulders(parent, count = 190) {
     nv.set(-(meshHeightAt(x + e2, z) - meshHeightAt(x - e2, z)), 2 * e2,
            -(meshHeightAt(x, z + e2) - meshHeightAt(x, z - e2))).normalize();
     shadow.place(placed, x, y, z, size * 1.30, size * 0.50, nv);
+
+    // 岩種と、個体ごとの色みのゆらぎ(同じ岩種でも1つずつ違う)
+    const lith = pickLith(rnd());
+    const j = 0.88 + rnd() * 0.26;
+    // 生き物の付きやすさ。転がされる石には定着できない。
+    // どれくらい転がされるかは大きさで決まる——25cmの礫は時化のたびに
+    // 転がるが、1.2mの巨礫はめったに動かないので、岩盤と同じように
+    // フジツボもイガイも付く。見た目の都合ではなく、そういう理屈
+    const growth = 0.05 + 0.85 * Math.min(Math.max((size - 0.30) / 0.85, 0), 1);
+    stone[placed * 4 + 0] = lith[0] * j;
+    stone[placed * 4 + 1] = lith[1] * j;
+    stone[placed * 4 + 2] = lith[2] * j;
+    stone[placed * 4 + 3] = growth;
+
     mesh.setMatrixAt(placed++, m);
   }
   mesh.count = placed;
   mesh.instanceMatrix.needsUpdate = true;
+  geo.getAttribute('aStone').needsUpdate = true;
   shadow.commit(placed);
   parent.add(mesh);
   return { mesh, mat };
