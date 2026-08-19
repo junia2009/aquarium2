@@ -119,7 +119,21 @@ export const SHORE = {
       followTargets: {
         // 潮だまりは動かないが、図鑑から見にいけたほうがいい
         tidepool: { get: () => POOL_VIEW, dist: [3.0, 7.0] },
-        crab: { get: () => _crabAt(crabs), dist: [0.35, 1.1] },
+        // 追う個体は選んだときに1匹決めて、離さない。
+        // 毎フレーム選び直していたら、数秒おきに別のカニへ飛んでいた
+        crab: {
+          start: () => { followed = pickCrab(crabs, lastCam); },
+          get: () => {
+            if (!followed) followed = pickCrab(crabs, lastCam);
+            return _crabPos.set(followed.x, followed.y + 0.05, followed.z);
+          },
+          // カメラは地形の 0.9m 上までしか降りられない(camera.js の床)。
+          // 下限はそれより上に取る。0.35m と書いてあっても実際には
+          // 届かないだけで害はないが、読んだ人が誤解する。
+          // 上限は近く保つこと——2.2m まで引くと甲幅5cmのカニは画面の
+          // 2%(1100px 中 22px)にしかならず、追う意味がなくなる
+          dist: [0.95, 1.30],
+        },
       },
       // 検証用
       __life: { crabs, anemones, stars, urchins, bits },
@@ -145,8 +159,11 @@ export const SHORE = {
         // 必ず戻す。ここを忘れると次のゾーンの水面が潮位のままになる
         U.uSurfaceY.value = WORLD.surfaceY;
         surface.position.y = WORLD.surfaceY;
+        // 追っていた個体も手放す。次に入ったときは選び直す
+        followed = null;
       },
       update(dt, camera) {
+        lastCam.copy(camera.position);
         const t = U.uTime.value;
         const tide = tideAt(t);
         const water = waterAt(t);
@@ -184,11 +201,30 @@ const POOL_VIEW = new THREE.Vector3(POOLS[0].x, POOLS[0].rim - 0.4, POOLS[0].z);
 // 生き物側から使う。潮だまりの中では海が引いても水が残る
 export { localWater };
 
-// 図鑑で「イソガニ」を選んだときの追跡先。いま歩いている個体を優先する
 const _feed = new THREE.Vector3();
 const _crabPos = new THREE.Vector3();
-function _crabAt(crabs) {
-  let best = crabs.members[0];
-  for (const m of crabs.members) if (m.speed > 0) { best = m; break; }
-  return _crabPos.set(best.x, best.y + 0.05, best.z);
+
+// 図鑑で「イソガニ」を選んだときに追う個体。選んだ時点で1匹に決めて持つ。
+//
+// もとは「いま歩いている最初の個体」を毎フレーム選び直していた。
+// カニは数秒ごとに歩いたり止まったりするので、そのたびに条件を満たす
+// 先頭の個体が入れ替わり、カメラが別のカニへ飛んでいた。
+// 実測で 50 秒のあいだに 0.3m を超えるワープが5回、いちばん大きいもので
+// 5.6m。追跡とは「同じ個体を見続けること」なので、選び直してはいけない。
+let followed = null;
+// カメラのいる場所。追う個体を選ぶときに近いほうを選びたい
+const lastCam = new THREE.Vector3();
+
+/** 追うに値するカニを1匹選ぶ。大きめの個体から、カメラに近いもの */
+function pickCrab(crabs, near) {
+  // 小さい個体(甲幅3cm)は追ってもほとんど画面に映らない。
+  // 大きいほうの半分から選ぶ
+  const sorted = crabs.members.slice().sort((a, b) => b.body - a.body);
+  const pool = sorted.slice(0, Math.max(4, Math.ceil(sorted.length / 2)));
+  let best = pool[0], bd = Infinity;
+  for (const m of pool) {
+    const d = Math.hypot(m.x - near.x, m.z - near.z);
+    if (d < bd) { bd = d; best = m; }
+  }
+  return best;
 }

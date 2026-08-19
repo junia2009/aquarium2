@@ -121,7 +121,12 @@ const ui = setupUI({
   zones: ZONES,
   onFollow: (key) => {
     const t = active.followTargets[key];
-    if (t) diveCam.setFollow(t.get, t.dist[0], t.dist[1]);
+    if (!t) return;
+    // 群れの中心や決まった1匹を返す追跡先はそのままでよいが、
+    // 「そのとき条件に合う個体」を返すものは、ここで1匹に決めさせる。
+    // 決めずに毎フレーム選ばせると、条件が変わるたびに別の個体へ飛ぶ
+    t.start?.();
+    diveCam.setFollow(t.get, t.dist[0], t.dist[1]);
   },
   onFree: () => diveCam.clearFollow(),
   onZone: (key) => enterZone(key),
