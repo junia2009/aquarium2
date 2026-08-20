@@ -27,6 +27,18 @@ const ROOM_R = 10.5;        // 与圧殻の内半径
 const WALL_H = 6.4;         // 甲板から天井の付け根まで
 const PORTAL_R = 1.75;      // ハッチの半径
 const PORTAL_Y = DECK_Y + 2.35;
+// ハッチ一式を壁からどれだけ奥へ引っ込めるか。
+//
+// 平らな円板を曲がった壁の内側に置くと、円板の縁は中心より外側の
+// 半径に来る(半径10.5mの壁で幅1.75mなら、縁は10.43m)。
+// 引っ込み量が足りないと、内側へ20cm出ている縦リブが円板を
+// 縦にすっぱり切る。実際そうなっていて、ハッチの片側だけが
+// 直線で塞がって見えた。
+//   縁の半径 = sqrt(奥行き^2 + 2.06^2) < リブの半径 10.30
+// を満たすには、奥行きは 10.15m より小さければよい
+const PORTAL_INSET = 0.55;
+// ハッチが占める角度の半分(＋余裕)。ここにはリブを立てない
+const PORTAL_ARC = 0.26;
 
 /** 施設の床。甲板は継ぎ目のない一枚 */
 export function hubFloor() {
@@ -165,8 +177,21 @@ const HAZARD = [0.290, 0.215, 0.055];   // 注意帯の黄
 const RAIL = [0.215, 0.225, 0.235];
 const DARK = [0.020, 0.024, 0.030];     // ムーンプールの奥
 
-/** 施設の殻。甲板・壁・天井・ムーンプールをひとまとめに作る */
-function buildShell() {
+/**
+ * 施設の殻。甲板・壁・天井をひとまとめに作る。
+ *
+ * ハッチの角度を受け取るのは、そこにリブを立てないため。
+ * 構造材を出入口の真ん中に通す設計はないし、通してしまうと
+ * リブがハッチの手前を横切って、円板を縦にすっぱり切る
+ */
+function buildShell(portalAngles = []) {
+  const clearOfPortal = (a) => {
+    for (const pa of portalAngles) {
+      let d = Math.abs(((a - pa + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+      if (d < PORTAL_ARC) return false;
+    }
+    return true;
+  };
   const M = new Buf();
   // 円周の分割。細部の周期に対して十分に細かくないと、模様は出ない。
   // 64分割で24本のリブを立てようとしていたら、1本あたり1.3標本しか
@@ -228,8 +253,10 @@ function buildShell() {
     for (let k = 0; k < N; k++) {
       const a = ang(k);
       // リブ。12本。160分割なら1本13.3標本ぶんの周期があり、
-      // 幅3割で4標本——ようやく「立っている」ように見える
-      const rib = Math.abs(((a / (Math.PI * 2)) * 12) % 1 - 0.5) > 0.35;
+      // 幅3割で4標本——ようやく「立っている」ように見える。
+      // ただしハッチの前は素通し
+      const rib = Math.abs(((a / (Math.PI * 2)) * 12) % 1 - 0.5) > 0.35
+                  && clearOfPortal(a);
       const r = ROOM_R - (rib ? 0.20 : 0);
       row.push(M.v(Math.cos(a) * r, y, Math.sin(a) * r, rib ? PAINT : PAINT2));
     }
@@ -414,7 +441,7 @@ function buildPortal(parent, def, angle, portals, plu) {
   const grp = new THREE.Group();
   const c = Math.cos(angle), s = Math.sin(angle);
   // 壁の内側にわずかに埋め込む
-  grp.position.set(c * (ROOM_R - 0.22), PORTAL_Y, s * (ROOM_R - 0.22));
+  grp.position.set(c * (ROOM_R - PORTAL_INSET), PORTAL_Y, s * (ROOM_R - PORTAL_INSET));
   // 部屋の中心を向かせる。+Z を向いた面を y 軸まわりに θ 回すと
   // 法線は (sinθ, 0, cosθ)。内向き (-cos a, 0, -sin a) にしたいので
   // θ = -a - π/2。ここを +π/2 にしていたら法線が外向きになり、
@@ -510,9 +537,8 @@ export const HUB = {
     // value のオブジェクトごと共有する——材質ごとに持つと、
     // 更新のたびに全部へ書き写すことになる
     const plu = portalLightUniforms();
-    const shell = new THREE.Mesh(buildShell(), metalMaterial(plu, LIT_VERT, LIT_FRAG,
-      { side: THREE.DoubleSide }));
-    root.add(shell);
+    // 殻はハッチの位置が決まってから作る(リブを避けるため)
+    let shell = null;
     buildLamps(root, plu);
 
     const portals = [];
@@ -533,14 +559,17 @@ export const HUB = {
       // 行き先をあとから差してもらう。zones の一覧は main が持っている
       setDestinations(defs) {
         for (const g of [...root.children]) if (g.userData.portal) root.remove(g);
+        if (shell) { root.remove(shell); shell.geometry.dispose(); }
         portals.length = 0;
+        // 円周に等間隔。部屋の中心に立つなら、扉は壁一面に並べるより
+        // ぐるりと囲うほうが素直で、増えても円が埋まるだけで済む
+        const angles = defs.map((_, i) =>
+          -Math.PI * 0.5 + (i / defs.length) * Math.PI * 2);
+        shell = new THREE.Mesh(buildShell(angles),
+          metalMaterial(plu, LIT_VERT, LIT_FRAG, { side: THREE.DoubleSide }));
+        root.add(shell);
         defs.forEach((def, i) => {
-          // 正面(-Z)から時計回りに等間隔。手前側は空けて、
-          // 入ってきた向きにハッチが並んで見えるようにする
-          // 円周に等間隔。部屋の中心に立つなら、扉は壁一面に並べるより
-          // ぐるりと囲うほうが素直で、増えても円が埋まるだけで済む
-          const a = -Math.PI * 0.5 + (i / defs.length) * Math.PI * 2;
-          const g = buildPortal(root, def, a, portals, plu);
+          const g = buildPortal(root, def, angles[i], portals, plu);
           g.userData.portal = true;
         });
       },
