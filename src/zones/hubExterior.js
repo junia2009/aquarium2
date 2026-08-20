@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { baseUniforms } from '../env.js';
 import { UW_FRAG_PRELUDE, UW_FRAG_OUTPUT } from '../glsl.js';
 
-// ============ マナ・ワンの外 ============
+// ============ プロテウスの外 ============
 //
 // 舷窓の中身は、はじめ板に貼ったシェーダで描いていました。視線の向きで
 // 色を決めていたので視差はつきますが、そこにあるのは結局「水の色の関数」
