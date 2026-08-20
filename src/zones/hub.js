@@ -218,14 +218,34 @@ const LAMP_LIGHT = /* glsl */ `
   }
 `;
 
-const LIT_FRAG = PORTAL_LIGHT + SURFACE + LAMP_LIGHT + /* glsl */ `
+// 甲板の標示(中心の輪と、ハッチへの通路帯)。
+//
+// もとは床の 4mm 上に板を浮かせて重ねていた。これが携帯でチカチカした。
+// 理由は2つあって、どちらも「重ねた」ことそのものが原因:
+//
+//  1. 深度の精度。後処理(散乱ぼかし)に描き込むレンダーターゲットの
+//     深度バッファは16bitで、13m 先での分解能は約1.5cm。4mm の浮かせでは
+//     どちらが手前か決まらず、フレームごとに入れ替わる。
+//  2. もっと単純な取りこぼし——通路帯の右の黄線は幅 [0.53, 0.71]、
+//     灰色の帯は [-0.62, 0.62] で、9cm ぶん**完全に同一平面で重なって**
+//     いた。これはどんな端末でも必ず争う。
+//
+// 浮かせる量を増やすのは対症療法で、遠くではまた負ける(しかも近くで
+// 段差に見える)。重ねるのをやめて、床そのものの色として塗る。
+// 同一平面のポリゴンが1枚も無くなるので、原理的にチカチカしない。
+const NO_DECK_MARK = /* glsl */ `
+  vec3 deckMark(vec3 wp, vec3 n, vec3 base) { return base; }
+`;
+
+const LIT_MAIN = /* glsl */ `
   varying vec3 vCol;
   varying vec3 vN;
   varying vec3 vW;
   void main() {
     vec3 n = gl_FrontFacing ? normalize(vN) : -normalize(vN);
     vec3 viewDir = normalize(cameraPosition - vW);
-    vec3 alb = grime(vW, n, vCol);
+    // 標示を塗ってから汚す。順を逆にすると、線の上だけ新品になる
+    vec3 alb = grime(vW, n, deckMark(vW, n, vCol));
     // 塗装した鋼。つや消しだが、濡れているので弱いハイライトが乗る
     vec3 col = underwaterLight(alb, n, vW, viewDir, 22.0, 0.10);
     col += alb * lampLight(vW, n);
@@ -234,6 +254,55 @@ const LIT_FRAG = PORTAL_LIGHT + SURFACE + LAMP_LIGHT + /* glsl */ `
     ${UW_FRAG_OUTPUT}
   }
 `;
+
+const litFrag = (marks = NO_DECK_MARK) =>
+  PORTAL_LIGHT + SURFACE + LAMP_LIGHT + marks + LIT_MAIN;
+
+const LIT_FRAG = litFrag();
+
+const glslV3 = (c) => `vec3(${c.map((v) => v.toFixed(4)).join(',')})`;
+
+/** ハッチの向きを焼き込んだ甲板標示。行き先が決まってから作る */
+function deckMarkGLSL(hatchAngles) {
+  const lanes = hatchAngles
+    .map((a) => `    lane(wp, ${a.toFixed(5)}, w, col);`).join('\n');
+  const FAR = (ROOM_R - 0.9).toFixed(2);
+  return /* glsl */ `
+  // 帯の内側で1、外へ出ると0。
+  //
+  // smoothstep(hi, lo, x) と逆向きに書く手は使わない。GLSL の仕様では
+  // edge0 >= edge1 のとき**結果は未定義**で、多くの実装でたまたま
+  // 期待どおり動くだけ。端末を選ぶバグの温床になる
+  float inside(float x, float lo, float hi, float w) {
+    return smoothstep(lo - w, lo + w, x) * (1.0 - smoothstep(hi - w, hi + w, x));
+  }
+  void lane(vec3 wp, float ha, float w, inout vec3 col) {
+    float along = wp.x * cos(ha) + wp.z * sin(ha);
+    float across = abs(-wp.x * sin(ha) + wp.z * cos(ha));
+    float run = inside(along, 1.80, ${FAR}, w);
+    // 歩く帯
+    float band = run * (1.0 - smoothstep(0.62 - w, 0.62 + w, across));
+    // 縁の黄線。帯の**外側だけ**に置く。もとは片側だけ内側へ
+    // 食い込んでいて、そこが同一平面の重なりになっていた
+    float edge = run * inside(across, 0.62, 0.71, w);
+    col = mix(col, ${glslV3(PAINT2)}, band);
+    col = mix(col, ${glslV3(HAZARD)}, edge);
+  }
+  vec3 deckMark(vec3 wp, vec3 n, vec3 base) {
+    // 甲板の上面だけ。壁や天井、床ぎわの配管には塗らない
+    if (n.y < 0.85 || abs(wp.y - ${DECK_Y.toFixed(2)}) > 0.06) return base;
+    // 縁の甘さは距離で決める。fwidth は ESSL1 では拡張が要るので使わない
+    float w = 0.006 + distance(cameraPosition, wp) * 0.0016;
+    float r = length(wp.xz);
+    vec3 col = base;
+    // 中心の輪。「ここが立ち位置」であることを床が言う
+    col = mix(col, ${glslV3(HAZARD)}, inside(r, 1.55, 1.75, w));
+    col = mix(col, ${glslV3(PAINT2)}, inside(r, 1.20, 1.30, w));
+${lanes}
+    return col;
+  }
+`;
+}
 
 /** ポータルの光をシェーダへ渡すためのユニフォーム一式 */
 function portalLightUniforms() {
@@ -298,7 +367,7 @@ const DARK = [0.020, 0.024, 0.030];     // ムーンプールの奥
  * 構造材を出入口の真ん中に通す設計はないし、通してしまうと
  * リブがハッチの手前を横切って、円板を縦にすっぱり切る
  */
-function buildShell(openings = [], hatches = [], windows = []) {
+function buildShell(openings = [], windows = []) {
   // openings: [角度, 半角] の並び。ハッチも舷窓も、開口の前には
   // 構造材を通さない
   const clearOfOpening = (a) => {
@@ -336,47 +405,28 @@ function buildShell(openings = [], hatches = [], windows = []) {
     }
     grid.push(row);
   }
-  for (let k = 0; k < N; k++) M.tri(hub0, grid[0][k], grid[0][(k + 1) % N]);
+  // 中心の扇。巻き方は外側の輪と揃えること。
+  //
+  // ここだけ逆に巻いていた。頂点法線は面法線を面積で重みづけて平均して
+  // いるので、いちばん内側の輪では「下向きの扇」と「上向きの輪」が
+  // 打ち消し合う。扇の内側から外側へ向かって法線が上→下へ裏返り、
+  // 途中で 0 を通る。裏返ったところは投光器が当たらず環境光の下側だけに
+  // なるので、半径 0.95〜1.86m が真っ黒な輪になっていた
+  // (真上から半径ごとに色を測って、ようやく正体が分かった)。
+  // 中心の標示が見えなかったのは、その黒い輪の上に塗っていたから
+  for (let k = 0; k < N; k++) M.tri(hub0, grid[0][(k + 1) % N], grid[0][k]);
   for (let i = 0; i < RINGS - 1; i++) {
     for (let k = 0; k < N; k++) {
       const k2 = (k + 1) % N;
       M.quad(grid[i][k], grid[i][k2], grid[i + 1][k2], grid[i + 1][k]);
     }
   }
-  // 中心の標識。「ここが立ち位置」であることを床が言う。
-  // 何もない床の真ん中に立たされると、部屋のどこにいるのか分からない
-  for (const [r0, r1, col] of [[1.55, 1.75, HAZARD], [1.20, 1.30, PAINT2]]) {
-    const a0 = [], a1 = [];
-    for (let k = 0; k < N; k++) {
-      const a = ang(k);
-      a0.push(M.v(Math.cos(a) * r0, DECK_Y + 0.004, Math.sin(a) * r0, col));
-      a1.push(M.v(Math.cos(a) * r1, DECK_Y + 0.004, Math.sin(a) * r1, col));
-    }
-    for (let k = 0; k < N; k++) {
-      const k2 = (k + 1) % N;
-      M.quad(a0[k], a0[k2], a1[k2], a1[k]);
-    }
-  }
-  // 中心の輪から各ハッチへ伸びる通路帯。
+  // 中心の輪と、各ハッチへ伸びる通路帯は、ここでは作らない。
   //
-  // 有人施設の床には、必ず「どこを歩くか」が引いてある。
-  // それが人の働く場所であることのいちばん安い証拠になるし、
-  // ここでは行き先そのものを指す線としても働く——
-  // 見回さなくても、足もとの線がハッチの方角を教える
-  for (const a of hatches) {
-    const c = Math.cos(a), s = Math.sin(a);
-    const px = -s, pz = c;              // 帯の幅の向き
-    const y = DECK_Y + 0.005;
-    for (const [off, hw, col] of [[0, 0.62, PAINT2], [0.62, 0.09, HAZARD],
-                                  [-0.71, 0.09, HAZARD]]) {
-      const q = [];
-      for (const [r, w] of [[1.80, off - hw], [ROOM_R - 0.9, off - hw],
-                            [ROOM_R - 0.9, off + hw], [1.80, off + hw]]) {
-        q.push(M.v(c * r + px * w, y, s * r + pz * w, col));
-      }
-      M.quad(q[0], q[1], q[2], q[3]);
-    }
-  }
+  // 有人施設の床には必ず「どこを歩くか」が引いてあって、ここでは
+  // 行き先を指す線としても働く(見回さなくても足もとがハッチの方角を
+  // 教える)。だが板を床の上に浮かせて重ねると必ず深度で争う。
+  // 描くのは甲板そのもののシェーダ(deckMarkGLSL)に任せる
 
   // ---- 壁 ----
   // 円筒。縦のリブが等間隔に立つ。リブは飾りではなく、
@@ -1122,8 +1172,11 @@ export const HUB = {
         const wins = angles.map((a) => a + Math.PI / defs.length);
         const openings = [...angles.map((a) => [a, PORTAL_ARC]),
                           ...wins.map((a) => [a, WIN_ARC])];
-        shell = new THREE.Mesh(buildShell(openings, angles, wins),
-          metalMaterial(plu, LIT_VERT, LIT_FRAG, { side: THREE.DoubleSide }));
+        // 甲板の標示だけは、この殻のシェーダに焼き込む。
+        // ほかの金物(配管・枠・器具)は標示を持たない
+        shell = new THREE.Mesh(buildShell(openings, wins),
+          metalMaterial(plu, LIT_VERT, litFrag(deckMarkGLSL(angles)),
+                        { side: THREE.DoubleSide }));
         root.add(shell);
         defs.forEach((def, i) => {
           const g = buildPortal(root, def, angles[i], portals, plu);
