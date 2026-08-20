@@ -4,6 +4,7 @@ import { UW_FRAG_PRELUDE, UW_FRAG_OUTPUT } from '../glsl.js';
 import { FISH_SHAPES } from '../creatures/fishGeometry.js';
 import { createFishMaterial } from '../creatures/fishMaterial.js';
 import { School, makeSchoolInstanceAttr } from '../creatures/school.js';
+import { buildNautilus } from './nautilus.js';
 
 // ============ プロテウスの外 ============
 //
@@ -301,10 +302,55 @@ export function riseAt(r) {
   return t * t * (3 - 2 * t) * 8.5;
 }
 
+// 海底の起伏。海底そのものを作るのと、その上に物を据えるのとで
+// 同じ式を使わないと、置いたものが地面に埋まるか浮くかする。
+// 頂点ごとに乱数を引かず決まった関数から出すのも同じ理由で、
+// そうしないと作り直すたびに地形だけが動く
+export function reliefAt(x, z) {
+  return Math.sin(x * 0.055 + Math.cos(z * 0.041) * 2.1) * 0.62
+    + Math.sin(z * 0.083 - 1.3) * 0.34
+    + Math.sin((x + z) * 0.17) * 0.11
+    + riseAt(Math.hypot(x, z));
+}
+
 // 観測棟の据わっている高さと、中の床。riseAt に依るのでここで確定する
 ANNEX.base = FLOOR_Y + riseAt(ANNEX.dist) + 0.4;
 ANNEX.floor = ANNEX.base + 0.55;
 ANNEX.inner = ANNEX.radius - 0.35;
+
+// ============ ノーチラス号の停泊位置 ============
+//
+// 観測棟と同じで、固定値で持つ。舷窓の角度から導くと、行き先が
+// 1つ増えただけで船が動いてしまう。
+//
+// 置き方に条件が3つある。
+//   ・全長 30m の船を横から見せたい。真正面や真後ろから見ると
+//     ただの円になって、ノーチラスの輪郭が何も伝わらない
+//   ・かといって完全な真横だと図面のようになるので、
+//     舳先をわずかにこちらへ振る(+0.18rad)
+//   ・海底の起伏に据える。riseAt だけで高さを決めると、
+//     うねりの谷では浮き、山では埋まる
+export const NAUTILUS = {
+  a: -1.95,          // 施設から見た方角
+  dist: 34,          // 中心までの距離。近すぎると窓を塞ぎ、遠いと霧に溶ける
+  pitch: 0.022,      // 泥に沈んだぶんの傾き
+  roll: 0.045,
+  clear: 3.15,       // 船の中心から橇の下端まで
+};
+NAUTILUS.x = Math.cos(NAUTILUS.a) * NAUTILUS.dist;
+NAUTILUS.z = Math.sin(NAUTILUS.a) * NAUTILUS.dist;
+// 船体ローカルの +Z(舳先)が向く方位。接線方向 = -a で、そこから少し振る
+NAUTILUS.heading = -NAUTILUS.a + 0.18;
+// 据わる高さ。橇の前後の端でも海底を割らないよう、
+// 船に沿って3点を見て、いちばん高い地面に合わせる
+{
+  const sh = Math.sin(NAUTILUS.heading), ch = Math.cos(NAUTILUS.heading);
+  let g = -1e9;
+  for (const t of [-7.6, 0, 7.6]) {
+    g = Math.max(g, reliefAt(NAUTILUS.x + sh * t, NAUTILUS.z + ch * t));
+  }
+  NAUTILUS.y = FLOOR_Y + g + NAUTILUS.clear;
+}
 
 // 決まった種から作る乱数。作り直しても同じ景色になる——
 // ハッチが増えるたびに外の岩が別の場所へ移ると、
@@ -588,6 +634,46 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
       d: [0, -1, 0], c: ROOM, k: 1.0,
     });
   }
+  // 停泊中のノーチラス号を照らす投光器。
+  //
+  // 施設本体の投光器は舷窓の真下を照らす向きに絞ってあるので、
+  // 34m 先までは届かない。届かせようと本体側の配光を広げると、
+  // 今度は手前の海底が白く飛ぶ。停泊地には停泊地の灯りを立てるのが
+  // 実際の作りでもあり、絵としても正しい——照らす対象が決まっている
+  // 光は、その対象を「見せるために置かれたもの」に見せる。
+  //
+  // 船の脇に2基。片側からだけ当てると、反対の舷が真っ黒に落ちて
+  // 船体の丸みが消える
+  const DOCK = [];
+  {
+    const sh = Math.sin(NAUTILUS.heading), ch = Math.cos(NAUTILUS.heading);
+    // 施設の側へ寄せる向き(船の中心から原点へ向かう単位ベクトル)
+    const ix = -NAUTILUS.x / NAUTILUS.dist, iz = -NAUTILUS.z / NAUTILUS.dist;
+    //
+    // 支柱の立てる位置は、明るさと同じくらい効く。はじめ船の真横
+    // (前後 ±8.5m)に立てたら、部屋の窓から船を見たとき**支柱が船体を
+    // 縦に横切って**いた。前景の細い棒は、後ろにある大きなものより
+    // 目を引く。舳先と艫の外へ逃がすと、視線を遮らないまま端まで届く
+    for (const t of [-14.0, 14.0]) {
+      // 船に沿って前後にずらし、そこから施設側へ 7m 離す
+      const bx = NAUTILUS.x + sh * t + ix * 7.0;
+      const bz = NAUTILUS.z + ch * t + iz * 7.0;
+      const by = FLOOR_Y + reliefAt(bx, bz);
+      const hy = by + 7.2;                            // 灯具の高さ
+      // 狙いは自分の側の船体。両端から挟むように当てると、
+      // 舳先も艫も暗く落ちない——円錐に見えていたのは、
+      // 舳先に光がまったく届いていなかったせいでもある
+      const tx = NAUTILUS.x + sh * t * 0.35, tz = NAUTILUS.z + ch * t * 0.35;
+      const d = new THREE.Vector3(tx - bx, NAUTILUS.y - 0.4 - hy, tz - bz).normalize();
+      DOCK.push({ bx, by, bz, hy, d });
+      // 明るさは控えめに。はじめ本体の投光器と同じ 8 台強で当てたら、
+      // 船体が真っ白に飛んで**紙で作った模型**になった。
+      // 暗い海に浮かぶ鉄の塊として読めるのは、面の大半が沈んでいて、
+      // 光が当たった一部だけが鈍く返しているとき
+      lights.push({ p: [bx, hy, bz], d: [d.x, d.y, d.z], c: [3.6, 3.4, 3.0], k: 0.46 });
+    }
+  }
+
   const FLOOD = floodGLSL(lights);
   const neon = new Neon();
 
@@ -605,15 +691,7 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
   const RINGS = 46, SEG = 84;
   const fl = new Buf();
   const noise = rng(20260820);
-  // 起伏は決まった関数から。頂点ごとに乱数を引くと、
-  // 作り直すたびに地形が変わる
-  const rise = riseAt;
-  const relief = (x, z) => (
-    Math.sin(x * 0.055 + Math.cos(z * 0.041) * 2.1) * 0.62
-    + Math.sin(z * 0.083 - 1.3) * 0.34
-    + Math.sin((x + z) * 0.17) * 0.11
-    + rise(Math.hypot(x, z))
-  );
+  const relief = reliefAt;
   const rows = [];
   for (let i = 0; i <= RINGS; i++) {
     const t = i / RINGS;
@@ -771,6 +849,61 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
   const mx = ANNEX.x, mz = ANNEX.z;
   buildAnnex(S, neon, world, group, mat);
 
+  // ---- ノーチラス号 ----
+  //
+  // 停泊している船を1隻置くと、施設の意味が変わる。建物だけなら
+  // 「そこにある構造物」だが、船が横付けされていれば「人が出入りして
+  // いる場所」になる。しかも船は大きさの分かるものなので、
+  // 施設の規模もこれで初めて読める
+  //
+  // 船体は施設の外殻とは別の材質で描く。鉄板の割付と鋲は船の
+  // ローカル座標が要るので、共用のシェーダには載せられない
+  {
+    const N = new Buf();
+    const naut = buildNautilus(N, neon, world, {
+      origin: [NAUTILUS.x, NAUTILUS.y, NAUTILUS.z],
+      heading: NAUTILUS.heading,
+      pitch: NAUTILUS.pitch,
+      roll: NAUTILUS.roll,
+      strut,
+    });
+    group.add(new THREE.Mesh(N.geo(), mat(naut.frag, { side: THREE.DoubleSide })));
+  }
+  // 停泊地の投光器。灯具だけ光らせても支柱が無いと宙に浮くので、
+  // 海底から立てる
+  for (const L of DOCK) {
+    strut(S, [L.bx, L.by - 0.4, L.bz], [L.bx, L.hy, L.bz], 0.16, STEEL2);
+    strut(S, [L.bx, L.by + 0.2, L.bz], [L.bx, L.by - 0.35, L.bz], 0.62, STEEL2);
+    // 灯具の筐体。光る点だけだと、暗闇に浮いた玉になる
+    const hd = [L.bx + L.d.x * 0.45, L.hy + L.d.y * 0.45, L.bz + L.d.z * 0.45];
+    strut(S, [L.bx, L.hy, L.bz], hd, 0.38, STEEL);
+    neon.add([L.bx + L.d.x * 0.6, L.hy + L.d.y * 0.6, L.bz + L.d.z * 0.6],
+             [7.0, 6.8, 6.2], 0.22, 0);
+  }
+  // 給電の臍帯。船と施設をつなぐ一本があるかないかで、
+  // 「停泊している船」と「たまたまそこに落ちている船」が分かれる。
+  // 水中の綱はぴんと張らない——自重で垂れる形を作る
+  {
+    const a = [DOCK[0].bx, DOCK[0].hy - 0.5, DOCK[0].bz];
+    const sh = Math.sin(NAUTILUS.heading), ch = Math.cos(NAUTILUS.heading);
+    // 留め先は司令塔の天。船体の背には鋸歯が並んでいるので、
+    // そこへ向けて垂らすと綱が船の中をくぐる。たるみも
+    // 控えめにしないと同じことになる(はじめ 2.4m 垂らして貫通した)
+    const b = [NAUTILUS.x + sh * -0.5, NAUTILUS.y + 4.6, NAUTILUS.z + ch * -0.5];
+    const SAG = 1.0, N = 8;
+    let prev = a;
+    for (let i = 1; i <= N; i++) {
+      const t = i / N;
+      const cur = [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t - Math.sin(t * Math.PI) * SAG,
+        a[2] + (b[2] - a[2]) * t,
+      ];
+      strut(S, prev, cur, 0.075, STEEL2);
+      prev = cur;
+    }
+  }
+
   // ---- 連絡通路 ----
   //
   // ここは一度ひどいものを置いていた。区画を 34m から 48m へ動かした
@@ -790,7 +923,7 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
       const t = i / N;
       const r = R0 + (R1 - R0) * t;
       // ふだんは海底に沿う。区画の手前でだけ、取り付き高さへ登る
-      const onFloor = FLOOR_Y + rise(r) + 1.75;
+      const onFloor = FLOOR_Y + riseAt(r) + 1.75;
       const atDoor = mBase + 1.2;
       const k = THREE.MathUtils.smoothstep(t, 0.70, 1.0);
       link.push([Math.cos(ma) * r, onFloor * (1 - k) + atDoor * k, Math.sin(ma) * r, r]);
@@ -818,7 +951,7 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
       prev = ring;
       // 支柱。3つおきに海底まで下ろす
       if (i % 3 === 1 && i < N - 1) {
-        const gy = FLOOR_Y + rise(r);
+        const gy = FLOOR_Y + riseAt(r);
         strut(S, [px, py - rad * 0.7, pz], [px, gy - 0.15, pz], 0.16, STEEL2);
         strut(S, [px, gy + 0.35, pz], [px, gy - 0.1, pz], 0.55, STEEL2);
       }
@@ -839,7 +972,7 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
     const a = wa + (i % 2 ? 0.16 : -0.16);
     const r = 23 + (i % 3) * 5.5;
     const bx = Math.cos(a) * r, bz = Math.sin(a) * r;
-    const by = FLOOR_Y + rise(r);
+    const by = FLOOR_Y + riseAt(r);
     const h = 6.5 + (i % 2) * 1.6;
     strut(S, [bx, by, bz], [bx, by + h, bz], 0.20, STEEL2);
     // 三脚。1本足だと棒が浮いているように見える
@@ -1326,7 +1459,7 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
 // --- 形の道具 ---
 
 /** 2点を結ぶ角柱 */
-function strut(M, a, b, rad, col) {
+export function strut(M, a, b, rad, col) {
   const ax = b[0] - a[0], ay = b[1] - a[1], az = b[2] - a[2];
   const L = Math.hypot(ax, ay, az) || 1;
   const dx = ax / L, dy = ay / L, dz = az / L;
