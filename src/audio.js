@@ -188,6 +188,62 @@ export class UnderwaterAudio {
     };
     this._scheduleCreak = scheduleCreak;
 
+    // --- 与圧殻の身じろぎ ---
+    //
+    // ポータルエリアが「海の底の建物」に見えなかった理由のひとつは、
+    // 音が何も起きていなかったこと。低い機械音だけだと、
+    // どこかの地下室と区別がつかない。
+    //
+    // 深さ何百mの殻の中で耳につくのは、水圧を受けた鋼がときどき
+    // 鳴る音と、遠くの機械が返す反響。どちらも「外側に途方もない
+    // 水がある」ことだけを伝える音で、姿は見せない。
+    const scheduleHull = () => {
+      if (!this.enabled || this.zone !== 'hub') { this.hullTimer = null; return; }
+      const ctx = this.ctx;
+      const t0 = ctx.currentTime;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t0);
+      g.connect(this.master);
+      g.connect(this._reverb());
+      if (Math.random() < 0.62) {
+        // 鋼が鳴る。太い金属をゆっくり撓ませたときの音なので、
+        // 立ち上がりは遅く、音程はわずかに下がる
+        const dur = 1.8 + Math.random() * 2.6;
+        const osc = ctx.createOscillator();
+        osc.type = 'triangle';
+        const f0 = 46 + Math.random() * 38;
+        osc.frequency.setValueAtTime(f0, t0);
+        osc.frequency.exponentialRampToValueAtTime(f0 * 0.82, t0 + dur);
+        // 倍音を1本だけ足す。純音のままだと鋼ではなく笛になる
+        const h = ctx.createOscillator();
+        h.type = 'sine';
+        h.frequency.value = f0 * 2.94;
+        const hg = ctx.createGain();
+        hg.gain.value = 0.22;
+        const lp = ctx.createBiquadFilter();
+        lp.type = 'lowpass';
+        lp.frequency.value = 420;
+        g.gain.exponentialRampToValueAtTime(0.055 + Math.random() * 0.03, t0 + dur * 0.35);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+        osc.connect(lp); h.connect(hg).connect(lp); lp.connect(g);
+        osc.start(); h.start();
+        osc.stop(t0 + dur); h.stop(t0 + dur);
+      } else {
+        // 遠くの音響測深。短い一発が、長い残響を連れて戻ってくる。
+        // 減衰を速くしないと電子音になる
+        const dur = 0.16;
+        const osc = ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(1180 + Math.random() * 320, t0);
+        g.gain.exponentialRampToValueAtTime(0.020, t0 + 0.012);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+        osc.connect(g);
+        osc.start(); osc.stop(t0 + dur);
+      }
+      this.hullTimer = setTimeout(scheduleHull, 5000 + Math.random() * 12000);
+    };
+    this._scheduleHull = scheduleHull;
+
     // 磯で聞こえるのは、寄せて砕けて引く波。
     // ほかのゾーンの環境音は「途切れずに続くざわめき」だが、
     // これだけは形のある一発ずつの出来事で、数秒おきに繰り返す。
@@ -266,10 +322,12 @@ export class UnderwaterAudio {
     clearTimeout(this.rumbleTimer); this.rumbleTimer = null;
     clearTimeout(this.creakTimer); this.creakTimer = null;
     clearTimeout(this.waveTimer); this.waveTimer = null;
+    clearTimeout(this.hullTimer); this.hullTimer = null;
     if (abyss) this._scheduleRumble();
     else if (!shore && !hub) this._scheduleBubble();
     if (ice) this._scheduleCreak();
     if (shore) this._scheduleWave();
+    if (hub) this._scheduleHull();
   }
 
   // 白色雑音。砕ける波に使う。1本を使いまわす
@@ -502,6 +560,11 @@ export class UnderwaterAudio {
     this.enabled = false;
     if (this.bubbleTimer) { clearTimeout(this.bubbleTimer); this.bubbleTimer = null; }
     if (this.rumbleTimer) { clearTimeout(this.rumbleTimer); this.rumbleTimer = null; }
+    // 止めるときは全部止める。ここに書き忘れた種類のタイマーは、
+    // 音を切ったあとも鳴り続ける
+    if (this.creakTimer) { clearTimeout(this.creakTimer); this.creakTimer = null; }
+    if (this.waveTimer) { clearTimeout(this.waveTimer); this.waveTimer = null; }
+    if (this.hullTimer) { clearTimeout(this.hullTimer); this.hullTimer = null; }
     if (this.master && this.ctx) {
       this.master.gain.setTargetAtTime(0, this.ctx.currentTime, 0.4);
     }
