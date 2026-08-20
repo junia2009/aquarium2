@@ -989,6 +989,22 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
     g.setIndex(idx);
     // 葉は薄いので裏も見える。法線はシェーダで作るので computeVertexNormals は不要
     g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(N * vpb * 3), 3));
+
+    // 境界球を自分で入れる。
+    //
+    // これが無いと「近づくと海藻がまるごと消える」。position に入って
+    // いるのは葉のローカル座標(±0.2m くらい)で、世界のどこに生えて
+    // いるかは aRoot として頂点シェーダで足している。three は
+    // position しか見ないので、境界球は原点の小さな球のままになる。
+    // 原点が画角から外れた瞬間——つまり施設から離れて外を向いた瞬間
+    // ——に、海藻が1枚残らず視錐台カリングで消える。
+    //
+    // 実際に生えている範囲を測って入れておけば、正しく判定される
+    let far = 0;
+    for (const [bx, by, bz, h] of blades) {
+      far = Math.max(far, Math.hypot(bx, by + h, bz) + h * 0.5);
+    }
+    g.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), far + 1.0);
     group.add(new THREE.Mesh(g, mat(LIFE_FRAG,
       { vertexShader: KELP_VERT, side: THREE.DoubleSide })));
   }
