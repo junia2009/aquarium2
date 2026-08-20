@@ -898,7 +898,25 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, inout vec3 n, vec3 V, float tint, float part,
 }
 `;
 
-export const FISH_FRAGMENT = UW_FRAG_PRELUDE + PATTERN_GLSL + /* glsl */ `
+// 光と霧の当て方だけを、外から差し替えられるようにする。
+//
+// 同じ魚を「水槽の中」と「海底施設の外」の両方で使いたい。形も模様も
+// 泳ぎ方も共有できるが、その2つは光源も霧もまるで違う——水槽には
+// 太陽と水面と集光があり、深海の施設の外には投光器しかない。
+// 環境だけを差し込み口にしておけば、モデルは1つで足りる。
+//
+// 既定は水槽の中。既存のゾーンはこれまでと1文字も変わらない。
+export const FISH_ENV_TANK = /* glsl */ `
+  vec3 fishLight(vec3 a, vec3 n, vec3 wp, vec3 V, float sp, float si) {
+    return underwaterLight(a, n, wp, V, sp, si);
+  }
+  vec3 fishCaustics(vec3 wp, vec3 n) { return causticsLight(wp, n, 0.55); }
+  vec3 fishFog(vec3 c, vec3 wp) { return applyUnderwaterFog(c, wp); }
+  vec3 fishRim() { return uAmbTop; }
+`;
+
+export function buildFishFragment(env = FISH_ENV_TANK) {
+  return UW_FRAG_PRELUDE + PATTERN_GLSL + env + /* glsl */ `
 varying vec2 vBodyUV;
 varying vec3 vWorldPos;
 varying vec3 vNormal;
@@ -922,10 +940,10 @@ void main() {
   // 鏡面ローブの鋭さも艶に合わせる。艶のない体に鋭いローブを掛けると、
   // 回転体の上側面に沿って幅3画素の白い線が一本走る——鱗や濡れた皮膚なら
   // それでいいが、羽毛や鮫肌には「鈍く広い照り」しか出ない
-  vec3 col = underwaterLight(albedo, n, vWorldPos, V,
-                             mix(11.0, 48.0, clamp(glossMul, 0.0, 1.0)), 0.35 * glossMul);
+  vec3 col = fishLight(albedo, n, vWorldPos, V,
+                       mix(11.0, 48.0, clamp(glossMul, 0.0, 1.0)), 0.35 * glossMul);
   // 体表に落ちる揺らめく光
-  col += causticsLight(vWorldPos, n, 0.55) * albedo * 2.0;
+  col += fishCaustics(vWorldPos, n) * albedo * 2.0;
   // 逆光時のひれの透過。尾びれは付け根から徐々に薄くなるので、
   // 透過も尾柄から滑らかに立ち上げて境目を見せない
   if (vPart > 0.5) {
@@ -936,17 +954,20 @@ void main() {
   // 銀鱗のリム(水中でのぼんやりした輪郭光)。
   // 艶のある魚ほど強く。マットな体で強く出すと、成形品の縁のように光る
   float fr = pow(1.0 - abs(dot(n, V)), 3.0);
-  col += uAmbTop * fr * (0.07 + 0.20 * glossMul);
+  col += fishRim() * fr * (0.07 + 0.20 * glossMul);
 
   // 生物発光は外からの光に依らない。真っ暗でもここだけが光る
   col += emit;
-  col = applyUnderwaterFog(col, vWorldPos);
+  col = fishFog(col, vWorldPos);
   gl_FragColor = vec4(col, finAlpha);
   ${UW_FRAG_OUTPUT}
 }
 `;
+}
 
-export function createFishMaterial({ pattern, len, swim, vertAxis = 0, wing = null, species = 0, neck = null, foot = null, tail = null }) {
+export const FISH_FRAGMENT = buildFishFragment();
+
+export function createFishMaterial({ pattern, len, swim, vertAxis = 0, wing = null, species = 0, neck = null, foot = null, tail = null, env = null }) {
   return new THREE.ShaderMaterial({
     uniforms: {
       ...baseUniforms(),
@@ -967,7 +988,8 @@ export function createFishMaterial({ pattern, len, swim, vertAxis = 0, wing = nu
       uSpecies: { value: species },
     },
     vertexShader: FISH_VERTEX,
-    fragmentShader: FISH_FRAGMENT,
+    // env を渡さないかぎり、これまでと同じ文字列がそのまま使われる
+    fragmentShader: env ? buildFishFragment(env) : FISH_FRAGMENT,
     side: THREE.DoubleSide,
     transparent: false,
   });

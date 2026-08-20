@@ -1429,7 +1429,7 @@ export const HUB = {
         return best;
       },
       update(dt, camera) {
-        outside?.update(U.uTime.value);
+        outside?.update(dt, U.uTime.value);
         // 近づいたハッチが明るくなる。どれが「いま入れるもの」かを
         // 光の強さで示す。文字より先に光のほうが目に入る
         plu.uPortalN.value = portals.length;

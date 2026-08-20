@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { baseUniforms } from '../env.js';
 import { UW_FRAG_PRELUDE, UW_FRAG_OUTPUT } from '../glsl.js';
+import { FISH_SHAPES } from '../creatures/fishGeometry.js';
+import { createFishMaterial } from '../creatures/fishMaterial.js';
+import { School, makeSchoolInstanceAttr } from '../creatures/school.js';
 
 // ============ プロテウスの外 ============
 //
@@ -274,9 +277,6 @@ const ROCK = [0.088, 0.086, 0.080];
 // 海藻。褐藻はよく光を返すので、岩よりはっきり明るく取る。
 // 暗く置くと、育成灯の下以外では「あるのに見えない」ことになる
 const KELP = [0.105, 0.195, 0.115];
-// 魚の体色。投光器の錐の中を通るので、反射率をそのまま銀色にすると
-// 真っ白に飛んで貼り付けたように見える。控えめに取る
-const FISH = [0.072, 0.082, 0.094];
 
 // --- 海藻 ---
 //
@@ -313,33 +313,8 @@ const KELP_VERT = /* glsl */ `
   }
 `;
 
-// --- 魚 ---
-//
-// 位置と向きは CPU で毎フレーム置く(数十匹なら誤差の範囲)。
-// 尾の振りだけは頂点シェーダに任せる——1匹ごとに形が違うので、
-// CPU で頂点を触ると匹数ぶんの配列更新になってしまう。
-const FISH_VERT = /* glsl */ `
-  uniform float uTime;
-  attribute vec3 aCol;
-  attribute float aPhase;
-  varying vec3 vCol;
-  varying vec3 vN;
-  varying vec3 vW;
-  void main() {
-    vec3 p = position;
-    // 尾を振る。頭は動かず、後ろへ行くほど大きく振れる
-    float tailT = clamp(-p.z / 0.55, 0.0, 1.0);
-    p.x += sin(uTime * 7.0 + aPhase - tailT * 2.4) * tailT * tailT * 0.16;
-    vec4 wp = modelMatrix * instanceMatrix * vec4(p, 1.0);
-    vW = wp.xyz;
-    vN = normalize(mat3(modelMatrix) * mat3(instanceMatrix) * normal);
-    vCol = aCol;
-    gl_Position = projectionMatrix * viewMatrix * wp;
-  }
-`;
-
-// 魚と海藻は同じ照らし方でよい。金属ではないので、
-// 錆の縦垂れや生物付着の項が要らないぶん HULL_FRAG より軽い
+// 海藻の照らし方。金属ではないので、錆の縦垂れや生物付着の項が
+// 要らないぶん HULL_FRAG より軽い
 const LIFE_FRAG = /* glsl */ `
   varying vec3 vCol;
   varying vec3 vN;
@@ -905,37 +880,76 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop) {
   //
   // 投光器の光の中を横切るものが要る。動くものが1つも無いと、
   // どれだけ物を置いても「模型」から出られない。
+  //
+  // ここで自前の魚を作りかけたが、それは間違いだった。大水槽の
+  // マイワシが既にある——紡錘形の体、銀鱗、体側の黒斑列、尾の振り、
+  // ボイドの群泳まで揃っている。違うのは光と霧だけなので、
+  // そこだけ差し替えて同じモデルを持ってくる(FISH_ENV は下で作る)。
+  //
   // 深海の魚は群れないが、ここは投光器に照らされた餌場なので、
-  // 集まってくる理由のほうはある
-  const fish = (() => {
-    const COUNT = 64;
-    const geo = fishGeometry();
-    const cols = new Float32Array(geo.attributes.position.count * 3);
-    for (let i = 0; i < cols.length; i += 3) {
-      cols[i] = FISH[0]; cols[i + 1] = FISH[1]; cols[i + 2] = FISH[2];
+  // 集まってくる理由のほうはある。
+  const FISH_ENV = EXT_FOG + FLOOD + /* glsl */ `
+    vec3 fishLight(vec3 a, vec3 n, vec3 wp, vec3 V, float sp, float si) {
+      // 受ける光を絞る。
+      //
+      // マイワシの体側は模様シェーダのなかで反射率 0.8 前後の「銀」に
+      // なっている。水槽の柔らかい光ならそれでいいが、投光器の錐は
+      // 桁違いに強いので、そのまま掛けると真っ白に飛ぶ——実際、
+      // 窓の外で光る紙片のようになっていた。海底(反射率 0.1)と
+      // 釣り合う明るさまで落とす
+      vec3 col = a * (vec3(0.030, 0.046, 0.062) + floodLight(wp, n) * 0.22);
+      // 銀鱗のぎらつき。錐の中を横切った個体だけが一瞬強く光る
+      col += floodLight(wp, normalize(n + V * 0.6)) * si * 0.10;
+      return col;
     }
-    geo.setAttribute('aCol', new THREE.BufferAttribute(cols, 3));
-    const ph = new Float32Array(geo.attributes.position.count);
-    geo.setAttribute('aPhase', new THREE.BufferAttribute(ph, 1));
-    const mesh = new THREE.InstancedMesh(geo,
-      mat(LIFE_FRAG, { vertexShader: FISH_VERT, side: THREE.DoubleSide }), COUNT);
-    mesh.frustumCulled = false;
-    // 1匹ずつ「どの軌道をどの速さで回るか」だけ決めておく
-    const paths = [];
-    for (let i = 0; i < COUNT; i++) {
-      paths.push({
-        r: hullR + 2.5 + noise() * 15,
-        y: FLOOR_Y + 1.0 + noise() * 7.5,
-        w: (noise() < 0.5 ? -1 : 1) * (0.055 + noise() * 0.075),
-        ph: noise() * Math.PI * 2,
-        bobA: 0.3 + noise() * 0.8,
-        bobW: 0.5 + noise() * 0.9,
-        s: 0.55 + noise() * 0.85,
-      });
-    }
-    group.add(mesh);
-    return { mesh, paths, COUNT };
-  })();
+    // 太陽が届かない深さなので、水面の集光は無い
+    vec3 fishCaustics(vec3 wp, vec3 n) { return vec3(0.0); }
+    vec3 fishFog(vec3 c, vec3 wp) { return extFog(c, wp); }
+    vec3 fishRim() { return vec3(0.055, 0.100, 0.130); }
+  `;
+  const schools = [];
+  {
+    const geo = FISH_SHAPES.sardine();
+    geo.scale(0.5, 0.5, 0.5);
+    const N = 20;
+    makeSchoolInstanceAttr(geo, N, [0.8, 1.15]);
+    const fishMat = createFishMaterial({
+      pattern: 0, len: 0.5,
+      swim: { freq: 11, amp: 0.09, waveNum: 1.1, headAmp: 0.12, flapFreq: 6 },
+      env: FISH_ENV,
+    });
+    // 大きな群れ1つより、小さな群れを舷窓ごとに散らすほうがいい。
+    // どの窓からも1群は見えるし、群れどうしが別々に動くので
+    // 「そこに海がある」感じが強くなる。
+    //
+    // 1か所に3群だけ置いたときは、窓によっては何も泳いでおらず、
+    // 見える窓では固まって「白い塊」になっていた
+    const spots = winAngles.length ? winAngles : [0, 2.1, 4.2];
+    spots.forEach((a, k) => {
+      const r = 19 + (k % 3) * 2.0;
+      const mesh = new THREE.InstancedMesh(geo, fishMat, N);
+      mesh.frustumCulled = false;
+      group.add(mesh);
+      schools.push(new School({
+        mesh, count: N, seed: 11 + k * 7,
+        center: new THREE.Vector3(Math.cos(a) * r, FLOOR_Y + 6.0, Math.sin(a) * r),
+        // 広めに散らす。狭いと1個の塊になって、魚の群れではなく
+        // 光る物体が1つ浮いているように見える
+        homeRadius: 8.5,
+        params: {
+          maxSpeed: 3.2, minSpeed: 1.1, perception: 3.0, sepDist: 1.5,
+          wSep: 2.0, wCoh: 0.45,
+          bodyRadius: 0.18, avoidRange: 1.0,
+          // 施設の甲板の高さより下は、共通の地形クランプが持ち上げる。
+          // 争わせても意味がないので、初めからその上を泳がせる
+          yMin: deckY + 1.0, yMax: domeTop + 1.5,
+        },
+      }));
+    });
+  }
+  // 群れが殻へ寄りすぎたら押し戻す半径。
+  // ボイドには施設の形が見えていないので、最後に効かせる安全弁
+  const FISH_KEEP = hullR + 1.3;
 
   // ---- 投光器の器具と発光面 ----
   const F = new Buf();
@@ -1145,101 +1159,35 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop) {
   }
   neon.build(group);
 
-  // ---- 魚を泳がせる ----
-  const _m = new THREE.Matrix4();
-  const _q = new THREE.Quaternion();
-  const _p = new THREE.Vector3();
-  const _dir = new THREE.Vector3();
-  // 使い回しの一時変数は、1つの呼び出しの中で2役を兼ねさせないこと。
-  // lookAt(eye, target, up) の target と up に同じベクトルを渡していて、
-  // 向きがまるごと壊れていた
-  const _zero = new THREE.Vector3(0, 0, 0);
-  const _up = new THREE.Vector3(0, 1, 0);
-  const _scl = new THREE.Vector3(1, 1, 1);
-
   return {
-    update(t) {
+    update(dt, t) {
       // 2.6秒周期でひと呼吸。ずっと点いていると人工物に見えない
       const ph = (t % 2.6) / 2.6;
       const on = Math.exp(-Math.pow((ph - 0.12) * 9.0, 2));
       beacon.material.color.setRGB(1.0 * (0.10 + on), 0.16 * (0.10 + on), 0.10 * (0.10 + on));
       beacon.scale.setScalar(0.6 + on * 0.7);
 
-      // 魚。円軌道を回りながら上下に揺れる。
-      // 向きは進行方向そのものにする——ここを揃えないと、
-      // 魚が横滑りしていく「板」に見える
-      for (let i = 0; i < fish.COUNT; i++) {
-        const q = fish.paths[i];
-        const a = q.ph + t * q.w;
-        const y = q.y + Math.sin(t * q.bobW + q.ph) * q.bobA;
-        _p.set(Math.cos(a) * q.r, y, Math.sin(a) * q.r);
-        // 接線 + 上下の速度成分
-        _dir.set(-Math.sin(a) * q.w, Math.cos(t * q.bobW + q.ph) * q.bobW * q.bobA / q.r,
-                 Math.cos(a) * q.w).normalize();
-        // 幾何は +Z が前。Matrix4.lookAt(eye, target, up) は
-        // 「+Z 列 = normalize(eye - target)」なので、eye に進行方向、
-        // target に原点を渡せば +Z がそのまま進行方向を向く
-        _m.lookAt(_dir, _zero, _up);
-        _q.setFromRotationMatrix(_m);
-        _m.compose(_p, _q, _scl.set(q.s, q.s, q.s));
-        fish.mesh.setMatrixAt(i, _m);
+      for (const sc of schools) {
+        sc.update(dt);
+        // ボイドには施設の形が見えていない。回遊の目標を殻の外に
+        // 置いてあるので滅多に入ってこないが、稀に壁を抜ける。
+        // 抜けた個体だけ半径方向へ押し戻し、内向きの速度も殺す
+        for (let i = 0; i < sc.count; i++) {
+          const q = sc.pos[i];
+          const r = Math.hypot(q.x, q.z);
+          if (r >= FISH_KEEP || r < 1e-3) continue;
+          const nx = q.x / r, nz = q.z / r;
+          q.x = nx * FISH_KEEP; q.z = nz * FISH_KEEP;
+          const v = sc.vel[i];
+          const vn = v.x * nx + v.z * nz;
+          if (vn < 0) { v.x -= vn * nx * 2; v.z -= vn * nz * 2; }
+        }
       }
-      fish.mesh.instanceMatrix.needsUpdate = true;
     },
   };
 }
 
 // --- 形の道具 ---
-
-/**
- * 魚1匹ぶんの形。全長 0.55m ほど。
- *
- * 遠くを泳ぐ小魚なので、断面は4角で足りる。大事なのは輪郭で、
- * 「頭が丸く、腹がふくらみ、尾へ細って、尾びれが立つ」——
- * この順が出ていれば、何ポリゴンでも魚に見える。
- */
-function fishGeometry() {
-  // [z(前が+), 半幅, 半高, 中心の上下]
-  const SPINE = [
-    [0.26, 0.005, 0.010, 0.00],
-    [0.20, 0.035, 0.048, 0.00],
-    [0.10, 0.052, 0.075, 0.00],
-    [-0.02, 0.048, 0.070, -0.005],
-    [-0.16, 0.030, 0.046, -0.005],
-    [-0.30, 0.014, 0.026, 0.00],
-    [-0.40, 0.006, 0.014, 0.00],
-  ];
-  const SIDES = 6;
-  const pos = [], idx = [];
-  const rings = SPINE.map(([z, hw, hh, oy]) => {
-    const ring = [];
-    for (let k = 0; k < SIDES; k++) {
-      const t = (k / SIDES) * Math.PI * 2;
-      ring.push(pos.length / 3);
-      pos.push(Math.cos(t) * hw, oy + Math.sin(t) * hh, z);
-    }
-    return ring;
-  });
-  for (let i = 0; i < rings.length - 1; i++) {
-    for (let k = 0; k < SIDES; k++) {
-      const k2 = (k + 1) % SIDES;
-      idx.push(rings[i][k], rings[i][k2], rings[i + 1][k2]);
-      idx.push(rings[i][k], rings[i + 1][k2], rings[i + 1][k]);
-    }
-  }
-  // 尾びれ。二叉に切れた縦の板
-  const tf = (z, y) => { pos.push(0, y, z); return pos.length / 3 - 1; };
-  const t0 = tf(-0.38, 0.0), t1 = tf(-0.55, 0.115), t2 = tf(-0.50, 0.0), t3 = tf(-0.55, -0.115);
-  idx.push(t0, t1, t2, t0, t2, t3);
-  // 背びれ
-  const d0 = tf(0.06, 0.072), d1 = tf(-0.10, 0.155), d2 = tf(-0.20, 0.045);
-  idx.push(d0, d1, d2);
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
-  g.setIndex(idx);
-  g.computeVertexNormals();
-  return g;
-}
 
 /** 2点を結ぶ角柱 */
 function strut(M, a, b, rad, col) {
