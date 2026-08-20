@@ -708,9 +708,64 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop) {
   const mBase = FLOOR_Y + rise(MD) + 0.4;
   const mx = Math.cos(ma) * MD, mz = Math.sin(ma) * MD;
   cylinder(S, mx, mBase, mz, 5.2, 7.0, STEEL);
-  strut(S, [mx, mBase + 4.0, mz],
-        [Math.cos(ma) * (hullR + 1.0), deckY + 1.6, Math.sin(ma) * (hullR + 1.0)],
-        0.75, STEEL2);
+
+  // ---- 連絡通路 ----
+  //
+  // ここは一度ひどいものを置いていた。区画を 34m から 48m へ動かした
+  // ときに見直さなかったので、**34m を無支持で渡る裸の管**が水中を
+  // 斜めに突っ切っていた。何なのか分からない棒として画面を横切る。
+  //
+  // 直すべき点は3つあった。
+  //   ・水中を通していた。実物の海底トンネルは水圧のかかる橋を架けず、
+  //     海底に載せて短い脚で支える。地形に沿わせれば視界も切らない
+  //   ・支えが無かった。長い横棒は、支えが見えて初めて構造物になる
+  //   ・細すぎた。人が通る通路なら、直径は2m以上ないと嘘になる
+  const link = [];
+  {
+    const N = 18;
+    const R0 = hullR + 0.2, R1 = MD - 5.4;
+    for (let i = 0; i <= N; i++) {
+      const t = i / N;
+      const r = R0 + (R1 - R0) * t;
+      // ふだんは海底に沿う。区画の手前でだけ、取り付き高さへ登る
+      const onFloor = FLOOR_Y + rise(r) + 1.75;
+      const atDoor = mBase + 1.2;
+      const k = THREE.MathUtils.smoothstep(t, 0.70, 1.0);
+      link.push([Math.cos(ma) * r, onFloor * (1 - k) + atDoor * k, Math.sin(ma) * r, r]);
+    }
+    const SIDES = 8;
+    let prev = null;
+    link.forEach(([px, py, pz, r], i) => {
+      // 継ぎ目のリング。1つおきに少し太らせると、環の並んだ管に見える
+      const rad = (i % 2 === 0) ? 1.30 : 1.14;
+      const ring = [];
+      for (let k = 0; k < SIDES; k++) {
+        const th = (k / SIDES) * Math.PI * 2;
+        // 断面は「進行方向に垂直な面」。ここは径方向へ延びる管なので、
+        // 円周方向と上下で張ればよい
+        const ox = -Math.sin(ma) * Math.cos(th) * rad;
+        const oz = Math.cos(ma) * Math.cos(th) * rad;
+        ring.push(S.v(px + ox, py + Math.sin(th) * rad, pz + oz, STEEL));
+      }
+      if (prev) {
+        for (let k = 0; k < SIDES; k++) {
+          const k2 = (k + 1) % SIDES;
+          S.quad(prev[k], prev[k2], ring[k2], ring[k]);
+        }
+      }
+      prev = ring;
+      // 支柱。3つおきに海底まで下ろす
+      if (i % 3 === 1 && i < N - 1) {
+        const gy = FLOOR_Y + rise(r);
+        strut(S, [px, py - rad * 0.7, pz], [px, gy - 0.15, pz], 0.16, STEEL2);
+        strut(S, [px, gy + 0.35, pz], [px, gy - 0.1, pz], 0.55, STEEL2);
+      }
+      // 天面の航路灯。通路そのものが道しるべになる
+      if (i % 2 === 0) {
+        neon.add([px, py + rad + 0.12, pz], [3.4, 1.5, 0.28], 0.065, 0);
+      }
+    });
+  }
 
   // 観測やぐら。舷窓1枚につき1本、目の高さに立つ目印を置く。
   //
@@ -1145,11 +1200,14 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop) {
   {
     const G = new Buf();
     const n = 16;
+    // 連絡通路と同じ線の上に並べると、杭が通路の中に埋まる。
+    // 横へ 3.4m ずらして、通路に沿う縁石灯にする
+    const sx = -Math.sin(ma) * 3.4, sz = Math.cos(ma) * 3.4;
     for (let i = 1; i <= n; i++) {
       const t = i / (n + 1);
       const r = hullR + 3.0 + (MD - hullR - 5.0) * t;
-      const px = Math.cos(ma) * r, pz = Math.sin(ma) * r;
-      const py = FLOOR_Y + riseAt(r);
+      const px = Math.cos(ma) * r + sx, pz = Math.sin(ma) * r + sz;
+      const py = FLOOR_Y + riseAt(Math.hypot(px, pz));
       // 短い杭の上に載せる。泥に直に置くと埋まって見えない
       strut(G, [px, py - 0.1, pz], [px, py + 0.42, pz], 0.045, STEEL2);
       // 順に流れる位相。滑走路の誘導灯と同じで、進む向きが分かる
