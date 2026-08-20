@@ -28,6 +28,9 @@ export const GREAT_TANK = {
   terrain: reefTerrain,
   env: {
     fogColor: new THREE.Color('#0b3a58'),
+    // ポータルの色。霧の色をそのまま使うと、正規化した時点で
+    // どれも同じ青になって行き先が見分けられない。外洋の青。いちばん広い水槽
+    portalTint: new THREE.Color('#1e6fa8'),
     fogDensity: 0.024,
     ambTop: new THREE.Color('#3b87a8'),
     ambBottom: new THREE.Color('#07222f'),

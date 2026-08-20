@@ -36,6 +36,9 @@ export const DOLPHIN_POOL = {
   terrain: poolTerrain,
   env: {
     fogColor: new THREE.Color('#12658c'),
+    // ポータルの色。霧の色をそのまま使うと、正規化した時点で
+    // どれも同じ青になって行き先が見分けられない。浅い砂地のターコイズ
+    portalTint: new THREE.Color('#2fb7c9'),
     fogDensity: 0.023,
     ambTop: new THREE.Color('#4a9fbe'),
     ambBottom: new THREE.Color('#1b4f61'),

@@ -55,6 +55,9 @@ export const SHORE = {
   env: {
     // 浅い岩礁の水。砂ではなく岩と海藻の上なので、青緑に寄る
     fogColor: new THREE.Color('#1c6a70'),
+    // ポータルの色。霧の色をそのまま使うと、正規化した時点で
+    // どれも同じ青になって行き先が見分けられない。海藻の緑がかった浅瀬
+    portalTint: new THREE.Color('#2f9c78'),
     fogDensity: 0.030,
     ambTop: new THREE.Color('#63a8ad'),
     ambBottom: new THREE.Color('#22484a'),

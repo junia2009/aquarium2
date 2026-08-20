@@ -64,6 +64,9 @@ body {
   font-size: 12.5px; cursor: pointer; transition: background 0.15s;
   white-space: nowrap; flex: 0 0 auto;
 }
+/* .chip は display を指定していないので既定の hidden が効くが、
+   flex アイテムとして扱われる場面もあるため明示しておく */
+.chip[hidden] { display: none; }
 .chip:hover { background: rgba(20, 60, 90, 0.7); }
 .chip.on { border-color: var(--accent); color: var(--accent); }
 /* 餌やりだけは押してほしいボタンなので、少し前に出す。
@@ -73,22 +76,23 @@ body {
 .chip.feed.cooling { opacity: 0.45; pointer-events: none; }
 #fps { font-size: 10px; color: rgba(140, 180, 200, 0.55); padding-left: 4px; }
 
-/* ---- ゾーン切替 ---- */
-#zoneBar {
+/* ---- ポータルへ戻る ----
+   以前はここに水槽のタブを横並びにしていた。5つで既に画面から
+   はみ出していて、増えるほど横スクロールが伸びる形だった。
+   行き先を選ぶのはポータルエリアの仕事にして、UI には
+   「戻る」1つだけを残す。水槽が増えてもこのボタンは増えない */
+#hubBtn {
   position: absolute; top: 22px; left: 50%; transform: translateX(-50%);
-  display: flex; gap: 8px; z-index: 20;
+  z-index: 20; cursor: pointer; font-family: inherit;
   background: var(--glass); border: 1px solid var(--glass-line);
-  backdrop-filter: blur(10px); border-radius: 14px; padding: 5px;
+  backdrop-filter: blur(10px); border-radius: 14px;
+  padding: 10px 18px; font-size: 13px; color: var(--ink);
+  display: flex; align-items: center; gap: 8px; white-space: nowrap;
+  transition: background 0.18s;
 }
-#zoneBar .zone {
-  background: transparent; border: none; color: var(--dim);
-  border-radius: 10px; padding: 8px 15px; font-size: 13px; cursor: pointer;
-  display: flex; align-items: center; gap: 7px; white-space: nowrap;
-  font-family: inherit; transition: background 0.18s, color 0.18s;
-}
-#zoneBar .zone .zi { font-size: 16px; }
-#zoneBar .zone:hover { color: var(--ink); background: rgba(30, 78, 108, 0.5); }
-#zoneBar .zone.on { background: rgba(40, 104, 140, 0.85); color: #fff; }
+#hubBtn[hidden] { display: none; }
+#hubBtn .hi { font-size: 16px; }
+#hubBtn:hover { background: rgba(30, 78, 108, 0.6); }
 
 /* ---- 図鑑パネル ---- */
 #panelToggle {
@@ -168,13 +172,9 @@ body {
   #panel { width: 86%; }
   #hud-title h1 { font-size: 20px; }
   #hud-title .hint { display: none; }
-  /* 狭い画面では上に3つ並べる余裕がないので、ゾーンタブを最下段へ敷き、
-     その上にコントロールを積む(横に並べると必ず重なる) */
-  #zoneBar {
-    top: auto; bottom: 16px; left: 50%; padding: 4px;
-    max-width: calc(100% - 24px); overflow-x: auto;
-  }
-  #zoneBar .zone { padding: 7px 12px; font-size: 12px; }
+  /* 狭い画面では上に3つ並べる余裕がないので、戻るボタンは最下段へ。
+     1つしかないので、もう横スクロールは要らない */
+  #hubBtn { top: auto; bottom: 16px; padding: 9px 16px; font-size: 12px; }
   #hud-left { left: 16px; right: 16px; bottom: 74px; }
   #hud-left .ctl input[type="range"] { width: 100%; }
   #fps { display: none; }

@@ -10,6 +10,7 @@ import { DOLPHIN_POOL } from './zones/dolphinPool.js';
 import { ABYSS } from './zones/abyss.js';
 import { ICE_SEA } from './zones/iceSea.js';
 import { SHORE } from './zones/shore.js';
+import { HUB } from './zones/hub.js';
 
 import { setupUI } from './ui.js';
 import { UnderwaterAudio } from './audio.js';
@@ -39,7 +40,10 @@ const audio = new UnderwaterAudio();
 
 // ================= ゾーン =================
 // 各ゾーンは初回訪問時に構築し、以降は表示の切り替えだけで往復する。
-const ZONES = [GREAT_TANK, DOLPHIN_POOL, ABYSS, ICE_SEA, SHORE];
+// 行き先(水槽)と、そこへ繋ぐポータルエリアは別もの。
+// TANKS が増えてもハッチが1枚増えるだけで、UI は伸びない
+const TANKS = [GREAT_TANK, DOLPHIN_POOL, ABYSS, ICE_SEA, SHORE];
+const ZONES = [HUB, ...TANKS];
 const DEFAULT_SUN = new THREE.Color('#ffefcf');
 const DEFAULT_LAMP = new THREE.Color('#eaf4ff');
 const built = new Map();
@@ -52,6 +56,9 @@ function buildZone(def) {
   // 生物の配置は地形に依存するので、構築前に地形を差し替えておく
   setTerrain(def.terrain);
   const inst = def.build(root, audio);
+  // ポータルエリアは、どこへ繋ぐかを外から受け取る。
+  // 施設のほうが水槽の一覧を持つと、追加のたびに2か所直すことになる
+  if (inst.setDestinations) inst.setDestinations(TANKS);
   built.set(def.key, { def, root, ...inst });
   return built.get(def.key);
 }
@@ -121,7 +128,8 @@ const _feedAt = new THREE.Vector3();
 const _fwd = new THREE.Vector3();
 
 const ui = setupUI({
-  zones: ZONES,
+  zones: TANKS,
+  onHub: () => enterZone(HUB.key),
   onFollow: (key) => {
     const t = active.followTargets[key];
     if (!t) return;
@@ -147,7 +155,8 @@ const ui = setupUI({
 });
 
 
-enterZone(GREAT_TANK.key);
+// 最初に降り立つのはポータルエリア。ここから各水槽へ入っていく
+enterZone(HUB.key);
 
 // ?debug=1 のときだけ、外からカメラを置ける口を開ける。
 // ヘッドレスの検証で「この位置からこの方向を見た絵」を撮るのに要る。
@@ -156,6 +165,9 @@ if (new URLSearchParams(location.search).has('debug')) {
   window.__dive = diveCam;
   window.__three = THREE;
   window.__zone = () => active;
+  // 検証から行き先を指定する口。以前はゾーンタブを click していたが、
+  // タブそのものが無くなった。UI の形に依存しない口を用意しておく
+  window.__go = (key) => enterZone(key);
   window.__env = U;
   // 検証用。撒いた餌が減っていくかを外から数える
   window.__feedCount = () => (active && active.feedLeft ? active.feedLeft() : -1);
@@ -184,7 +196,11 @@ canvas.addEventListener('pointerup', (e) => {
     -(e.clientY / window.innerHeight) * 2 + 1
   );
   _raycaster.setFromCamera(ndc, camera);
-  if (active && active.onTap) active.onTap(_raycaster.ray, _hitPoint);
+  if (!active || !active.onTap) return;
+  // ポータルは「タップされた行き先」を文字列で返してくる。
+  // ほかのゾーンの onTap は何も返さない
+  const dest = active.onTap(_raycaster.ray, _hitPoint);
+  if (dest && ZONES.some((z) => z.key === dest)) enterZone(dest);
 });
 
 // ================= リサイズ =================

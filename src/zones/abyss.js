@@ -61,6 +61,9 @@ export const ABYSS = {
   terrain: abyssTerrain,
   env: {
     fogColor: new THREE.Color('#01070d'),
+    // ポータルの色。霧の色をそのまま使うと、正規化した時点で
+    // どれも同じ青になって行き先が見分けられない。光の届かない藍。暗いことが行き先の性格
+    portalTint: new THREE.Color('#1b2a4e'),
     fogDensity: 0.030,
     ambTop: new THREE.Color('#07202c'),     // はるか上から届く、かすかな青
     ambBottom: new THREE.Color('#010509'),

@@ -245,20 +245,29 @@ export class UnderwaterAudio {
     const abyss = this.zone === 'abyss';
     const ice = this.zone === 'iceSea';
     const shore = this.zone === 'shore';
+    // ポータルエリアは与圧殻の内側。水の中ではあるが、鋼の箱に
+    // 囲まれているので、外洋のざわめきも泡も届かない。
+    // 残るのは低い機械音だけ——静かであることが「建物の中」を伝える
+    const hub = this.zone === 'hub';
     const now = this.ctx.currentTime;
     // 深海のざわめきは、浅い海よりさらに低くこもる。
     // 氷の海は逆に、蓋をされた空間なので高域がよく残って響く。
     // 磯は水の外に頭を出している場所なので、こもりがいちばん浅い
-    this.waterLP.frequency.setTargetAtTime(abyss ? 85 : ice ? 420 : shore ? 900 : 240, now, 1.5);
-    this.waterLFO.gain.setTargetAtTime(abyss ? 22 : ice ? 130 : 90, now, 1.5);
-    // 磯は波そのものが主役なので、下地のざわめきは絞る
-    this.master.gain.setTargetAtTime(abyss ? 0.13 : shore ? 0.10 : 0.16, now, 1.5);
+    this.waterLP.frequency.setTargetAtTime(
+      abyss ? 85 : ice ? 420 : shore ? 900 : hub ? 150 : 240, now, 1.5);
+    this.waterLFO.gain.setTargetAtTime(
+      abyss ? 22 : ice ? 130 : hub ? 14 : 90, now, 1.5);
+    // 磯は波そのものが主役なので、下地のざわめきは絞る。
+    // ポータルエリアはさらに静かに——次にどこへ行くかを決める場所なので、
+    // 音が主張しないほうがいい
+    this.master.gain.setTargetAtTime(
+      abyss ? 0.13 : shore ? 0.10 : hub ? 0.085 : 0.16, now, 1.5);
     clearTimeout(this.bubbleTimer); this.bubbleTimer = null;
     clearTimeout(this.rumbleTimer); this.rumbleTimer = null;
     clearTimeout(this.creakTimer); this.creakTimer = null;
     clearTimeout(this.waveTimer); this.waveTimer = null;
     if (abyss) this._scheduleRumble();
-    else if (!shore) this._scheduleBubble();
+    else if (!shore && !hub) this._scheduleBubble();
     if (ice) this._scheduleCreak();
     if (shore) this._scheduleWave();
   }

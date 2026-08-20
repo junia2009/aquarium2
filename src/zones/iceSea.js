@@ -33,6 +33,9 @@ export const ICE_SEA = {
   env: {
     // 冷たく澄んだ水。緑がかった青
     fogColor: new THREE.Color('#136683'),
+    // ポータルの色。霧の色をそのまま使うと、正規化した時点で
+    // どれも同じ青になって行き先が見分けられない。氷を透かした淡い水色
+    portalTint: new THREE.Color('#9fd8e8'),
     fogDensity: 0.013,
     ambTop: new THREE.Color('#6ea9c2'),
     ambBottom: new THREE.Color('#2c5b6e'),

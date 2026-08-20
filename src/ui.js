@@ -1,7 +1,7 @@
 import { U } from './env.js';
 
 // ============ UI(ゾーン切替・図鑑パネル・コントロール) ============
-export function setupUI({ zones, onFollow, onFree, onZone, onFeed, audio }) {
+export function setupUI({ zones, onFollow, onFree, onZone, onHub, onFeed, audio }) {
   const panel = document.getElementById('panel');
   const toggle = document.getElementById('panelToggle');
   const cards = document.getElementById('cards');
@@ -10,7 +10,7 @@ export function setupUI({ zones, onFollow, onFree, onZone, onFeed, audio }) {
   const soundBtn = document.getElementById('soundBtn');
   const sunSlider = document.getElementById('sunSlider');
   const fpsEl = document.getElementById('fps');
-  const zoneBar = document.getElementById('zoneBar');
+  const hubBtn = document.getElementById('hubBtn');
   const titleEl = document.querySelector('#hud-title h1');
   const tapHintEl = document.getElementById('tapHint');
   const subEl = document.querySelector('#hud-title h1 span');
@@ -19,17 +19,9 @@ export function setupUI({ zones, onFollow, onFree, onZone, onFeed, audio }) {
 
   toggle.addEventListener('click', () => panel.classList.toggle('open'));
 
-  // ---- ゾーン切替タブ ----
-  const zoneBtns = new Map();
-  for (const z of zones) {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'zone';
-    b.innerHTML = `<span class="zi">${z.icon}</span>${z.name}`;
-    b.addEventListener('click', () => onZone(z.key));
-    zoneBar.appendChild(b);
-    zoneBtns.set(z.key, b);
-  }
+  // ---- ポータルへ戻る ----
+  // 行き先を選ぶのはポータルエリアの仕事。ここは戻る道だけを持つ
+  hubBtn.addEventListener('click', () => onHub());
 
   function clearActive() {
     if (activeCard) activeCard.classList.remove('active');
@@ -40,7 +32,15 @@ export function setupUI({ zones, onFollow, onFree, onZone, onFeed, audio }) {
 
   // ---- ゾーンに合わせて図鑑を差し替える ----
   function setZone(def) {
-    for (const [k, b] of zoneBtns) b.classList.toggle('on', k === def.key);
+    // ポータルエリアにいるあいだは「戻る」も図鑑も要らない。
+    // 施設そのものに載っている生き物はいないので、図鑑は空になる
+    const atHub = def.key === 'hub';
+    hubBtn.hidden = atHub;
+    toggle.hidden = atHub;
+    // 餌やりを持たないゾーンではボタンごと消す。
+    // 押せるのに何も起きないボタンは、壊れているのと区別がつかない
+    if (feedBtn) feedBtn.hidden = (def.feed === false);
+    if (atHub) panel.classList.remove('open');
     titleEl.childNodes[0].nodeValue = def.name + ' ';
     subEl.textContent = def.sub;
     // タップで何が起きるかはゾーンごとに違う。

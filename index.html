@@ -29,7 +29,11 @@
     <canvas id="stage"></canvas>
     <div id="vignette"></div>
 
-    <nav id="zoneBar"></nav>
+    <!-- 行き先はポータルエリアで選ぶ。ここは「戻る」1つだけ。
+         水槽が増えてもこのボタンは増えない -->
+    <button id="hubBtn" type="button" hidden>
+      <span class="hi">🛰</span>ポータルへ戻る
+    </button>
 
     <header id="hud-title">
       <h1>大水槽 <span>GRAND AQUARIUM</span></h1>
