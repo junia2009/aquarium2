@@ -250,6 +250,15 @@ const LIT_MAIN = /* glsl */ `
     vec3 col = underwaterLight(alb, n, vW, viewDir, 22.0, 0.10);
     col += alb * lampLight(vW, n);
     col += alb * portalLight(vW, n) * 1.7;
+    // 甲板の照り返し。
+    //
+    // 投光器は下向きなので、その上にあるもの——天蓋の骨組み、配管や
+    // 枠の下面——には直接光がまったく当たらない。それ自体は正しいが、
+    // 跳ね返りが無いと真っ黒な線になり、ガラスの天井が「黒い骨が
+    // 浮いた空」に見えてしまう。明るい床からの一次反射だけ足す
+    float fromBelow = max(-n.y, 0.0);
+    float hAbove = clamp((vW.y - ${DECK_Y.toFixed(1)}) / 9.0, 0.0, 1.0);
+    col += alb * vec3(0.30, 0.34, 0.38) * fromBelow * (1.0 - hAbove * 0.50);
     gl_FragColor = vec4(applyUnderwaterFog(col, vW), 1.0);
     ${UW_FRAG_OUTPUT}
   }
@@ -532,36 +541,214 @@ function buildShell(openings = [], windows = []) {
     M.quad(grid[RINGS - 1][k2], grid[RINGS - 1][k], wall[0][k], wall[0][k2]);
   }
 
-  // ---- 天井 ----
-  // 浅いドーム。放射状のリブが中心の要へ集まる
-  const CROWS = 5;
-  const domeH = 3.4;
-  const dome = [];
-  for (let i = 0; i <= CROWS; i++) {
-    const t = i / CROWS;
-    const r = ROOM_R * Math.cos(t * Math.PI * 0.5);
-    const y = DECK_Y + WALL_H + domeH * Math.sin(t * Math.PI * 0.5);
-    const row = [];
-    for (let k = 0; k < N; k++) {
-      const a = ang(k);
-      // 天井のリブは8本。放射状なので、外周では広く、頂点では詰まる
-      const rib = Math.abs(((a / (Math.PI * 2)) * 8) % 1 - 0.5) > 0.36;
-      row.push(M.v(Math.cos(a) * r, y - (rib ? 0.16 : 0), Math.sin(a) * r,
-                   rib ? PAINT : PAINT2));
-    }
-    dome.push(row);
-  }
-  for (let i = 0; i < CROWS - 1; i++) {
-    for (let k = 0; k < N; k++) {
-      const k2 = (k + 1) % N;
-      M.quad(dome[i][k2], dome[i][k], dome[i + 1][k], dome[i + 1][k2]);
-    }
-  }
-  const apex = M.v(0, DECK_Y + WALL_H + domeH, 0, PAINT);
+  // 天井はここでは作らない。透明な耐圧ガラスなので、鋼の殻とは
+  // 別の材質になる(buildDome)。壁の上端に載る受けの環だけ置く
   for (let k = 0; k < N; k++) {
-    M.tri(dome[CROWS - 1][(k + 1) % N], dome[CROWS - 1][k], apex);
+    const a = ang(k), a2 = ang(k + 1);
+    const p = (aa, r, y) => M.v(Math.cos(aa) * r, y, Math.sin(aa) * r, PAINT);
+    const y0 = DECK_Y + WALL_H - 0.10, y1 = DECK_Y + WALL_H + 0.26;
+    const q0 = p(a, ROOM_R - 0.26, y0), q1 = p(a2, ROOM_R - 0.26, y0);
+    const q2 = p(a2, ROOM_R - 0.26, y1), q3 = p(a, ROOM_R - 0.26, y1);
+    M.quad(q0, q1, q2, q3);
+    const w0 = p(a, ROOM_R, y1), w1 = p(a2, ROOM_R, y1);
+    M.quad(q3, q2, w1, w0);
   }
   return M.geo();
+}
+
+// ---------------------------------------------------------------- 天井のガラス
+//
+// 海底の与圧殻に透明な天蓋を載せる。
+//
+// ここは「窓を大きくした」のとは意味が違う。頭の上ぜんぶが水になると、
+// 部屋が海の底に**沈んでいる**ことが、見回さなくても常に視界の端に
+// 入り続ける。舷窓は覗きにいくものだが、天井は覗かなくても見えている。
+//
+// ガラスだけを置いてはいけない。実物の耐圧窓はどれも、板より遥かに
+// 太い骨組みで押さえてある——水圧を受けるのは骨で、ガラスは間を
+// 塞いでいるだけ。骨が無いと、透明な膜が浮いているようにしか見えず、
+// 「耐圧」がどこにも表現されない。
+const DOME_H = 3.4;
+const DOME_BASE = DECK_Y + WALL_H;
+const DOME_TOP = DOME_BASE + DOME_H;
+
+/** ドームの母線。[半径, 高さ, (r,y)平面での外向き法線] */
+function domeProfile(steps) {
+  const out = [];
+  for (let i = 0; i <= steps; i++) {
+    const u = (i / steps) * Math.PI * 0.5;
+    const r = ROOM_R * Math.cos(u);
+    const y = DOME_BASE + DOME_H * Math.sin(u);
+    // 楕円 (r/R)^2 + ((y-y0)/H)^2 = 1 の外向き法線
+    let nr = DOME_H * Math.cos(u), ny = ROOM_R * Math.sin(u);
+    const L = Math.hypot(nr, ny) || 1;
+    out.push([r, y, nr / L, ny / L]);
+  }
+  return out;
+}
+
+// ガラスは「向こうが見える」だけでは板に見えない。
+// 見えているのは、
+//   ・すれすれの角度ほど強くなる映り込み(フレネル)
+//   ・室内の照明が面に落とすハイライト
+//   ・外側に付いた汚れと生物膜
+// の3つで、これが無いと天井が「開いている」ことになってしまう。
+const GLASS_DOME_FRAG = PORTAL_LIGHT + LAMP_LIGHT + /* glsl */ `
+  varying vec3 vW;
+  varying vec3 vN;
+  void main() {
+    // 室内から見るとドームの裏面。法線を室内向きに揃える
+    vec3 n = gl_FrontFacing ? normalize(vN) : -normalize(vN);
+    vec3 v = normalize(cameraPosition - vW);
+    float fres = pow(1.0 - abs(dot(n, v)), 3.0);
+
+    // 天井の投光器が映る。ガラスは鏡ではないので弱く
+    vec3 sheen = lampLight(vW, n) * 0.055 + portalLight(vW, n) * 0.12;
+
+    // 外側に付いた汚れ。海中に何年も置いた透明材は必ず曇る。
+    // まだらにしないと、均一な曇りは「すりガラス」になってしまう
+    float dirt = fbm(vec2(vW.x * 0.42, vW.z * 0.42));
+    dirt = smoothstep(0.46, 0.86, dirt);
+    // 縦に垂れる筋。ドームなので、頂点から外へ流れる
+    float run = fbm(vec2(atan(vW.z, vW.x) * 11.0, length(vW.xz) * 0.30));
+    dirt = max(dirt * 0.7, smoothstep(0.58, 0.90, run) * 0.55);
+
+    float a = 0.020 + 0.115 * fres + 0.085 * dirt;
+    vec3 col = vec3(0.34, 0.46, 0.55) * (a * 0.9) + sheen;
+    gl_FragColor = vec4(col, 1.0);
+    ${UW_FRAG_OUTPUT}
+  }
+`;
+
+/**
+ * 透明な天蓋と、それを押さえる骨組み。
+ *
+ * ガラスは加算合成で「映り込みだけ」を足す板として描く。
+ * 不透明度を持たせて普通に半透明合成すると、外のマリンスノーや
+ * 遠景と描画順を争って、粒がガラスの手前に出たり消えたりする。
+ * 映り込みは光を足す現象なので、加算のほうが理屈にも合っている。
+ */
+function buildDome(root, plu) {
+  const PROF = 16, SEG = 96;
+  const prof = domeProfile(PROF);
+
+  // --- ガラス面 ---
+  const pos = [], nrm = [], idx = [];
+  for (let i = 0; i <= PROF; i++) {
+    const [r, y, nr, ny] = prof[i];
+    for (let k = 0; k <= SEG; k++) {
+      const a = (k / SEG) * Math.PI * 2;
+      pos.push(Math.cos(a) * r, y, Math.sin(a) * r);
+      nrm.push(Math.cos(a) * nr, ny, Math.sin(a) * nr);
+    }
+  }
+  for (let i = 0; i < PROF; i++) {
+    for (let k = 0; k < SEG; k++) {
+      const p0 = i * (SEG + 1) + k, p1 = p0 + 1;
+      const p2 = p0 + (SEG + 1), p3 = p2 + 1;
+      idx.push(p0, p2, p3, p0, p3, p1);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nrm), 3));
+  g.setIndex(idx);
+  const glass = new THREE.Mesh(g, new THREE.ShaderMaterial({
+    uniforms: { ...baseUniforms(), ...plu },
+    vertexShader: /* glsl */ `
+      varying vec3 vW;
+      varying vec3 vN;
+      void main() {
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vW = wp.xyz;
+        vN = normalize(mat3(modelMatrix) * normal);
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }
+    `,
+    fragmentShader: UW_FRAG_PRELUDE + GLASS_DOME_FRAG,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+  }));
+  glass.renderOrder = 4;      // 外の景色を描いたあとに乗せる
+  root.add(glass);
+
+  // --- 骨組み ---
+  const M = new Buf();
+  // 母線に沿った梁。断面は矩形で、室内側へ張り出す
+  const RIBS = 12;
+  for (let b = 0; b < RIBS; b++) {
+    const a = (b / RIBS) * Math.PI * 2;
+    const ca = Math.cos(a), sa = Math.sin(a);
+    const px = -sa, pz = ca;                 // 円周に沿う向き(梁の幅)
+    let prev = null;
+    for (let i = 0; i <= PROF; i++) {
+      const [r, y, nr, ny] = prof[i];
+      // 頂点へ寄るほど梁を細くする。同じ幅のまま集めると要が潰れる
+      const w = 0.115 * (0.45 + 0.55 * (r / ROOM_R));
+      const d = 0.20;
+      // 面上の点から、内向き法線ぶん下げたところが梁の内側
+      const sx = ca * r, sz = sa * r;
+      const ix = ca * (r - nr * d), iy = y - ny * d, iz = sa * (r - nr * d);
+      const corner = (bx, by, bz, s) =>
+        M.v(bx + px * w * s, by, bz + pz * w * s, PAINT);
+      const ring = [corner(sx, y, sz, -1), corner(sx, y, sz, 1),
+                    corner(ix, iy, iz, 1), corner(ix, iy, iz, -1)];
+      if (prev) {
+        for (let j = 0; j < 4; j++) {
+          const j2 = (j + 1) % 4;
+          M.quad(prev[j], prev[j2], ring[j2], ring[j]);
+        }
+      }
+      prev = ring;
+    }
+  }
+  // 緯度方向の環。これが無いと梁がばらばらの骨に見える。
+  //
+  // 断面は輪の一周ぶんを一度だけ作って繋ぐこと。区間ごとに頂点を
+  // 作り直すと、継ぎ目で法線が平均されず、輪が数珠つなぎの玉に見える
+  for (const t of [0.30, 0.62]) {
+    const i = Math.round(t * PROF);
+    const [r, y, nr, ny] = prof[i];
+    const d = 0.155, w = 0.085;
+    // 断面の4隅を (半径方向, 高さ) のずれで持つ
+    const sect = [[0, w], [0, -w], [-d, -w], [-d, w]];
+    const rings = sect.map(([od, oy]) => {
+      const arr = [];
+      for (let k = 0; k < SEG; k++) {
+        const a = (k / SEG) * Math.PI * 2;
+        const rr = r + nr * od;
+        arr.push(M.v(Math.cos(a) * rr, y + ny * od + oy, Math.sin(a) * rr, PAINT));
+      }
+      return arr;
+    });
+    for (let k = 0; k < SEG; k++) {
+      const k2 = (k + 1) % SEG;
+      for (let j = 0; j < 4; j++) {
+        const j2 = (j + 1) % 4;
+        M.quad(rings[j][k], rings[j2][k], rings[j2][k2], rings[j][k2]);
+      }
+    }
+  }
+  // 要。梁が集まる頂点の金物
+  {
+    const SIDES = 16, hubR = 0.62;
+    const lo = [], hi = [];
+    for (let k = 0; k < SIDES; k++) {
+      const a = (k / SIDES) * Math.PI * 2;
+      lo.push(M.v(Math.cos(a) * hubR, DOME_TOP - 0.30, Math.sin(a) * hubR, PAINT2));
+      hi.push(M.v(Math.cos(a) * hubR, DOME_TOP + 0.02, Math.sin(a) * hubR, PAINT));
+    }
+    for (let k = 0; k < SIDES; k++) {
+      const k2 = (k + 1) % SIDES;
+      M.quad(lo[k], lo[k2], hi[k2], hi[k]);
+    }
+    const cap = M.v(0, DOME_TOP + 0.02, 0, PAINT);
+    for (let k = 0; k < SIDES; k++) M.tri(hi[k], hi[(k + 1) % SIDES], cap);
+  }
+  root.add(new THREE.Mesh(M.geo(), metalMaterial(plu, LIT_VERT, LIT_FRAG,
+    { side: THREE.DoubleSide })));
 }
 
 /**
@@ -590,6 +777,28 @@ function buildLamps(root, plu) {
     for (let j = 0; j < 4; j++) {
       const j2 = (j + 1) % 4;
       M.quad(top[j], top[j2], bot[j2], bot[j]);
+    }
+    // 吊り棒。天井がガラスになったので、器具は骨組みから吊り下がる。
+    // これが無いと、透明な天蓋の下に箱が浮いているだけに見える
+    {
+      // 器具の真上でドームの面はどの高さか。楕円を半径から逆に解く
+      const u = Math.acos(Math.min(LR / ROOM_R, 1));
+      const domeY = DOME_BASE + DOME_H * Math.sin(u);
+      const rod = 0.055;
+      for (const off of [-w * 0.62, w * 0.62]) {
+        const rx = cx + -s2 * off, rz = cz + c * off;
+        const lo = [], hi = [];
+        for (let j = 0; j < 4; j++) {
+          const t = (j / 4) * Math.PI * 2;
+          const ox = Math.cos(t) * rod, oz = Math.sin(t) * rod;
+          lo.push(M.v(rx + ox, LAMP_Y + h, rz + oz, PAINT2));
+          hi.push(M.v(rx + ox, domeY - 0.16, rz + oz, PAINT2));
+        }
+        for (let j = 0; j < 4; j++) {
+          const j2 = (j + 1) % 4;
+          M.quad(lo[j], lo[j2], hi[j2], hi[j]);
+        }
+      }
     }
     // 発光面。下向き
     const gc = (u, v) => glow.v(cx + (-s2 * u + c * v), LAMP_Y - 0.005,
@@ -1139,6 +1348,7 @@ export const HUB = {
     // 殻はハッチの位置が決まってから作る(リブを避けるため)
     let shell = null;
     let outside = null;
+    buildDome(root, plu);
     buildLamps(root, plu);
     buildShafts(root);
     buildMotes(root);
@@ -1187,7 +1397,7 @@ export const HUB = {
         cd.userData.portal = true;
         // 外の海。舷窓の位置が決まってから建てる——
         // 投光器は窓のそばに付いていないと、見ている先が暗いままになる
-        outside = buildExterior(root, wins, ROOM_R, DECK_Y);
+        outside = buildExterior(root, wins, ROOM_R, DECK_Y, DOME_TOP);
       },
       followTargets: {},
       species: [],

@@ -265,7 +265,7 @@ const ROCK = [0.088, 0.086, 0.080];
  * @param {number} deckY      甲板の高さ
  * @returns {{update:Function}}
  */
-export function buildExterior(root, winAngles, hullR, deckY) {
+export function buildExterior(root, winAngles, hullR, deckY, domeTop) {
   const group = new THREE.Group();
   group.userData.portal = true;      // 作り直しのときに一緒に消える
   root.add(group);
@@ -565,20 +565,16 @@ export function buildExterior(root, winAngles, hullR, deckY) {
   // ---- マリンスノー ----
   // 外の粒は室内より多く、ゆっくり落ちる。投光器の筋の中に入った
   // 粒だけが光る——だから筋が「粒で見えている」ことになる
-  {
-    // 数を増やして、施設の近くへ寄せる。
-    //
-    // 粒がまばらだと、目と地面のあいだが「何も無い空間」に見える。
-    // 水の中にいることを画面で最初に語るのは、窓のすぐ外を漂う粒。
-    // 遠くにばらまいても霧に埋もれて効かないので、近くに厚く置く
-    const N = 3200;
-    const pos = new Float32Array(N * 3), seed = new Float32Array(N * 2);
-    const rnd = rng(776611);
-    for (let i = 0; i < N; i++) {
-      const a = rnd() * Math.PI * 2;
-      const r = hullR + 0.4 + Math.pow(rnd(), 1.5) * 26;
-      const x = Math.cos(a) * r, z = Math.sin(a) * r;
-      pos[i * 3] = x; pos[i * 3 + 1] = FLOOR_Y + rnd() * 22; pos[i * 3 + 2] = z;
+  //
+  // 2群に分ける。施設のまわりを取り巻くぶんと、天蓋の上を降りるぶん。
+  // 天井がガラスになった以上、真上にも粒がいなければならない——
+  // 見上げたときに何も落ちてこない水は、水に見えない
+  const snow = (count, seedNum, floorY, range, place) => {
+    const pos = new Float32Array(count * 3), seed = new Float32Array(count * 2);
+    const rnd = rng(seedNum);
+    for (let i = 0; i < count; i++) {
+      const [x, y, z] = place(rnd);
+      pos[i * 3] = x; pos[i * 3 + 1] = y; pos[i * 3 + 2] = z;
       // いちばん近い投光器の軸までの距離。粒は縦にしか動かないので
       // 一度きり測ればよい
       let near = Infinity;
@@ -595,7 +591,7 @@ export function buildExterior(root, winAngles, hullR, deckY) {
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     g.setAttribute('aSeed', new THREE.BufferAttribute(seed, 2));
     group.add(new THREE.Points(g, new THREE.ShaderMaterial({
-      uniforms: { ...baseUniforms(), uRange: { value: 22.0 }, uFloor: { value: FLOOR_Y } },
+      uniforms: { ...baseUniforms(), uRange: { value: range }, uFloor: { value: floorY } },
       vertexShader: /* glsl */ `
         attribute vec2 aSeed;
         uniform float uTime; uniform float uRange; uniform float uFloor;
@@ -626,7 +622,19 @@ export function buildExterior(root, winAngles, hullR, deckY) {
       `,
       transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
     })));
-  }
+  };
+  // 施設のまわり。近くに厚く——遠くにばらまいても霧に埋もれて効かない
+  snow(3200, 776611, FLOOR_Y, 22.0, (rnd) => {
+    const a = rnd() * Math.PI * 2;
+    const r = hullR + 0.4 + Math.pow(rnd(), 1.5) * 26;
+    return [Math.cos(a) * r, FLOOR_Y + rnd() * 22, Math.sin(a) * r];
+  });
+  // 天蓋の上。降りきったら天蓋のすぐ上へ戻すので、殻の中には入らない
+  snow(1100, 314159, domeTop + 0.35, 20.0, (rnd) => {
+    const a = rnd() * Math.PI * 2;
+    const r = Math.sqrt(rnd()) * (hullR + 12);
+    return [Math.cos(a) * r, domeTop + 0.35 + rnd() * 20, Math.sin(a) * r];
+  });
 
   // ---- 隣の区画の標識灯 ----
   // 点滅する赤。人工物であることを一点だけで言う
