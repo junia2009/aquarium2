@@ -600,21 +600,32 @@ const GLASS_DOME_FRAG = PORTAL_LIGHT + LAMP_LIGHT + /* glsl */ `
     // 室内から見るとドームの裏面。法線を室内向きに揃える
     vec3 n = gl_FrontFacing ? normalize(vN) : -normalize(vN);
     vec3 v = normalize(cameraPosition - vW);
-    float fres = pow(1.0 - abs(dot(n, v)), 3.0);
+    // すれすれの角度でだけ立ち上がるように、指数はきつく取る。
+    // 3.0 だと天蓋の広い範囲に映り込みが乗り、全体が白く霞む
+    float fres = pow(1.0 - abs(dot(n, v)), 4.5);
 
-    // 天井の投光器が映る。ガラスは鏡ではないので弱く
-    vec3 sheen = lampLight(vW, n) * 0.055 + portalLight(vW, n) * 0.12;
+    // 天井の投光器と、ハッチの色が映る。ガラスは鏡ではないので弱く。
+    //
+    // ハッチの寄与はとくに絞る。5枚ぶんの面光源が天蓋いっぱいに
+    // ぼんやり乗るので、少しでも強いとそれだけで曇りになる
+    vec3 sheen = lampLight(vW, n) * 0.055 + portalLight(vW, n) * 0.035;
 
-    // 外側に付いた汚れ。海中に何年も置いた透明材は必ず曇る。
-    // まだらにしないと、均一な曇りは「すりガラス」になってしまう
-    float dirt = fbm(vec2(vW.x * 0.42, vW.z * 0.42));
-    dirt = smoothstep(0.46, 0.86, dirt);
-    // 縦に垂れる筋。ドームなので、頂点から外へ流れる
-    float run = fbm(vec2(atan(vW.z, vW.x) * 11.0, length(vW.xz) * 0.30));
-    dirt = max(dirt * 0.7, smoothstep(0.58, 0.90, run) * 0.55);
+    // 外側に付いた汚れ。
+    //
+    // これは**光が当たったところにしか見えない**。一律に足すと、
+    // 暗い部分の黒が持ち上がってガラス全体が均一に曇る。実際そうなって、
+    // 中から見ると曇りガラス、外から見ると澄んで見えるという妙な
+    // 非対称が出ていた(ガラスだけで平均 +0.048、コントラストは
+    // 標準偏差 0.023 → 0.016 まで潰れていた)。映り込みを濃くする形で
+    // 効かせれば、暗いところは暗いまま残る
+    float dirt = smoothstep(0.46, 0.86, fbm(vec2(vW.x * 0.42, vW.z * 0.42)));
+    float run = smoothstep(0.58, 0.90, fbm(vec2(atan(vW.z, vW.x) * 11.0,
+                                                length(vW.xz) * 0.30)));
+    dirt = max(dirt * 0.7, run * 0.55);
 
-    float a = 0.020 + 0.115 * fres + 0.085 * dirt;
-    vec3 col = vec3(0.34, 0.46, 0.55) * (a * 0.9) + sheen;
+    // 素通しの板に、縁の映り込みだけが乗る
+    float a = 0.0020 + 0.085 * fres * (0.75 + 0.50 * dirt);
+    vec3 col = vec3(0.34, 0.46, 0.55) * a + sheen * (1.0 + 0.9 * dirt);
     gl_FragColor = vec4(col, 1.0);
     ${UW_FRAG_OUTPUT}
   }
