@@ -49,6 +49,13 @@ export class DiveCamera {
     // 甲幅5cmのカニが画面の3%にしかならず、追跡しても何も見えない。
     // 見るものの大きさはゾーンごとに桁が違うので、ゾーンごとに決める
     this.clearance = 0.9;
+    // 中心からどこまで離れられるか。
+    //
+    // 水槽はどれも半径40m以内に収まるので長らく 42 の決め打ちだったが、
+    // 海底施設の外には48m先に観測棟が建った。行こうとすると6m手前で
+    // ぴたりと止まる——当たり判定でも床でもなく、この定数だった。
+    // 場所の広さはゾーンごとに違うので、ゾーンごとに決める
+    this.maxR = 42;
 
     this._bind();
   }
@@ -56,6 +63,11 @@ export class DiveCamera {
   /** 地面からの最低の高さ。ゾーンを切り替えるたびに設定しなおす */
   setClearance(v) {
     this.clearance = v;
+  }
+
+  /** 中心から離れられる限界。ゾーンを切り替えるたびに設定しなおす */
+  setRange(v) {
+    this.maxR = v;
   }
 
   lookAt(p) {
@@ -212,7 +224,7 @@ export class DiveCamera {
     // 水面は抜けられる。上空は見晴らし台くらいの高さで止める
     if (this.pos.y > WORLD.surfaceY + 26) this.pos.y = WORLD.surfaceY + 26;
     const r = Math.hypot(this.pos.x, this.pos.z);
-    const maxR = 42;
+    const maxR = this.maxR;
     if (r > maxR) {
       this.pos.x *= maxR / r;
       this.pos.z *= maxR / r;

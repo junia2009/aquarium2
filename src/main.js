@@ -100,6 +100,7 @@ function enterZone(key, { moveCamera = true } = {}) {
   // カメラが地面からどれだけ上まで降りられるか。見るものの大きさが
   // ゾーンごとに桁違いなので、ここもゾーンが決める
   diveCam.setClearance(zone.def.clearance ?? 0.9);
+  diveCam.setRange(zone.def.range ?? 42);
   const e = zone.def.env;
   U.uFogColor.value.copy(e.fogColor);
   U.uFogDensity.value = e.fogDensity;

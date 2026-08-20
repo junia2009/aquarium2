@@ -216,6 +216,23 @@ const BEAM_VERT = /* glsl */ `
   }
 `;
 
+// 観測帯のガラス。天蓋と同じで、素通しに映り込みだけを足す。
+// すれすれの角度でだけ立ち上げないと、部屋ぜんたいが曇って見える
+const ANNEX_GLASS_FRAG = /* glsl */ `
+  varying vec3 vCol;
+  varying vec3 vN;
+  varying vec3 vW;
+  void main() {
+    vec3 n = gl_FrontFacing ? normalize(vN) : -normalize(vN);
+    vec3 v = normalize(cameraPosition - vW);
+    float fres = pow(1.0 - abs(dot(n, v)), 4.5);
+    float dirt = smoothstep(0.5, 0.9, fbm(vec2(vW.x * 0.5, vW.y * 0.7)));
+    float a = 0.004 + 0.075 * fres * (0.8 + 0.5 * dirt);
+    gl_FragColor = vec4(vec3(0.34, 0.46, 0.55) * a, a);
+    ${UW_FRAG_OUTPUT}
+  }
+`;
+
 // 形を組む小道具(hub.js の Buf と同じ作り。あちらは非公開なので持つ)
 class Buf {
   constructor() { this.p = []; this.c = []; this.i = []; }
@@ -255,10 +272,39 @@ class Buf {
 // 何も映らない——敷居に遮られて海底は見えず、真っ暗な四角になる。
 // 実際そうなっていた。海底は「下にある」だけでなく「遠くで立ち上がって
 // 目の高さまで来る」ものにして初めて、窓の正面に海が見える
+// ============ 観測棟 ============
+//
+// 隣に建っているもう1棟。中に入れる。
+//
+// 位置は固定値で持つ。舷窓の角度から導くと、行き先(水槽)が1つ増えた
+// だけで建物が動いてしまう。建物は動かないから建物であって、
+// 「同じ場所に帰ってきた」という感じもそこから来る。
+export const ANNEX = {
+  a: -Math.PI * 0.5 + Math.PI / 5 + 0.30,   // 施設から見た方角(固定)
+  dist: 48,                                  // 中心までの距離
+  radius: 5.2,                               // 外半径
+  wall: 7.0,                                 // 円筒の高さ
+  // ガラスの下端。目の高さ(床+1.5m)より下に来ないと、立ったときに
+  // 鋼の壁しか見えない——外を見るための建物なのに外が見えなかった
+  sill: 1.15,
+  door: 2.30,                                // 出入口の高さ
+  doorArc: 0.30,                             // 出入口の半角(ラジアン)
+  // 出入口の向き。連絡通路の真正面に開けると、通路そのものが
+  // 戸口を塞いでしまう。通路の脇へずらす
+  doorOff: 0.85,
+};
+ANNEX.x = Math.cos(ANNEX.a) * ANNEX.dist;
+ANNEX.z = Math.sin(ANNEX.a) * ANNEX.dist;
+
 export function riseAt(r) {
   const t = Math.min(Math.max((r - 22) / 56, 0), 1);
   return t * t * (3 - 2 * t) * 8.5;
 }
+
+// 観測棟の据わっている高さと、中の床。riseAt に依るのでここで確定する
+ANNEX.base = FLOOR_Y + riseAt(ANNEX.dist) + 0.4;
+ANNEX.floor = ANNEX.base + 0.55;
+ANNEX.inner = ANNEX.radius - 0.35;
 
 // 決まった種から作る乱数。作り直しても同じ景色になる——
 // ハッチが増えるたびに外の岩が別の場所へ移ると、
@@ -274,6 +320,7 @@ function rng(seed) {
 const STEEL = [0.138, 0.146, 0.154];
 const STEEL2 = [0.120, 0.128, 0.138];
 const ROCK = [0.088, 0.086, 0.080];
+const DECKC = [0.112, 0.118, 0.126];   // 観測棟の床
 // 海藻。褐藻はよく光を返すので、岩よりはっきり明るく取る。
 // 暗く置くと、育成灯の下以外では「あるのに見えない」ことになる
 const KELP = [0.105, 0.195, 0.115];
@@ -473,7 +520,7 @@ const HALO_FRAG = /* glsl */ `
  * @param {number} deckY      甲板の高さ
  * @returns {{update:Function}}
  */
-export function buildExterior(root, winAngles, hullR, deckY, domeTop) {
+export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
   const group = new THREE.Group();
   group.userData.portal = true;      // 作り直しのときに一緒に消える
   root.add(group);
@@ -525,6 +572,21 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop) {
     const px = plot.x + Math.cos(PLOT_A + Math.PI / 2) * i * (plot.w * 0.33);
     const pz = plot.z + Math.sin(PLOT_A + Math.PI / 2) * i * (plot.w * 0.33);
     lights.push({ p: [px, plot.y + plot.h, pz], d: [0, -1, 0], c: GROW, k: 0.85 });
+  }
+  // 観測棟の室内灯。
+  //
+  // 天井に発光する点を置くだけでは、部屋は真っ暗なままになる——
+  // 発光面は「光って見える板」であって、光源ではない。中に入れる
+  // 部屋にした以上、その部屋を照らす光を光源の一覧に足す必要がある。
+  // 実際いちど真っ暗な箱になっていた
+  const ROOM = [1.25, 1.30, 1.35];
+  for (let i = 0; i < 2; i++) {
+    const a = ANNEX.a + Math.PI * 0.5 + i * Math.PI;
+    lights.push({
+      p: [ANNEX.x + Math.cos(a) * 2.3, ANNEX.base + ANNEX.wall - 0.5,
+          ANNEX.z + Math.sin(a) * 2.3],
+      d: [0, -1, 0], c: ROOM, k: 1.0,
+    });
   }
   const FLOOD = floodGLSL(lights);
   const neon = new Neon();
@@ -703,11 +765,11 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop) {
   // 建物が1つだけだと施設ではなく「箱」で、大きさも分からない
   // 34m だと窓の半分を塞ぐ「壁」になり、遠くの建物に見えなかった。
   // 48m まで下げると、霧の向こうの影として読める
-  const ma = winAngles.length ? winAngles[0] + 0.30 : 0.8;
-  const MD = 48;
-  const mBase = FLOOR_Y + rise(MD) + 0.4;
-  const mx = Math.cos(ma) * MD, mz = Math.sin(ma) * MD;
-  cylinder(S, mx, mBase, mz, 5.2, 7.0, STEEL);
+  const ma = ANNEX.a;
+  const MD = ANNEX.dist;
+  const mBase = ANNEX.base;
+  const mx = ANNEX.x, mz = ANNEX.z;
+  buildAnnex(S, neon, world, group, mat);
 
   // ---- 連絡通路 ----
   //
@@ -1274,6 +1336,211 @@ function strut(M, a, b, rad, col) {
   for (let j = 0; j < SIDES; j++) {
     const j2 = (j + 1) % SIDES;
     M.quad(r0[j], r0[j2], r1[j2], r1[j]);
+  }
+}
+
+/**
+ * 観測棟。中に入れる建物。
+ *
+ * ただの円筒だったものを、床のある部屋にする。作りは3段:
+ *   下  鋼の壁。プロテウス側に出入口が開いている
+ *   中  ぐるり一周のガラス帯。ここが観測棟の存在理由——
+ *       入ってプロテウスを振り返ると、灯りのついた本体が見える
+ *   上  浅い円錐の屋根。梁が中心へ集まる
+ *
+ * 出入口は「開けた穴」ではなく、板厚の見える開口にする。舷窓のときと
+ * 同じで、これが無いと壁が厚さ0の紙に見える。
+ */
+function buildAnnex(S, neon, world, group, mat) {
+  const { x: cx, z: cz, a: ca, radius: R, wall: H, sill, door, doorArc } = ANNEX;
+  const base = ANNEX.base, floorY = ANNEX.floor;
+  const N = 40;
+  const th = 0.30;                       // 壁の厚み
+  // 出入口はプロテウスのほう(=原点向き)に開ける
+  const dA = ca + Math.PI + ANNEX.doorOff;
+  const inDoor = (a) => {
+    const d = Math.abs(((a - dA + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+    return d < doorArc;
+  };
+  const ang = (k) => (k / N) * Math.PI * 2;
+  const P = (a, r, y) => S.v(cx + Math.cos(a) * r, y, cz + Math.sin(a) * r, STEEL);
+
+  // ---- 台座 ----
+  for (let k = 0; k < N; k++) {
+    const a0 = ang(k), a1 = ang(k + 1);
+    S.quad(P(a0, R + 0.5, base - 0.9), P(a1, R + 0.5, base - 0.9),
+           P(a1, R + 0.35, base), P(a0, R + 0.35, base));
+    S.quad(P(a0, R + 0.35, base), P(a1, R + 0.35, base),
+           P(a1, R, base), P(a0, R, base));
+  }
+  // ---- 床 ----
+  const hub0 = S.v(cx, floorY, cz, DECKC);
+  const rim = [];
+  for (let k = 0; k < N; k++) rim.push(S.v(cx + Math.cos(ang(k)) * (R - th), floorY,
+                                           cz + Math.sin(ang(k)) * (R - th), DECKC));
+  for (let k = 0; k < N; k++) S.tri(hub0, rim[(k + 1) % N], rim[k]);
+
+  // ---- 壁 ----
+  //
+  // 段は3つ。腰までの鋼、その上のガラス帯、そして戸口の欄間。
+  // 戸口のところだけはガラスを通さず、床から鴨居まで開けて、
+  // その上を鋼で塞ぐ
+  const ySill = floorY + sill;
+  const yDoor = floorY + door;
+  const yGlass = base + H;
+  const wallSeg = (a0, a1, y0, y1) => {
+    S.quad(P(a0, R, y0), P(a1, R, y0), P(a1, R, y1), P(a0, R, y1));
+    S.quad(P(a1, R - th, y0), P(a0, R - th, y0), P(a0, R - th, y1), P(a1, R - th, y1));
+  };
+  for (let k = 0; k < N; k++) {
+    const a0 = ang(k), a1 = ang(k + 1);
+    if (inDoor(ang(k + 0.5))) {
+      wallSeg(a0, a1, yDoor, yGlass);        // 欄間(戸口の上は鋼で塞ぐ)
+    } else {
+      wallSeg(a0, a1, base, ySill);          // 腰壁
+    }
+  }
+  // 戸口の見付。板厚を見せないと、壁が厚さ0の紙に見える
+  for (const sgn of [-1, 1]) {
+    const a = dA + doorArc * sgn;
+    S.quad(P(a, R, floorY), P(a, R - th, floorY), P(a, R - th, yDoor), P(a, R, yDoor));
+  }
+  for (let k = 0; k < N; k++) {
+    const a0 = ang(k), a1 = ang(k + 1);
+    if (!inDoor(ang(k + 0.5))) continue;
+    S.quad(P(a0, R, yDoor), P(a0, R - th, yDoor), P(a1, R - th, yDoor), P(a1, R, yDoor));
+    S.quad(P(a1, R, floorY), P(a1, R - th, floorY), P(a0, R - th, floorY), P(a0, R, floorY));
+  }
+  // 戸口の縁の標識灯。暗い海で入口が分かるのは灯りだけ
+  for (const sgn of [-1, 1]) {
+    const a = dA + (doorArc + 0.06) * sgn;
+    for (const y of [floorY + 0.35, yDoor - 0.2]) {
+      neon.add([cx + Math.cos(a) * (R + 0.12), y, cz + Math.sin(a) * (R + 0.12)],
+               [3.8, 1.7, 0.25], 0.075, 0);
+    }
+  }
+
+  // ---- 方立と、上下の桁 ----
+  for (const y of [ySill, yGlass]) {
+    for (let k = 0; k < N; k++) {
+      const a0 = ang(k), a1 = ang(k + 1);
+      if (y === ySill && inDoor(ang(k + 0.5))) continue;
+      S.quad(P(a0, R + 0.06, y - 0.13), P(a1, R + 0.06, y - 0.13),
+             P(a1, R + 0.06, y + 0.13), P(a0, R + 0.06, y + 0.13));
+      S.quad(P(a1, R - th, y - 0.13), P(a0, R - th, y - 0.13),
+             P(a0, R - th, y + 0.13), P(a1, R - th, y + 0.13));
+    }
+  }
+  for (let m = 0; m < 10; m++) {
+    const a = (m / 10) * Math.PI * 2 + 0.31;
+    if (inDoor(a)) continue;
+    const w = 0.055;
+    S.quad(P(a - w, R, ySill), P(a + w, R, ySill), P(a + w, R, yGlass), P(a - w, R, yGlass));
+    S.quad(P(a + w, R - th, ySill), P(a - w, R - th, ySill),
+           P(a - w, R - th, yGlass), P(a + w, R - th, yGlass));
+  }
+
+  // ---- 観測帯のガラス ----
+  // 加算で映り込みだけを足す板。天蓋と同じ理屈で、半透明合成にすると
+  // 外のマリンスノーや遠景と描画順を争う
+  {
+    const SEG = 48;
+    const pos = [], nrm = [], idx = [];
+    for (let j = 0; j <= 1; j++) {
+      const y = j ? yGlass - 0.13 : ySill + 0.13;
+      for (let k = 0; k <= SEG; k++) {
+        const a = (k / SEG) * Math.PI * 2;
+        pos.push(cx + Math.cos(a) * R, y, cz + Math.sin(a) * R);
+        nrm.push(Math.cos(a), 0, Math.sin(a));
+      }
+    }
+    for (let k = 0; k < SEG; k++) {
+      // 戸口の上は鋼の欄間なので、ガラスを張らない
+      if (inDoor(((k + 0.5) / SEG) * Math.PI * 2)) continue;
+      const p0 = k, p1 = k + 1, p2 = k + SEG + 1, p3 = p2 + 1;
+      idx.push(p0, p2, p3, p0, p3, p1);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nrm), 3));
+    g.setIndex(idx);
+    const gl = new THREE.Mesh(g, mat(ANNEX_GLASS_FRAG, {
+      transparent: true, depthWrite: false,
+      blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+    }));
+    gl.renderOrder = 4;
+    group.add(gl);
+  }
+
+  // ---- 屋根 ----
+  const apexY = yGlass + R * 0.42;
+  const top = S.v(cx, apexY, cz, STEEL);
+  for (let k = 0; k < N; k++) {
+    const a0 = ang(k), a1 = ang(k + 1);
+    S.tri(P(a0, R, yGlass), P(a1, R, yGlass), top);
+  }
+  // 梁。屋根が一枚の傘に見えないよう、放射状に通す
+  for (let m = 0; m < 10; m++) {
+    const a = (m / 10) * Math.PI * 2 + 0.31;
+    strut(S, [cx + Math.cos(a) * (R - 0.1), yGlass + 0.05, cz + Math.sin(a) * (R - 0.1)],
+          [cx, apexY - 0.05, cz], 0.075, STEEL2);
+  }
+
+  // ---- 中の設え ----
+  // 何も無い円筒は部屋ではない。作業台と器械があって初めて
+  // 「人が使っている観測室」になる
+  for (let m = 0; m < 5; m++) {
+    const a = (m / 5) * Math.PI * 2 + 0.6;
+    if (inDoor(a)) continue;
+    const bx = cx + Math.cos(a) * (R - 1.05), bz = cz + Math.sin(a) * (R - 1.05);
+    const px = -Math.sin(a), pz = Math.cos(a);
+    // 作業台
+    const q = [];
+    for (const [u, v] of [[-1.1, -0.42], [1.1, -0.42], [1.1, 0.42], [-1.1, 0.42]]) {
+      q.push(S.v(bx + px * u + Math.cos(a) * v, floorY + 0.95,
+                 bz + pz * u + Math.sin(a) * v, STEEL2));
+    }
+    S.quad(q[0], q[1], q[2], q[3]);
+    for (const u of [-0.95, 0.95]) {
+      strut(S, [bx + px * u, floorY, bz + pz * u],
+            [bx + px * u, floorY + 0.95, bz + pz * u], 0.055, STEEL2);
+    }
+    // 台の上の計器。小さな画面が並んでいる
+    neon.add([bx + px * 0.45 + Math.cos(a) * 0.1, floorY + 1.20, bz + pz * 0.45 + Math.sin(a) * 0.1],
+             [0.35, 1.9, 1.5], 0.085, 0);
+    neon.add([bx - px * 0.45 + Math.cos(a) * 0.1, floorY + 1.20, bz - pz * 0.45 + Math.sin(a) * 0.1],
+             [1.9, 1.2, 0.30], 0.070, 0.7, m * 1.3);
+  }
+  // 天井の灯り
+  for (let m = 0; m < 4; m++) {
+    const a = (m / 4) * Math.PI * 2 + 0.8;
+    neon.add([cx + Math.cos(a) * 2.4, yGlass - 0.35, cz + Math.sin(a) * 2.4],
+             [3.0, 3.3, 3.6], 0.16, 0);
+  }
+  // 床の中心にも一点。入ったときに部屋の広さが分かる
+  neon.add([cx, floorY + 0.06, cz], [1.6, 1.7, 1.9], 0.11, 0);
+
+  // ---- 当たり判定 ----
+  // 壁をすり抜けられては部屋にならない。出入口のところだけ空ける
+  if (world) {
+    // 箱は軸に沿った直方体なので、円い壁は細かく並べて近似する。
+    // 大きな箱を疎に置くと、内側へ食い込んだぶんが部屋の中に張り出して、
+    // 立っている人を壁の外へ押し出してしまう
+    const _b = new THREE.Vector3();
+    for (let k = 0; k < 26; k++) {
+      const a = (k / 26) * Math.PI * 2;
+      if (inDoor(a)) continue;
+      world.addStatic(_b.set(cx + Math.cos(a) * (R + 0.55), base + H * 0.5,
+                             cz + Math.sin(a) * (R + 0.55)),
+                      0.82, H * 0.6, 0.82);
+    }
+    // 屋根の蓋。壁だけ塞いでも、上から降りて屋根を抜けられてしまう
+    // (実際そうなっていて、出入口を使わずに天井から入れた)。
+    //
+    // 当たり判定は楕円体なので、平らな蓋は作れない。中心をうんと上に
+    // 置いて、下側の面だけが屋根の高さに来るようにする——こうすると
+    // 部屋の中の頭上は空いたまま、上からの侵入だけが止まる
+    world.addStatic(_b.set(cx, base + H + 4.2, cz), 6.0, 4.4, 6.0);
   }
 }
 

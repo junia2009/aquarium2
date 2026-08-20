@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { baseUniforms, U } from '../env.js';
 import { UW_FRAG_PRELUDE, UW_FRAG_OUTPUT } from '../glsl.js';
 import { CollisionWorld } from '../collision.js';
-import { buildExterior } from './hubExterior.js';
+import { buildExterior, ANNEX, FLOOR_Y, riseAt } from './hubExterior.js';
 
 // ============ ポータルエリア(海中研究施設) ============
 //
@@ -76,9 +76,22 @@ const LAMP_Y = DECK_Y + WALL_H + 0.55;
 const LAMP_R = ROOM_R * 0.66;
 const lampAngle = (k) => (k / LAMP_N) * Math.PI * 2 + Math.PI / LAMP_N;
 
-/** 施設の床。甲板は継ぎ目のない一枚 */
-export function hubFloor() {
-  return DECK_Y;
+/**
+ * この場所の「床」。カメラも生き物もこれを見て、下限の高さを決める。
+ *
+ * ずっと甲板の高さ(4.0m)を返す定数だった。殻の中しか歩けない前提なら
+ * それでよかったが、外に海底も観測棟も建った以上、外へ出た人が
+ * 甲板の高さで宙に浮いたままになる——海底まで降りられないし、
+ * 観測棟に入っても床から沈む。
+ *
+ * 場所ごとに正しい床を返す。
+ */
+export function hubFloor(x, z) {
+  const r = Math.hypot(x, z);
+  if (r < ROOM_R - 0.6) return DECK_Y;                 // 与圧殻の中は甲板
+  const dx = x - ANNEX.x, dz = z - ANNEX.z;
+  if (dx * dx + dz * dz < ANNEX.inner * ANNEX.inner) return ANNEX.floor;  // 観測棟の中
+  return FLOOR_Y + riseAt(r);                          // それ以外は海底
 }
 
 // 施設の金属。岩や生き物と同じ光で照らして、浮かないようにする
@@ -1349,6 +1362,8 @@ export const HUB = {
     look: new THREE.Vector3(0, PORTAL_Y - 0.55, -ROOM_R),
   },
   clearance: 1.5,
+  // 48m 先の観測棟まで行ける広さ。既定の 42 だと 6m 手前で止まる
+  range: 60,
   // ここに生き物はいないので、餌やりのボタンは出さない。
   // 押せるのに何も起きないボタンは、壊れているのと区別がつかない
   feed: false,
@@ -1412,7 +1427,7 @@ export const HUB = {
         cd.userData.portal = true;
         // 外の海。舷窓の位置が決まってから建てる——
         // 投光器は窓のそばに付いていないと、見ている先が暗いままになる
-        outside = buildExterior(root, wins, ROOM_R, DECK_Y, DOME_TOP);
+        outside = buildExterior(root, wins, ROOM_R, DECK_Y, DOME_TOP, world);
       },
       followTargets: {},
       species: [],
