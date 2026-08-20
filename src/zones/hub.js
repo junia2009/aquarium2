@@ -70,6 +70,19 @@ const WIN_ARC = 0.28;
 // 差のぶんが板厚の見えるところ(開口の内側)になる
 const HOLE_BOT = WIN_Y - 1.55, HOLE_TOP = WIN_Y + 1.55;
 
+// 潜水士用の出入口(エアロック)。
+//
+// 天蓋はガラスなので、そこを通り抜けて外へ出るのは嘘になる。
+// 外に観測棟を建てて「行ける場所」にした以上、まともな出口が要る。
+//
+// 角度は固定値で持つ。舷窓の位置は行き先の数で変わるが、扉が動く
+// 建物は無い。近くに来てしまった舷窓のほうを1枚やめる。
+const LOCK_A = -Math.PI * 0.5 + Math.PI / 5;
+const LOCK_ARC = 0.155;                 // 開口の半角
+const LOCK_TOP = DECK_Y + 2.35;         // 鴨居。WY の段に乗る高さ
+const LOCK_OUT = 18.5;                  // 外の踏み台の先端
+const LOCK_HALF = 2.4;                  // 踏み台の半幅
+
 // 天井の投光器。位置は照明にも光の筋にも塵の明るさにも使う
 const LAMP_N = 8;
 const LAMP_Y = DECK_Y + WALL_H + 0.55;
@@ -91,6 +104,10 @@ export function hubFloor(x, z) {
   if (r < ROOM_R - 0.6) return DECK_Y;                 // 与圧殻の中は甲板
   const dx = x - ANNEX.x, dz = z - ANNEX.z;
   if (dx * dx + dz * dz < ANNEX.inner * ANNEX.inner) return ANNEX.floor;  // 観測棟の中
+  // 出口の外の踏み台。ここが海底の高さだと、扉を出た瞬間に落ちる
+  const along = x * Math.cos(LOCK_A) + z * Math.sin(LOCK_A);
+  const across = -x * Math.sin(LOCK_A) + z * Math.cos(LOCK_A);
+  if (along > ROOM_R - 1.2 && along < LOCK_OUT && Math.abs(across) < LOCK_HALF) return DECK_Y;
   return FLOOR_Y + riseAt(r);                          // それ以外は海底
 }
 
@@ -475,6 +492,10 @@ function buildShell(openings = [], windows = []) {
     }
     return null;
   };
+  // 潜水士用の出口。床から鴨居まで、まるごと開ける
+  const LR0 = 0, LR1 = WY.indexOf(LOCK_TOP);
+  const inLock = (a) =>
+    Math.abs(((a - LOCK_A + Math.PI * 3) % (Math.PI * 2)) - Math.PI) < LOCK_ARC;
   const wall = [];
   for (let i = 0; i <= WROWS; i++) {
     const y = WY[i];
@@ -499,12 +520,40 @@ function buildShell(openings = [], windows = []) {
     if (!holeCols.has(wa)) holeCols.set(wa, []);
     holeCols.get(wa).push(k);
   }
+  const lockCols = [];
+  for (let k = 0; k < N; k++) if (inLock(ang(k) + Math.PI / N)) lockCols.push(k);
   for (let i = 0; i < WROWS; i++) {
     const rowInHole = (i >= R0 && i < R1);
+    const rowInLock = (i >= LR0 && i < LR1);
     for (let k = 0; k < N; k++) {
-      if (rowInHole && inHole(ang(k) + Math.PI / N) !== null) continue;
+      const mid = ang(k) + Math.PI / N;
+      if (rowInHole && inHole(mid) !== null) continue;
+      if (rowInLock && inLock(mid)) continue;
       const k2 = (k + 1) % N;
       M.quad(wall[i][k2], wall[i][k], wall[i + 1][k], wall[i + 1][k2]);
+    }
+  }
+  // 出口の見込み。壁の厚みを見せる——ここが無いと、殻に紙を切った
+  // ような穴が開いているだけになる
+  if (lockCols.length) {
+    const IN = ROOM_R - 0.34;
+    const vc = [...lockCols, (lockCols[lockCols.length - 1] + 1) % N];
+    const inner = (k, i) => M.v(Math.cos(ang(k)) * IN, WY[i], Math.sin(ang(k)) * IN, PAINT2);
+    // 上と下の見込み
+    for (const i of [LR0, LR1]) {
+      for (let j = 0; j < vc.length - 1; j++) {
+        const a0 = wall[i][vc[j]], a1 = wall[i][vc[j + 1]];
+        const b0 = inner(vc[j], i), b1 = inner(vc[j + 1], i);
+        if (i === LR1) M.quad(a0, a1, b1, b0); else M.quad(b0, b1, a1, a0);
+      }
+    }
+    // 左右の見込み
+    for (const [ci, sgn] of [[0, -1], [vc.length - 1, 1]]) {
+      for (let i = LR0; i < LR1; i++) {
+        const a0 = wall[i][vc[ci]], a1 = wall[i + 1][vc[ci]];
+        const b0 = inner(vc[ci], i), b1 = inner(vc[ci], i + 1);
+        if (sgn > 0) M.quad(a0, a1, b1, b0); else M.quad(b0, b1, a1, a0);
+      }
     }
   }
   // 開口の内側(板厚の見えるところ)。
@@ -571,6 +620,107 @@ function buildShell(openings = [], windows = []) {
     M.quad(q3, q2, w1, w0);
   }
   return M.geo();
+}
+
+/**
+ * 出口の外。踏み台・手すり・海底へ降りる梯子。
+ *
+ * 扉だけ開けても、外は 3m 下が海底で、出た先に何も無い。
+ * 潜水士が装備を置いて出入りする踏み台と、底へ降りる梯子があって
+ * 初めて「ここから出る」と分かる。
+ */
+function buildLock(root, plu) {
+  const M = new Buf();
+  const c = Math.cos(LOCK_A), s = Math.sin(LOCK_A);
+  const px = -s, pz = c;
+  const P = (along, across, y, col) =>
+    M.v(c * along + px * across, y, s * along + pz * across, col);
+  const R0 = ROOM_R - 0.4, R1 = LOCK_OUT, HW = LOCK_HALF;
+
+  // 踏み台。滑り止めの甲板と同じ色
+  const q = [P(R0, -HW, DECK_Y, DECK), P(R1, -HW, DECK_Y, DECK),
+             P(R1, HW, DECK_Y, DECK), P(R0, HW, DECK_Y, DECK)];
+  M.quad(q[0], q[1], q[2], q[3]);
+  // 裏側。下から見ると床が消えていては困る
+  const u = [P(R0, -HW, DECK_Y - 0.22, PAINT2), P(R1, -HW, DECK_Y - 0.22, PAINT2),
+             P(R1, HW, DECK_Y - 0.22, PAINT2), P(R0, HW, DECK_Y - 0.22, PAINT2)];
+  M.quad(u[3], u[2], u[1], u[0]);
+  for (let j = 0; j < 4; j++) {
+    const j2 = (j + 1) % 4;
+    M.quad(q[j], q[j2], u[j2], u[j]);
+  }
+  // 踏み台を支える斜材。宙に浮いた板は構造物に見えない
+  for (const sgn of [-1, 1]) {
+    strutHub(M, [c * R1 + px * HW * sgn, DECK_Y - 0.22, s * R1 + pz * HW * sgn],
+             [c * (ROOM_R + 0.4) + px * HW * sgn, DECK_Y - 3.0,
+              s * (ROOM_R + 0.4) + pz * HW * sgn], 0.13, PAINT2);
+  }
+  // 手すり。両脇と先端
+  const post = (along, across) => {
+    strutHub(M, [c * along + px * across, DECK_Y, s * along + pz * across],
+             [c * along + px * across, DECK_Y + 1.05, s * along + pz * across], 0.05, RAIL);
+  };
+  for (const sgn of [-1, 1]) {
+    for (let i = 0; i <= 3; i++) post(R0 + (R1 - R0) * (i / 3), HW * sgn);
+    // 笠木
+    strutHub(M, [c * R0 + px * HW * sgn, DECK_Y + 1.05, s * R0 + pz * HW * sgn],
+             [c * R1 + px * HW * sgn, DECK_Y + 1.05, s * R1 + pz * HW * sgn], 0.045, RAIL);
+  }
+
+  // 梯子。踏み台の先から海底へ
+  const footY = FLOOR_Y + riseAt(LOCK_OUT);
+  for (const sgn of [-1, 1]) {
+    strutHub(M, [c * (R1 - 0.3) + px * 0.45 * sgn, DECK_Y + 0.6, s * (R1 - 0.3) + pz * 0.45 * sgn],
+             [c * (R1 + 0.5) + px * 0.45 * sgn, footY - 0.1, s * (R1 + 0.5) + pz * 0.45 * sgn],
+             0.055, RAIL);
+  }
+  const rungs = 7;
+  for (let i = 1; i < rungs; i++) {
+    const t = i / rungs;
+    const al = (R1 - 0.3) + 0.8 * t, y = DECK_Y + 0.6 + (footY - 0.7 - DECK_Y) * t;
+    strutHub(M, [c * al - px * 0.45, y, s * al - pz * 0.45],
+             [c * al + px * 0.45, y, s * al + pz * 0.45], 0.035, RAIL);
+  }
+
+  // 注意帯。出口のまわりは黄色で囲うのが決まり
+  for (const sgn of [-1, 1]) {
+    const w0 = HW - 0.28, w1 = HW - 0.10;
+    M.quad(P(R0, w0 * sgn, DECK_Y + 0.01, HAZARD), P(R1, w0 * sgn, DECK_Y + 0.01, HAZARD),
+           P(R1, w1 * sgn, DECK_Y + 0.01, HAZARD), P(R0, w1 * sgn, DECK_Y + 0.01, HAZARD));
+  }
+  const mesh = new THREE.Mesh(M.geo(), metalMaterial(plu, LIT_VERT, LIT_FRAG,
+    { side: THREE.DoubleSide }));
+  root.add(mesh);
+  return mesh;
+}
+
+/** 2点を結ぶ角柱。hubExterior の strut と同じ働き */
+function strutHub(M, a, b, rad, col) {
+  const ax = b[0] - a[0], ay = b[1] - a[1], az = b[2] - a[2];
+  const L = Math.hypot(ax, ay, az) || 1;
+  const dx = ax / L, dy = ay / L, dz = az / L;
+  let ux = 0, uy = 1, uz = 0;
+  if (Math.abs(dy) > 0.9) { ux = 1; uy = 0; }
+  let e1x = uy * dz - uz * dy, e1y = uz * dx - ux * dz, e1z = ux * dy - uy * dx;
+  const e1L = Math.hypot(e1x, e1y, e1z) || 1;
+  e1x /= e1L; e1y /= e1L; e1z /= e1L;
+  const e2x = dy * e1z - dz * e1y, e2y = dz * e1x - dx * e1z, e2z = dx * e1y - dy * e1x;
+  const SIDES = 6;
+  const ring = (p) => {
+    const o = [];
+    for (let j = 0; j < SIDES; j++) {
+      const t = (j / SIDES) * Math.PI * 2;
+      const cc = Math.cos(t) * rad, ss = Math.sin(t) * rad;
+      o.push(M.v(p[0] + e1x * cc + e2x * ss, p[1] + e1y * cc + e2y * ss,
+                 p[2] + e1z * cc + e2z * ss, col));
+    }
+    return o;
+  };
+  const r0 = ring(a), r1 = ring(b);
+  for (let j = 0; j < SIDES; j++) {
+    const j2 = (j + 1) % SIDES;
+    M.quad(r0[j], r0[j2], r1[j2], r1[j]);
+  }
 }
 
 // ---------------------------------------------------------------- 天井のガラス
@@ -1379,6 +1529,7 @@ export const HUB = {
     let shell = null;
     let outside = null;
     buildDome(root, plu);
+    buildLock(root, plu);
     buildLamps(root, plu);
     buildShafts(root);
     buildMotes(root);
@@ -1391,9 +1542,32 @@ export const HUB = {
     const _b = new THREE.Vector3();
     for (let k = 0; k < 20; k++) {
       const a = (k / 20) * Math.PI * 2;
+      // 潜水士用の出口の前だけは空ける。ここを塞ぐと、扉を開けた意味が
+      // 無くなるどころか、外に出る手段がひとつも無くなる
+      const d = Math.abs(((a - LOCK_A + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+      if (d < 0.30) continue;
       world.addStatic(_b.set(Math.cos(a) * (ROOM_R + 2.2), DECK_Y + WALL_H * 0.5,
                              Math.sin(a) * (ROOM_R + 2.2)), 2.6, WALL_H, 2.6);
     }
+    // 天蓋に蓋をする。
+    //
+    // これまでガラスの天井には当たり判定が無く、上へ泳げばそのまま
+    // 突き抜けて外へ出られた。耐圧ガラスを素通りするのは嘘なので塞ぐ
+    // ——ただし塞ぐ前に、扉から出られることを実際に泳いで確かめてある。
+    //
+    // ドーム自体が楕円体(半径13、高さ3.4)なので、そのまま1個の当たり
+    // 判定にすると下半分が部屋の中へ張り出す。曲面に沿って小さな球を
+    // 並べて、面だけを塞ぐ
+    for (const [t, n] of [[0.12, 30], [0.40, 26], [0.68, 18], [0.90, 8]]) {
+      const u = t * Math.PI * 0.5;
+      const rr = ROOM_R * Math.cos(u);
+      const yy = DECK_Y + WALL_H + DOME_H * Math.sin(u);
+      for (let k = 0; k < n; k++) {
+        const a = (k / n) * Math.PI * 2 + t;
+        world.addStatic(_b.set(Math.cos(a) * rr, yy + 1.15, Math.sin(a) * rr), 1.7, 1.5, 1.7);
+      }
+    }
+    world.addStatic(_b.set(0, DOME_TOP + 1.1, 0), 2.0, 1.5, 2.0);
 
     return {
       world,
@@ -1409,7 +1583,12 @@ export const HUB = {
           -Math.PI * 0.5 + (i / defs.length) * Math.PI * 2);
         // 舷窓はハッチとハッチのちょうど真ん中。ハッチが増えれば
         // 窓も一緒に増えて、間隔は勝手に保たれる
-        const wins = angles.map((a) => a + Math.PI / defs.length);
+        // 舷窓。ただし潜水士用の出口と重なるものは開けられないので外す。
+        // 扉は動かない建物の一部で、窓のほうが譲る
+        const wins = angles.map((a) => a + Math.PI / defs.length).filter((a) => {
+          const d = Math.abs(((a - LOCK_A + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+          return d > LOCK_ARC + WIN_ARC;
+        });
         const openings = [...angles.map((a) => [a, PORTAL_ARC]),
                           ...wins.map((a) => [a, WIN_ARC])];
         // 甲板の標示だけは、この殻のシェーダに焼き込む。
