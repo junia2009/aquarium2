@@ -33,15 +33,18 @@ const FLOOR_R1 = 240.0;
 // ときの一度きりなので、焼き込むほうが速いし読みやすい
 function floodGLSL(lights) {
   const v3 = (a) => `vec3(${a.map((x) => x.toFixed(3)).join(',')})`;
-  const body = lights.map((L) => `s += flood1(wp, n, ${v3(L.p)}, ${v3(L.d)});`).join('\n      ');
+  const body = lights
+    .map((L) => `s += flood1(wp, n, ${v3(L.p)}, ${v3(L.d)}, ${v3(L.c)}, ${L.k.toFixed(3)});`)
+    .join('\n      ');
   return /* glsl */ `
-    vec3 flood1(vec3 wp, vec3 n, vec3 lp, vec3 ld) {
+    vec3 flood1(vec3 wp, vec3 n, vec3 lp, vec3 ld, vec3 lc, float spread) {
       vec3 d = lp - wp;
       float dist = length(d);
       vec3 L = d / max(dist, 0.001);
-      // 器具から見て、その点は照射方向の何度ずれているか
+      // 器具から見て、その点は照射方向の何度ずれているか。
+      // spread が小さいほど絞った配光になる
       float cs = dot(-L, ld);
-      float cone = smoothstep(0.55, 0.90, cs);
+      float cone = smoothstep(1.0 - spread, 1.0 - spread * 0.22, cs);
       // 距離による減衰は2つ掛かる。
       //
       //  1) 広がりによる 1/r^2 —— どんな光にもある
@@ -52,12 +55,14 @@ function floodGLSL(lights) {
       // いたときは、明るさだけが落ちて夜の陸に見えていた
       float att = 1.0 / (1.0 + 0.030 * dist + 0.0060 * dist * dist);
       vec3 absorb = exp(-${EXT_ABSORB} * dist);
-      return (max(dot(n, L), 0.0) * 0.88 + 0.12) * att * cone * absorb;
+      // 器具ごとに色を持たせる。白い投光器と、栽培区画の桃色の育成灯が
+      // 同じ海底に別々の溜まりを作る
+      return lc * ((max(dot(n, L), 0.0) * 0.88 + 0.12) * att * cone) * absorb;
     }
     vec3 floodLight(vec3 wp, vec3 n) {
       vec3 s = vec3(0.0);
       ${body}
-      return vec3(9.6, 9.2, 9.0) * s;
+      return s;
     }
   `;
 }
@@ -241,6 +246,17 @@ class Buf {
   }
 }
 
+// 施設は窪地の底にいる。遠くへ行くほど底が持ち上がる。
+//
+// 平らな底にすると、部屋の中心に立って窓を見たとき、水平の視線には
+// 何も映らない——敷居に遮られて海底は見えず、真っ暗な四角になる。
+// 実際そうなっていた。海底は「下にある」だけでなく「遠くで立ち上がって
+// 目の高さまで来る」ものにして初めて、窓の正面に海が見える
+export function riseAt(r) {
+  const t = Math.min(Math.max((r - 22) / 56, 0), 1);
+  return t * t * (3 - 2 * t) * 8.5;
+}
+
 // 決まった種から作る乱数。作り直しても同じ景色になる——
 // ハッチが増えるたびに外の岩が別の場所へ移ると、
 // 「同じ場所に帰ってきた」感じが壊れる
@@ -255,6 +271,223 @@ function rng(seed) {
 const STEEL = [0.138, 0.146, 0.154];
 const STEEL2 = [0.120, 0.128, 0.138];
 const ROCK = [0.088, 0.086, 0.080];
+// 海藻。褐藻はよく光を返すので、岩よりはっきり明るく取る。
+// 暗く置くと、育成灯の下以外では「あるのに見えない」ことになる
+const KELP = [0.105, 0.195, 0.115];
+// 魚の体色。投光器の錐の中を通るので、反射率をそのまま銀色にすると
+// 真っ白に飛んで貼り付けたように見える。控えめに取る
+const FISH = [0.072, 0.082, 0.094];
+
+// --- 海藻 ---
+//
+// 一枚の葉を、根もとを軸にして撓ませる。上へ行くほど大きく揺れ、
+// 隣の葉と位相をずらす。全部が同じ動きをすると、水ではなく
+// 一枚の布が揺れているように見える。
+const KELP_VERT = /* glsl */ `
+  // 共通の前置き(UW_FRAG_PRELUDE)はフラグメント側にしか入らない。
+  // 頂点シェーダで使うユニフォームは、ここで自分で宣言する
+  uniform float uTime;
+  attribute vec3 aCol;
+  attribute vec3 aRoot;    // 根もとの位置
+  attribute vec3 aParam;   // x:高さ y:向き z:位相
+  varying vec3 vCol;
+  varying vec3 vN;
+  varying vec3 vW;
+  void main() {
+    float t = position.y / max(aParam.x, 0.001);   // 0=根 1=先
+    // 撓みは高さの2乗で効く。線形にすると根もとから折れて見える
+    float amp = t * t * (0.20 + 0.55 * aParam.x);
+    float ph = uTime * 0.55 + aParam.z;
+    vec3 p = position;
+    p.x += sin(ph) * amp + sin(ph * 2.3 + t * 3.0) * amp * 0.30;
+    p.z += cos(ph * 0.8) * amp * 0.55;
+    // 向き
+    float c = cos(aParam.y), s = sin(aParam.y);
+    vec3 r = vec3(p.x * c - p.z * s, p.y, p.x * s + p.z * c);
+    vec4 wp = modelMatrix * vec4(r + aRoot, 1.0);
+    vW = wp.xyz;
+    // 葉は薄いので、法線は撓みに合わせて振るだけでよい
+    vN = normalize(mat3(modelMatrix) * vec3(sin(ph) * 0.6 * c - s, 0.25, sin(ph) * 0.6 * s + c));
+    vCol = aCol;
+    gl_Position = projectionMatrix * viewMatrix * wp;
+  }
+`;
+
+// --- 魚 ---
+//
+// 位置と向きは CPU で毎フレーム置く(数十匹なら誤差の範囲)。
+// 尾の振りだけは頂点シェーダに任せる——1匹ごとに形が違うので、
+// CPU で頂点を触ると匹数ぶんの配列更新になってしまう。
+const FISH_VERT = /* glsl */ `
+  uniform float uTime;
+  attribute vec3 aCol;
+  attribute float aPhase;
+  varying vec3 vCol;
+  varying vec3 vN;
+  varying vec3 vW;
+  void main() {
+    vec3 p = position;
+    // 尾を振る。頭は動かず、後ろへ行くほど大きく振れる
+    float tailT = clamp(-p.z / 0.55, 0.0, 1.0);
+    p.x += sin(uTime * 7.0 + aPhase - tailT * 2.4) * tailT * tailT * 0.16;
+    vec4 wp = modelMatrix * instanceMatrix * vec4(p, 1.0);
+    vW = wp.xyz;
+    vN = normalize(mat3(modelMatrix) * mat3(instanceMatrix) * normal);
+    vCol = aCol;
+    gl_Position = projectionMatrix * viewMatrix * wp;
+  }
+`;
+
+// 魚と海藻は同じ照らし方でよい。金属ではないので、
+// 錆の縦垂れや生物付着の項が要らないぶん HULL_FRAG より軽い
+const LIFE_FRAG = /* glsl */ `
+  varying vec3 vCol;
+  varying vec3 vN;
+  varying vec3 vW;
+  void main() {
+    vec3 n = gl_FrontFacing ? normalize(vN) : -normalize(vN);
+    vec3 col = vCol * (vec3(0.030, 0.046, 0.062) + floodLight(vW, n));
+    gl_FragColor = vec4(extFog(col, vW), 1.0);
+    ${UW_FRAG_OUTPUT}
+  }
+`;
+
+// ============ 標識灯 ============
+//
+// 「海底調査用研究所」を一目で言うのは、建物の形よりも**灯り**です。
+// 暗い水の中で、色のついた小さな光が規則正しく並んでいる——
+// それだけで「人が運用している設備」に見える。自然界に等間隔の
+// 点滅光は無いので、これは形よりも強い合図になります。
+//
+// 灯りは2枚で1組。器具そのもの(小さな発光面)と、まわりの水が
+// 散らす暈(かさ)。暈が無いと、暗闇に貼った色つきのシールにしか
+// 見えません——水中では光源のまわりが必ず滲みます。
+class Neon {
+  constructor() { this.q = []; }
+  /**
+   * @param {number[]} p   位置
+   * @param {number[]} c   色(線形)
+   * @param {number} size  器具の大きさ(m)
+   * @param {number} hz    点滅の速さ。0 なら常時点灯
+   * @param {number} phase 点滅の位相
+   */
+  add(p, c, size = 0.10, hz = 0, phase = 0) {
+    this.q.push({ p, c, size, hz, phase });
+  }
+  build(group) {
+    if (!this.q.length) return;
+    // --- 器具の発光面。小さな8面体にして、どの向きからも見える ---
+    const pos = [], col = [], bl = [], idx = [];
+    const V = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+    const F = [[0, 2, 4], [2, 1, 4], [1, 3, 4], [3, 0, 4],
+               [2, 0, 5], [1, 2, 5], [3, 1, 5], [0, 3, 5]];
+    for (const L of this.q) {
+      const base = pos.length / 3;
+      for (const v of V) {
+        pos.push(L.p[0] + v[0] * L.size, L.p[1] + v[1] * L.size, L.p[2] + v[2] * L.size);
+        col.push(L.c[0], L.c[1], L.c[2]);
+        bl.push(L.hz, L.phase);
+      }
+      for (const f of F) idx.push(base + f[0], base + f[1], base + f[2]);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+    g.setAttribute('aCol', new THREE.BufferAttribute(new Float32Array(col), 3));
+    g.setAttribute('aBlink', new THREE.BufferAttribute(new Float32Array(bl), 2));
+    g.setIndex(idx);
+    group.add(new THREE.Mesh(g, new THREE.ShaderMaterial({
+      uniforms: baseUniforms(),
+      vertexShader: NEON_VERT,
+      fragmentShader: NEON_FRAG,
+      // トーンマッピングは通さない。ACES は明るい色ほど白へ寄せるので、
+      // 通すとネオンから色が抜けて、ただの白い点になる
+      side: THREE.DoubleSide,
+    })));
+
+    // --- 暈。Points なら常に画面を向くので、板を回す手間が要らない ---
+    const hp = new Float32Array(this.q.length * 3);
+    const hc = new Float32Array(this.q.length * 3);
+    const hb = new Float32Array(this.q.length * 3);   // x:速さ y:位相 z:大きさ
+    this.q.forEach((L, i) => {
+      hp[i * 3] = L.p[0]; hp[i * 3 + 1] = L.p[1]; hp[i * 3 + 2] = L.p[2];
+      hc[i * 3] = L.c[0]; hc[i * 3 + 1] = L.c[1]; hc[i * 3 + 2] = L.c[2];
+      hb[i * 3] = L.hz; hb[i * 3 + 1] = L.phase; hb[i * 3 + 2] = L.size;
+    });
+    const hg = new THREE.BufferGeometry();
+    hg.setAttribute('position', new THREE.BufferAttribute(hp, 3));
+    hg.setAttribute('aCol', new THREE.BufferAttribute(hc, 3));
+    hg.setAttribute('aBlink', new THREE.BufferAttribute(hb, 3));
+    group.add(new THREE.Points(hg, new THREE.ShaderMaterial({
+      uniforms: baseUniforms(),
+      vertexShader: HALO_VERT,
+      fragmentShader: HALO_FRAG,
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    })));
+  }
+}
+
+// 点滅の形。ゆっくり明滅ではなく、短く光って長く消えるほうが
+// 「機械が知らせている」に見える
+const BLINK_GLSL = /* glsl */ `
+  float blink(float hz, float phase) {
+    if (hz < 0.001) return 1.0;
+    float s = sin(uTime * hz + phase) * 0.5 + 0.5;
+    return 0.18 + 0.82 * pow(s, 5.0);
+  }
+`;
+
+const NEON_VERT = /* glsl */ `
+  uniform float uTime;
+  attribute vec3 aCol;
+  attribute vec2 aBlink;
+  varying vec3 vC;
+  ${BLINK_GLSL}
+  void main() {
+    vC = aCol * blink(aBlink.x, aBlink.y);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const NEON_FRAG = /* glsl */ `
+  varying vec3 vC;
+  void main() {
+    gl_FragColor = vec4(vC, 1.0);
+    #include <colorspace_fragment>
+  }
+`;
+
+const HALO_VERT = /* glsl */ `
+  uniform float uTime;
+  attribute vec3 aCol;
+  attribute vec3 aBlink;
+  varying vec3 vC;
+  varying float vD;
+  ${BLINK_GLSL}
+  void main() {
+    vC = aCol * blink(aBlink.x, aBlink.y);
+    vec4 mv = viewMatrix * modelMatrix * vec4(position, 1.0);
+    vD = -mv.z;
+    // 暈は器具の10倍ほどに広がる。遠くても最低限の大きさは残す
+    gl_PointSize = max(aBlink.z * 130.0 / max(-mv.z, 1.0), 2.0);
+    gl_Position = projectionMatrix * mv;
+  }
+`;
+
+const HALO_FRAG = /* glsl */ `
+  varying vec3 vC;
+  varying float vD;
+  void main() {
+    vec2 q = gl_PointCoord * 2.0 - 1.0;
+    float r2 = dot(q, q);
+    if (r2 > 1.0) discard;
+    // 中心が濃く、外へ急に薄れる。線形に落とすと綿のような玉になる
+    float a = pow(1.0 - r2, 3.0) * 0.55;
+    // 水が散らす光なので、遠いほど滲みは弱く
+    a *= exp(-vD * 0.020);
+    gl_FragColor = vec4(vC * a, a);
+    #include <colorspace_fragment>
+  }
+`;
 
 /**
  * 施設の外を建てる。
@@ -276,17 +509,50 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop) {
   const FL_Y = deckY + 5.6;
   const lights = [];
   const fixtures = [];
+  const WHITE = [9.6, 9.2, 9.0];
   for (const wa of winAngles) {
     for (const off of [-0.155, 0.155]) {
       const a = wa + off;
       const p = [Math.cos(a) * (hullR + 0.55), FL_Y, Math.sin(a) * (hullR + 0.55)];
       // 外向き・下向き。海底の見える範囲を照らす角度に振る
       const d = new THREE.Vector3(Math.cos(a) * 0.62, -0.78, Math.sin(a) * 0.62).normalize();
-      lights.push({ p, d: [d.x, d.y, d.z], a });
+      lights.push({ p, d: [d.x, d.y, d.z], c: WHITE, k: 0.45 });
       fixtures.push({ p, d, a });
     }
   }
+
+  // ---- 海藻の栽培区画 ----
+  //
+  // 太陽の届かない深さに海藻が生えているのは嘘になる。だが
+  // **育成灯の下でなら本当**で、しかもそれは海底調査用研究所が
+  // やっていて当然のことでもある。「海藻が欲しい」と「研究所らしく
+  // したい」と「ネオンを増やしたい」が、この一つで全部片づく。
+  //
+  // 育成灯が桃色なのは飾りではない。植物が使うのは主に赤と青で、
+  // 緑はほとんど反射してしまう——だから実物の植物育成 LED は
+  // 赤+青、つまり混ざって桃色に見える
+  // 舷窓の正面に、少し遠めに置く。
+  //
+  // 近すぎると敷居に隠れる。目の高さ 5.9m から敷居(半径13m・高さ4.8m)
+  // 越しに見下ろせる俯角はたかだか十数度で、部屋の中心から海底が
+  // 見えはじめるのは半径 28m あたり。19.5m に置いたら区画の下半分が
+  // 切れていた。窓に寄れば見えるが、真ん中に立っても目に入るほうがいい
+  const PLOT_A = winAngles.length ? winAngles[1] : 1.9;
+  const PLOT_R = 26.0;
+  const plot = {
+    a: PLOT_A, r: PLOT_R,
+    x: Math.cos(PLOT_A) * PLOT_R, z: Math.sin(PLOT_A) * PLOT_R,
+    w: 5.2, d: 3.6, h: 3.0,
+  };
+  plot.y = FLOOR_Y + riseAt(PLOT_R);
+  const GROW = [7.4, 1.5, 8.8];
+  for (let i = -1; i <= 1; i++) {
+    const px = plot.x + Math.cos(PLOT_A + Math.PI / 2) * i * (plot.w * 0.33);
+    const pz = plot.z + Math.sin(PLOT_A + Math.PI / 2) * i * (plot.w * 0.33);
+    lights.push({ p: [px, plot.y + plot.h, pz], d: [0, -1, 0], c: GROW, k: 0.85 });
+  }
   const FLOOD = floodGLSL(lights);
+  const neon = new Neon();
 
   const mat = (frag, extra = {}) => new THREE.ShaderMaterial({
     uniforms: baseUniforms(),
@@ -304,16 +570,7 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop) {
   const noise = rng(20260820);
   // 起伏は決まった関数から。頂点ごとに乱数を引くと、
   // 作り直すたびに地形が変わる
-  // 施設は窪地の底にいる。遠くへ行くほど底が持ち上がる。
-  //
-  // 平らな底にすると、部屋の中心に立って窓を見たとき、水平の視線には
-  // 何も映らない——敷居に遮られて海底は見えず、真っ暗な四角になる。
-  // 実際そうなっていた。海底は「下にある」だけでなく「遠くで立ち上がって
-  // 目の高さまで来る」ものにして初めて、窓の正面に海が見える
-  const rise = (r) => {
-    const t = Math.min(Math.max((r - 22) / 56, 0), 1);
-    return t * t * (3 - 2 * t) * 8.5;
-  };
+  const rise = riseAt;
   const relief = (x, z) => (
     Math.sin(x * 0.055 + Math.cos(z * 0.041) * 2.1) * 0.62
     + Math.sin(z * 0.083 - 1.3) * 0.34
@@ -436,13 +693,35 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop) {
     strut(S, [foot[0], FLOOR_Y + 0.55, foot[2]],
           [foot[0], FLOOR_Y - 0.25, foot[2]], 0.78, STEEL2);
   }
-  // 岩。海底に何も無いと、距離感が出ない
-  for (let i = 0; i < 34; i++) {
+  // 岩。海底に何も無いと、距離感が出ない。
+  //
+  // 34個をまんべんなく撒いていたが、「岩も何も無い」と言われた。
+  // 数の問題だけではなく、**均等にばらまくと風景にならない**——
+  // 実際の海底では岩は転がって寄り集まるので、群れで置く。
+  // 大きさの幅も広げる(近くの小石から、施設ほどの露頭まで)
+  const rocks = [];
+  for (let cl = 0; cl < 16; cl++) {
+    const ca = noise() * Math.PI * 2;
+    const cr = 16 + Math.pow(noise(), 0.75) * 54;
+    const n = 2 + Math.floor(noise() * 6);
+    // 群れの中でいちばん大きい石。遠い群れほど大きくてよい
+    const big = 0.6 + Math.pow(noise(), 2.0) * (1.4 + cr * 0.075);
+    for (let i = 0; i < n; i++) {
+      const sa = ca + (noise() - 0.5) * 0.30;
+      const sr = cr + (noise() - 0.5) * 7.0;
+      const x = Math.cos(sa) * sr, z = Math.sin(sa) * sr;
+      const rad = big * (0.30 + noise() * 0.70);
+      rocks.push([x, z, rad]);
+      blob(S, x, FLOOR_Y + relief(x, z) + rad * 0.30, z, rad, noise, ROCK);
+    }
+  }
+  // 露頭。遠くに数個、大きな塊を置くと窪地の底らしくなる
+  for (let i = 0; i < 5; i++) {
     const a = noise() * Math.PI * 2;
-    const r = 17 + Math.pow(noise(), 0.7) * 52;
+    const r = 44 + noise() * 34;
     const x = Math.cos(a) * r, z = Math.sin(a) * r;
-    const rad = 0.5 + noise() * 1.9;
-    blob(S, x, FLOOR_Y + relief(x, z) + rad * 0.35, z, rad, noise, ROCK);
+    const rad = 4.0 + noise() * 4.5;
+    blob(S, x, FLOOR_Y + relief(x, z) + rad * 0.18, z, rad, noise, ROCK);
   }
 
   // 隣の区画。円筒＋短い連絡通路。
@@ -483,7 +762,180 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop) {
           0.13, STEEL2);
     masts.push([bx, by + h + 0.28, bz]);
   });
+
+  // ---- 海藻の栽培区画 ----
+  // 四隅の柱と、上に渡した育成灯の桁。中に海藻が生える
+  {
+    const ux = Math.cos(plot.a + Math.PI / 2), uz = Math.sin(plot.a + Math.PI / 2);
+    const vx = Math.cos(plot.a), vz = Math.sin(plot.a);
+    const corner = (su, sv) => [plot.x + ux * su * plot.w / 2 + vx * sv * plot.d / 2,
+                                plot.y,
+                                plot.z + uz * su * plot.w / 2 + vz * sv * plot.d / 2];
+    const posts = [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)];
+    for (const c of posts) {
+      strut(S, c, [c[0], c[1] + plot.h, c[2]], 0.09, STEEL2);
+    }
+    // 上の桁。育成灯はここに並ぶ
+    for (let j = 0; j < 4; j++) {
+      const a0 = posts[j], a1 = posts[(j + 1) % 4];
+      strut(S, [a0[0], a0[1] + plot.h, a0[2]], [a1[0], a1[1] + plot.h, a1[2]], 0.07, STEEL2);
+    }
+    // 育成灯の帯。3本の桃色の管
+    for (let i = -1; i <= 1; i++) {
+      const cx = plot.x + ux * i * (plot.w * 0.33), cz = plot.z + uz * i * (plot.w * 0.33);
+      for (let t = -2; t <= 2; t++) {
+        neon.add([cx + vx * t * (plot.d * 0.21), plot.y + plot.h - 0.10,
+                  cz + vz * t * (plot.d * 0.21)], [3.4, 0.55, 4.2], 0.115, 0);
+      }
+    }
+    // 区画の識別灯。四隅に琥珀色
+    for (const c of posts) neon.add([c[0], c[1] + plot.h + 0.20, c[2]], [4.2, 2.0, 0.35], 0.09, 0);
+  }
+
+  // ---- 海底の生き物(動かないもの) ----
+  //
+  // 深海底は不毛ではない。柄のついたウミエラが泥から立ち、
+  // 岩には管を伸ばした環形動物が付く。動かないので静的な形でよく、
+  // 「何も無い」を埋めるのにいちばん効く
+  const pens = [];
+  for (let i = 0; i < 46; i++) {
+    const a = noise() * Math.PI * 2;
+    const r = 15 + Math.pow(noise(), 0.6) * 40;
+    const x = Math.cos(a) * r, z = Math.sin(a) * r;
+    const y = FLOOR_Y + relief(x, z);
+    const h = 0.7 + noise() * 1.5;
+    // 柄。潮に少し傾いている
+    const lean = 0.18 + noise() * 0.22, la = noise() * Math.PI * 2;
+    const tip = [x + Math.cos(la) * lean * h, y + h, z + Math.sin(la) * lean * h];
+    strut(S, [x, y - 0.1, z], tip, 0.035 + noise() * 0.02, [0.10, 0.09, 0.11]);
+    // 羽枝。左右に短い枝を出すと一気にウミエラらしくなる
+    const bn = 5;
+    for (let k = 1; k <= bn; k++) {
+      const t = k / (bn + 1);
+      const bx = x + (tip[0] - x) * t, by = y + h * t, bz = z + (tip[2] - z) * t;
+      const bl = 0.16 + 0.20 * Math.sin(t * Math.PI);
+      for (const sgn of [-1, 1]) {
+        strut(S, [bx, by, bz],
+              [bx + Math.cos(la + Math.PI / 2) * bl * sgn, by + bl * 0.5,
+               bz + Math.sin(la + Math.PI / 2) * bl * sgn], 0.022, [0.13, 0.10, 0.12]);
+      }
+    }
+    // 5本に1本だけ、先が生物発光する。全部光ると電飾になる
+    if (i % 5 === 0) pens.push(tip);
+  }
+  // 明滅の位相も決まった乱数から。Math.random() を使うと、
+  // 作り直すたびに光りかたが変わってしまう
+  for (const t of pens) {
+    neon.add(t, [0.55, 1.55, 1.30], 0.055, 0.5 + noise() * 0.35, noise() * 6.28);
+  }
+
   group.add(new THREE.Mesh(S.geo(), mat(HULL_FRAG, { side: THREE.DoubleSide })));
+
+  // ---- 海藻 ----
+  // 育成灯の下の区画に密生させ、外にもまばらに逃がす
+  // (栽培したものが種を飛ばして周りに広がった、という体)
+  {
+    const blades = [];
+    const ux = Math.cos(plot.a + Math.PI / 2), uz = Math.sin(plot.a + Math.PI / 2);
+    const vx = Math.cos(plot.a), vz = Math.sin(plot.a);
+    for (let i = 0; i < 150; i++) {
+      const su = (noise() * 2 - 1) * plot.w * 0.46, sv = (noise() * 2 - 1) * plot.d * 0.46;
+      blades.push([plot.x + ux * su + vx * sv, plot.y - 0.05, plot.z + uz * su + vz * sv,
+                   0.9 + noise() * 1.5]);
+    }
+    // 区画の外にも逃がす(栽培したものが広がった、という体)。
+    //
+    // ただし撒く先は投光器の照らす範囲に限る。窓ごとに1株は見えて
+    // ほしいので、舷窓の正面——つまり投光器の錐が海底に当たるあたり
+    // ——に群れを置く。暗がりに植えても、あるのに見えない
+    for (const wa of winAngles) {
+      for (let cl = 0; cl < 3; cl++) {
+        const ca = wa + (noise() * 2 - 1) * 0.30;
+        const cr = 16 + noise() * 6;
+        for (let i = 0; i < 16; i++) {
+          const a = ca + (noise() * 2 - 1) * 0.075;
+          const r = cr + (noise() * 2 - 1) * 2.2;
+          const x = Math.cos(a) * r, z = Math.sin(a) * r;
+          blades.push([x, FLOOR_Y + relief(x, z) - 0.05, z, 0.85 + noise() * 1.5]);
+        }
+      }
+    }
+    const N = blades.length, SEGY = 6;
+    const vpb = (SEGY + 1) * 2;
+    const pos = new Float32Array(N * vpb * 3);
+    const col = new Float32Array(N * vpb * 3);
+    const rootA = new Float32Array(N * vpb * 3);
+    const parA = new Float32Array(N * vpb * 3);
+    const idx = [];
+    blades.forEach(([bx, by, bz, h], bi) => {
+      const yaw = noise() * Math.PI * 2, phase = noise() * 6.28;
+      const wide = 0.055 + noise() * 0.05;
+      const tint = 0.75 + noise() * 0.5;
+      for (let j = 0; j <= SEGY; j++) {
+        const t = j / SEGY;
+        // 葉は根もとが細く、中ほどが広く、先が尖る
+        const w = wide * Math.sin(Math.min(t * 1.15, 1) * Math.PI) * 1.6 + wide * 0.25;
+        for (let s = 0; s < 2; s++) {
+          const k = (bi * vpb + j * 2 + s);
+          pos[k * 3] = (s ? w : -w); pos[k * 3 + 1] = t * h; pos[k * 3 + 2] = 0;
+          col[k * 3] = KELP[0] * tint; col[k * 3 + 1] = KELP[1] * tint;
+          col[k * 3 + 2] = KELP[2] * tint;
+          rootA[k * 3] = bx; rootA[k * 3 + 1] = by; rootA[k * 3 + 2] = bz;
+          parA[k * 3] = h; parA[k * 3 + 1] = yaw; parA[k * 3 + 2] = phase;
+        }
+      }
+      for (let j = 0; j < SEGY; j++) {
+        const p0 = bi * vpb + j * 2;
+        idx.push(p0, p0 + 1, p0 + 3, p0, p0 + 3, p0 + 2);
+      }
+    });
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setAttribute('aCol', new THREE.BufferAttribute(col, 3));
+    g.setAttribute('aRoot', new THREE.BufferAttribute(rootA, 3));
+    g.setAttribute('aParam', new THREE.BufferAttribute(parA, 3));
+    g.setIndex(idx);
+    // 葉は薄いので裏も見える。法線はシェーダで作るので computeVertexNormals は不要
+    g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(N * vpb * 3), 3));
+    group.add(new THREE.Mesh(g, mat(LIFE_FRAG,
+      { vertexShader: KELP_VERT, side: THREE.DoubleSide })));
+  }
+
+  // ---- 魚 ----
+  //
+  // 投光器の光の中を横切るものが要る。動くものが1つも無いと、
+  // どれだけ物を置いても「模型」から出られない。
+  // 深海の魚は群れないが、ここは投光器に照らされた餌場なので、
+  // 集まってくる理由のほうはある
+  const fish = (() => {
+    const COUNT = 64;
+    const geo = fishGeometry();
+    const cols = new Float32Array(geo.attributes.position.count * 3);
+    for (let i = 0; i < cols.length; i += 3) {
+      cols[i] = FISH[0]; cols[i + 1] = FISH[1]; cols[i + 2] = FISH[2];
+    }
+    geo.setAttribute('aCol', new THREE.BufferAttribute(cols, 3));
+    const ph = new Float32Array(geo.attributes.position.count);
+    geo.setAttribute('aPhase', new THREE.BufferAttribute(ph, 1));
+    const mesh = new THREE.InstancedMesh(geo,
+      mat(LIFE_FRAG, { vertexShader: FISH_VERT, side: THREE.DoubleSide }), COUNT);
+    mesh.frustumCulled = false;
+    // 1匹ずつ「どの軌道をどの速さで回るか」だけ決めておく
+    const paths = [];
+    for (let i = 0; i < COUNT; i++) {
+      paths.push({
+        r: hullR + 2.5 + noise() * 15,
+        y: FLOOR_Y + 1.0 + noise() * 7.5,
+        w: (noise() < 0.5 ? -1 : 1) * (0.055 + noise() * 0.075),
+        ph: noise() * Math.PI * 2,
+        bobA: 0.3 + noise() * 0.8,
+        bobW: 0.5 + noise() * 0.9,
+        s: 0.55 + noise() * 0.85,
+      });
+    }
+    group.add(mesh);
+    return { mesh, paths, COUNT };
+  })();
 
   // ---- 投光器の器具と発光面 ----
   const F = new Buf();
@@ -645,16 +1097,65 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop) {
   beacon.position.set(mx, mBase + 7.0 + 5.2 * 0.42 + 0.45, mz);
   group.add(beacon);
 
-  // やぐらの頭にも小さな灯。色を変えて、区画の標識と区別する
-  const mastLights = masts.map((p, i) => {
-    const m = new THREE.Mesh(
-      new THREE.SphereGeometry(0.16, 8, 6),
-      new THREE.MeshBasicMaterial({ color: 0x9fe8c0, toneMapped: false }));
-    m.position.set(p[0], p[1], p[2]);
-    m.userData.ph = i * 0.37;
-    group.add(m);
-    return m;
-  });
+  // やぐらの頭の灯。色を変えて、区画の標識と区別する
+  masts.forEach((p, i) => neon.add(p, [0.55, 3.2, 1.5], 0.16, 1.05, i * 1.9));
+
+  // ---- 殻の標識灯 ----
+  //
+  // 船や航空機と同じで、有人の構造物には縁を示す灯りが必ず付く。
+  // 暗い水の中で「どこまでが建物か」を教えるのが役目で、
+  // 等間隔に並んだ色つきの点というのは自然界には無い——
+  // だから形よりも強く「人の設備」を語る
+  for (let k = 0; k < 24; k++) {
+    const a = (k / 24) * Math.PI * 2;
+    const c = Math.cos(a), s = Math.sin(a);
+    // 甲板の高さに琥珀、天蓋の付け根に青。上下2段で殻の丈が分かる
+    neon.add([c * (hullR + 0.14), deckY + 0.35, s * (hullR + 0.14)],
+             [3.6, 1.55, 0.22], 0.075, 0);
+    if (k % 2 === 0) {
+      neon.add([c * (hullR + 0.14), domeTop - 3.55, s * (hullR + 0.14)],
+               [0.40, 1.9, 3.4], 0.070, 0);
+    }
+  }
+  // 出入口の上に、ゆっくり回る赤。1点だけ動きの違うものがあると、
+  // 全体が「動いている設備」に見える
+  const dockA = winAngles.length ? winAngles[2] + 0.42 : 2.6;
+  neon.add([Math.cos(dockA) * (hullR + 0.30), deckY + 3.4, Math.sin(dockA) * (hullR + 0.30)],
+           [4.6, 0.55, 0.30], 0.16, 0.9, 0);
+
+  // ---- 海底の誘導灯 ----
+  // 施設から隣の区画へ、点々と続く。人がここを行き来している証拠。
+  //
+  // 杭は S ではなく別の Buf に積む。S はもう geo() を取って
+  // メッシュにしてしまっているので、あとから足しても画面に出ない
+  {
+    const G = new Buf();
+    const n = 16;
+    for (let i = 1; i <= n; i++) {
+      const t = i / (n + 1);
+      const r = hullR + 3.0 + (MD - hullR - 5.0) * t;
+      const px = Math.cos(ma) * r, pz = Math.sin(ma) * r;
+      const py = FLOOR_Y + riseAt(r);
+      // 短い杭の上に載せる。泥に直に置くと埋まって見えない
+      strut(G, [px, py - 0.1, pz], [px, py + 0.42, pz], 0.045, STEEL2);
+      // 順に流れる位相。滑走路の誘導灯と同じで、進む向きが分かる
+      neon.add([px, py + 0.50, pz], [0.35, 1.5, 3.6], 0.070, 1.9, -i * 0.55);
+    }
+    group.add(new THREE.Mesh(G.geo(), mat(HULL_FRAG, { side: THREE.DoubleSide })));
+  }
+  neon.build(group);
+
+  // ---- 魚を泳がせる ----
+  const _m = new THREE.Matrix4();
+  const _q = new THREE.Quaternion();
+  const _p = new THREE.Vector3();
+  const _dir = new THREE.Vector3();
+  // 使い回しの一時変数は、1つの呼び出しの中で2役を兼ねさせないこと。
+  // lookAt(eye, target, up) の target と up に同じベクトルを渡していて、
+  // 向きがまるごと壊れていた
+  const _zero = new THREE.Vector3(0, 0, 0);
+  const _up = new THREE.Vector3(0, 1, 0);
+  const _scl = new THREE.Vector3(1, 1, 1);
 
   return {
     update(t) {
@@ -663,16 +1164,82 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop) {
       const on = Math.exp(-Math.pow((ph - 0.12) * 9.0, 2));
       beacon.material.color.setRGB(1.0 * (0.10 + on), 0.16 * (0.10 + on), 0.10 * (0.10 + on));
       beacon.scale.setScalar(0.6 + on * 0.7);
-      for (const m of mastLights) {
-        // ゆっくり明滅。全部が同時に点くと電飾になる
-        const k = 0.55 + 0.45 * Math.sin(t * 0.8 + m.userData.ph * 6.0);
-        m.scale.setScalar(0.7 + k * 0.5);
+
+      // 魚。円軌道を回りながら上下に揺れる。
+      // 向きは進行方向そのものにする——ここを揃えないと、
+      // 魚が横滑りしていく「板」に見える
+      for (let i = 0; i < fish.COUNT; i++) {
+        const q = fish.paths[i];
+        const a = q.ph + t * q.w;
+        const y = q.y + Math.sin(t * q.bobW + q.ph) * q.bobA;
+        _p.set(Math.cos(a) * q.r, y, Math.sin(a) * q.r);
+        // 接線 + 上下の速度成分
+        _dir.set(-Math.sin(a) * q.w, Math.cos(t * q.bobW + q.ph) * q.bobW * q.bobA / q.r,
+                 Math.cos(a) * q.w).normalize();
+        // 幾何は +Z が前。Matrix4.lookAt(eye, target, up) は
+        // 「+Z 列 = normalize(eye - target)」なので、eye に進行方向、
+        // target に原点を渡せば +Z がそのまま進行方向を向く
+        _m.lookAt(_dir, _zero, _up);
+        _q.setFromRotationMatrix(_m);
+        _m.compose(_p, _q, _scl.set(q.s, q.s, q.s));
+        fish.mesh.setMatrixAt(i, _m);
       }
+      fish.mesh.instanceMatrix.needsUpdate = true;
     },
   };
 }
 
 // --- 形の道具 ---
+
+/**
+ * 魚1匹ぶんの形。全長 0.55m ほど。
+ *
+ * 遠くを泳ぐ小魚なので、断面は4角で足りる。大事なのは輪郭で、
+ * 「頭が丸く、腹がふくらみ、尾へ細って、尾びれが立つ」——
+ * この順が出ていれば、何ポリゴンでも魚に見える。
+ */
+function fishGeometry() {
+  // [z(前が+), 半幅, 半高, 中心の上下]
+  const SPINE = [
+    [0.26, 0.005, 0.010, 0.00],
+    [0.20, 0.035, 0.048, 0.00],
+    [0.10, 0.052, 0.075, 0.00],
+    [-0.02, 0.048, 0.070, -0.005],
+    [-0.16, 0.030, 0.046, -0.005],
+    [-0.30, 0.014, 0.026, 0.00],
+    [-0.40, 0.006, 0.014, 0.00],
+  ];
+  const SIDES = 6;
+  const pos = [], idx = [];
+  const rings = SPINE.map(([z, hw, hh, oy]) => {
+    const ring = [];
+    for (let k = 0; k < SIDES; k++) {
+      const t = (k / SIDES) * Math.PI * 2;
+      ring.push(pos.length / 3);
+      pos.push(Math.cos(t) * hw, oy + Math.sin(t) * hh, z);
+    }
+    return ring;
+  });
+  for (let i = 0; i < rings.length - 1; i++) {
+    for (let k = 0; k < SIDES; k++) {
+      const k2 = (k + 1) % SIDES;
+      idx.push(rings[i][k], rings[i][k2], rings[i + 1][k2]);
+      idx.push(rings[i][k], rings[i + 1][k2], rings[i + 1][k]);
+    }
+  }
+  // 尾びれ。二叉に切れた縦の板
+  const tf = (z, y) => { pos.push(0, y, z); return pos.length / 3 - 1; };
+  const t0 = tf(-0.38, 0.0), t1 = tf(-0.55, 0.115), t2 = tf(-0.50, 0.0), t3 = tf(-0.55, -0.115);
+  idx.push(t0, t1, t2, t0, t2, t3);
+  // 背びれ
+  const d0 = tf(0.06, 0.072), d1 = tf(-0.10, 0.155), d2 = tf(-0.20, 0.045);
+  idx.push(d0, d1, d2);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
 
 /** 2点を結ぶ角柱 */
 function strut(M, a, b, rad, col) {
