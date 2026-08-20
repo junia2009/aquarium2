@@ -39,6 +39,9 @@ export const DOLPHIN_POOL = {
     // ポータルの色。霧の色をそのまま使うと、正規化した時点で
     // どれも同じ青になって行き先が見分けられない。浅い砂地のターコイズ
     portalTint: new THREE.Color('#2fb7c9'),
+    // 向こう側の水の動き。色だけ変えても、5枚が同じ絵の色違いに
+    // しかならない。浅い砂地。水面が近く、細かく速く光が踊る
+    portalMood: { speed: 1.60, caustic: 1.5, motes: 0.05, surge: 0.0 },
     fogDensity: 0.023,
     ambTop: new THREE.Color('#4a9fbe'),
     ambBottom: new THREE.Color('#1b4f61'),

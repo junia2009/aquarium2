@@ -64,6 +64,9 @@ export const ABYSS = {
     // ポータルの色。霧の色をそのまま使うと、正規化した時点で
     // どれも同じ青になって行き先が見分けられない。光の届かない藍。暗いことが行き先の性格
     portalTint: new THREE.Color('#1b2a4e'),
+    // 向こう側の水の動き。色だけ変えても、5枚が同じ絵の色違いに
+    // しかならない。光の届かない層。集光はゼロで、マリンスノーだけが降る
+    portalMood: { speed: 0.18, caustic: 0.0, motes: 1.0, surge: 0.0 },
     fogDensity: 0.030,
     ambTop: new THREE.Color('#07202c'),     // はるか上から届く、かすかな青
     ambBottom: new THREE.Color('#010509'),

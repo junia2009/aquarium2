@@ -58,6 +58,9 @@ export const SHORE = {
     // ポータルの色。霧の色をそのまま使うと、正規化した時点で
     // どれも同じ青になって行き先が見分けられない。海藻の緑がかった浅瀬
     portalTint: new THREE.Color('#2f9c78'),
+    // 向こう側の水の動き。色だけ変えても、5枚が同じ絵の色違いに
+    // しかならない。波打ち際。数秒周期で寄せて引く
+    portalMood: { speed: 1.05, caustic: 0.9, motes: 0.10, surge: 1.0 },
     fogDensity: 0.030,
     ambTop: new THREE.Color('#63a8ad'),
     ambBottom: new THREE.Color('#22484a'),

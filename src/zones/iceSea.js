@@ -36,6 +36,9 @@ export const ICE_SEA = {
     // ポータルの色。霧の色をそのまま使うと、正規化した時点で
     // どれも同じ青になって行き先が見分けられない。氷を透かした淡い水色
     portalTint: new THREE.Color('#9fd8e8'),
+    // 向こう側の水の動き。色だけ変えても、5枚が同じ絵の色違いに
+    // しかならない。氷の下。動きが鈍く、割れ目から差す光が固い
+    portalMood: { speed: 0.30, caustic: 0.65, motes: 0.35, surge: 0.0 },
     fogDensity: 0.013,
     ambTop: new THREE.Color('#6ea9c2'),
     ambBottom: new THREE.Color('#2c5b6e'),

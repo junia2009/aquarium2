@@ -21,20 +21,15 @@ import { CollisionWorld } from '../collision.js';
 // の3つで、飾りではなく機能の形をしている。ここでも同じ順で作る。
 
 const DECK_Y = 4.0;         // 甲板の高さ
-const ROOM_R = 13.0;        // 与圧殻の内半径
-const WALL_H = 7.0;         // 甲板から天井の付け根まで
-const MOON_R = 4.2;         // ムーンプールの半径
+// 部屋の中心に立って見回す場所になったので、半径は詰める。
+// 13mだとハッチが遠く、壁の模様にしか見えなかった
+const ROOM_R = 10.5;        // 与圧殻の内半径
+const WALL_H = 6.4;         // 甲板から天井の付け根まで
 const PORTAL_R = 1.75;      // ハッチの半径
-const PORTAL_Y = DECK_Y + 2.45;
+const PORTAL_Y = DECK_Y + 2.35;
 
-/**
- * 施設の床。カメラの接地判定に使う。
- * ムーンプールの中だけは下へ抜ける——落ちると外の海に出る、という
- * 場所であることが、当たり判定のうえでも成り立っていてほしい
- */
-export function hubFloor(x, z) {
-  const r = Math.hypot(x, z);
-  if (r < MOON_R - 0.15) return DECK_Y - 26;
+/** 施設の床。甲板は継ぎ目のない一枚 */
+export function hubFloor() {
   return DECK_Y;
 }
 
@@ -64,7 +59,42 @@ const LIT_VERT = /* glsl */ `
   }
 `;
 
-const LIT_FRAG = /* glsl */ `
+// 部屋の壁と床は、ポータルからの光でも照らされる。
+//
+// これが無いと、ハッチは壁に貼った丸いステッカーにしかならない。
+// 光っているものは、まわりを自分の色に染める。染めていないものは、
+// 光っているように見えない——絵として明るいかどうかとは別の話。
+//
+// そして、この染まりがそのまま「どっちに何があるか」を教える。
+// 部屋の中心に立って見回すとき、左の床が緑なら磯はそちら側にある。
+// 選択肢が視野の外にあっても、光だけは回りこんでくる
+const NP = 8;                       // ポータルの最大数
+const PORTAL_LIGHT = /* glsl */ `
+  uniform int uPortalN;
+  uniform vec3 uPortalPos[${NP}];
+  uniform vec3 uPortalCol[${NP}];
+  uniform float uPortalGlow[${NP}];
+
+  vec3 portalLight(vec3 wp, vec3 n) {
+    vec3 sum = vec3(0.0);
+    for (int i = 0; i < ${NP}; i++) {
+      if (i >= uPortalN) break;
+      vec3 d = uPortalPos[i] - wp;
+      float dist = length(d);
+      vec3 L = d / max(dist, 0.001);
+      // 面光源なので点光源ほど急ではないが、十分に落とすこと。
+      // 緩くしすぎると部屋ぜんたいが一色に染まり、
+      // 「どっちに何があるか」を伝えるどころか、方向を消してしまう
+      float atten = 1.0 / (1.0 + 0.22 * dist + 0.13 * dist * dist);
+      // 板の裏へは回りこまない
+      float ndl = max(dot(n, L), 0.0);
+      sum += uPortalCol[i] * (ndl * 0.92 + 0.08) * atten * uPortalGlow[i];
+    }
+    return sum;
+  }
+`;
+
+const LIT_FRAG = PORTAL_LIGHT + /* glsl */ `
   varying vec3 vCol;
   varying vec3 vN;
   varying vec3 vW;
@@ -73,10 +103,25 @@ const LIT_FRAG = /* glsl */ `
     vec3 viewDir = normalize(cameraPosition - vW);
     // 塗装した鋼。つや消しだが、濡れているので弱いハイライトが乗る
     vec3 col = underwaterLight(vCol, n, vW, viewDir, 22.0, 0.10);
+    col += vCol * portalLight(vW, n) * 1.7;
     gl_FragColor = vec4(applyUnderwaterFog(col, vW), 1.0);
     ${UW_FRAG_OUTPUT}
   }
 `;
+
+/** ポータルの光をシェーダへ渡すためのユニフォーム一式 */
+function portalLightUniforms() {
+  const pos = [], col = [], glow = [];
+  for (let i = 0; i < NP; i++) {
+    pos.push(new THREE.Vector3()); col.push(new THREE.Color(0, 0, 0)); glow.push(0);
+  }
+  return {
+    uPortalN: { value: 0 },
+    uPortalPos: { value: pos },
+    uPortalCol: { value: col },
+    uPortalGlow: { value: glow },
+  };
+}
 
 // ---------------------------------------------------------------- 形を作る道具
 class Buf {
@@ -123,54 +168,53 @@ const DARK = [0.020, 0.024, 0.030];     // ムーンプールの奥
 /** 施設の殻。甲板・壁・天井・ムーンプールをひとまとめに作る */
 function buildShell() {
   const M = new Buf();
-  const N = 64;                      // 円周の分割
+  // 円周の分割。細部の周期に対して十分に細かくないと、模様は出ない。
+  // 64分割で24本のリブを立てようとしていたら、1本あたり1.3標本しか
+  // なくて、リブは「出ていない」のではなく「標本にかからなかった」。
+  // イソギンチャクの疣とまったく同じ穴で、今度は数を減らして
+  // 1本あたり4標本を確保する
+  const N = 160;
   const ang = (k) => (k / N) * Math.PI * 2;
 
   // ---- 甲板 ----
-  // ムーンプールの縁から壁まで。放射状の板で、継ぎ目に沿って色を変える
-  const RINGS = 6;
+  // 中心から壁まで、継ぎ目のない一枚。もとは中央にムーンプールを
+  // 開けていたが、立ち位置を部屋の中心に置くなら、そこは床でなければ
+  // ならない。立つ場所に穴が開いているのは、間取りとして矛盾している
+  const RINGS = 7;
   const grid = [];
-  for (let i = 0; i <= RINGS; i++) {
-    const r = MOON_R + (ROOM_R - MOON_R) * (i / RINGS);
+  const hub0 = M.v(0, DECK_Y, 0, DECK);
+  for (let i = 1; i <= RINGS; i++) {
+    const r = ROOM_R * (i / RINGS);
     const row = [];
     for (let k = 0; k < N; k++) {
       const a = ang(k);
       // 板の継ぎ目。8枚の扇形に分かれている
-      const seam = Math.abs(((a / (Math.PI * 2)) * 8) % 1 - 0.5) > 0.47;
-      row.push(M.v(Math.cos(a) * r, DECK_Y, Math.sin(a) * r,
-                   seam ? PAINT2 : DECK));
+      // 継ぎ目は1本あたり2.8標本。0.47(=0.5標本)では出なかった
+      const seam = Math.abs(((a / (Math.PI * 2)) * 8) % 1 - 0.5) > 0.43;
+      row.push(M.v(Math.cos(a) * r, DECK_Y, Math.sin(a) * r, seam ? PAINT2 : DECK));
     }
     grid.push(row);
   }
-  for (let i = 0; i < RINGS; i++) {
+  for (let k = 0; k < N; k++) M.tri(hub0, grid[0][k], grid[0][(k + 1) % N]);
+  for (let i = 0; i < RINGS - 1; i++) {
     for (let k = 0; k < N; k++) {
       const k2 = (k + 1) % N;
       M.quad(grid[i][k], grid[i][k2], grid[i + 1][k2], grid[i + 1][k]);
     }
   }
-  // ムーンプールの注意帯。縁から内へ40cm
-  const hz = [];
-  for (let k = 0; k < N; k++) {
-    const a = ang(k);
-    // 黄と黒の縞。斜めに入る
-    const stripe = ((a * 9 / Math.PI) % 1) < 0.5;
-    hz.push(M.v(Math.cos(a) * (MOON_R - 0.4), DECK_Y + 0.004,
-                Math.sin(a) * (MOON_R - 0.4), stripe ? HAZARD : PAINT2));
-  }
-  for (let k = 0; k < N; k++) {
-    const k2 = (k + 1) % N;
-    M.quad(hz[k], hz[k2], grid[0][k2], grid[0][k]);
-  }
-  // ムーンプールの井筒。下は暗い海へ抜ける
-  const wellTop = [], wellBot = [];
-  for (let k = 0; k < N; k++) {
-    const a = ang(k);
-    wellTop.push(M.v(Math.cos(a) * MOON_R, DECK_Y, Math.sin(a) * MOON_R, PAINT2));
-    wellBot.push(M.v(Math.cos(a) * MOON_R, DECK_Y - 3.2, Math.sin(a) * MOON_R, DARK));
-  }
-  for (let k = 0; k < N; k++) {
-    const k2 = (k + 1) % N;
-    M.quad(wellTop[k2], wellTop[k], wellBot[k], wellBot[k2]);
+  // 中心の標識。「ここが立ち位置」であることを床が言う。
+  // 何もない床の真ん中に立たされると、部屋のどこにいるのか分からない
+  for (const [r0, r1, col] of [[1.55, 1.75, HAZARD], [1.20, 1.30, PAINT2]]) {
+    const a0 = [], a1 = [];
+    for (let k = 0; k < N; k++) {
+      const a = ang(k);
+      a0.push(M.v(Math.cos(a) * r0, DECK_Y + 0.004, Math.sin(a) * r0, col));
+      a1.push(M.v(Math.cos(a) * r1, DECK_Y + 0.004, Math.sin(a) * r1, col));
+    }
+    for (let k = 0; k < N; k++) {
+      const k2 = (k + 1) % N;
+      M.quad(a0[k], a0[k2], a1[k2], a1[k]);
+    }
   }
 
   // ---- 壁 ----
@@ -183,9 +227,10 @@ function buildShell() {
     const row = [];
     for (let k = 0; k < N; k++) {
       const a = ang(k);
-      // リブ。24本
-      const rib = Math.abs(((a / (Math.PI * 2)) * 24) % 1 - 0.5) > 0.36;
-      const r = ROOM_R - (rib ? 0.16 : 0);
+      // リブ。12本。160分割なら1本13.3標本ぶんの周期があり、
+      // 幅3割で4標本——ようやく「立っている」ように見える
+      const rib = Math.abs(((a / (Math.PI * 2)) * 12) % 1 - 0.5) > 0.35;
+      const r = ROOM_R - (rib ? 0.20 : 0);
       row.push(M.v(Math.cos(a) * r, y, Math.sin(a) * r, rib ? PAINT : PAINT2));
     }
     wall.push(row);
@@ -199,7 +244,7 @@ function buildShell() {
   // 甲板と壁のあいだの幅木
   for (let k = 0; k < N; k++) {
     const k2 = (k + 1) % N;
-    M.quad(grid[RINGS][k2], grid[RINGS][k], wall[0][k], wall[0][k2]);
+    M.quad(grid[RINGS - 1][k2], grid[RINGS - 1][k], wall[0][k], wall[0][k2]);
   }
 
   // ---- 天井 ----
@@ -214,8 +259,9 @@ function buildShell() {
     const row = [];
     for (let k = 0; k < N; k++) {
       const a = ang(k);
-      const rib = Math.abs(((a / (Math.PI * 2)) * 16) % 1 - 0.5) > 0.38;
-      row.push(M.v(Math.cos(a) * r, y - (rib ? 0.14 : 0), Math.sin(a) * r,
+      // 天井のリブは8本。放射状なので、外周では広く、頂点では詰まる
+      const rib = Math.abs(((a / (Math.PI * 2)) * 8) % 1 - 0.5) > 0.36;
+      row.push(M.v(Math.cos(a) * r, y - (rib ? 0.16 : 0), Math.sin(a) * r,
                    rib ? PAINT : PAINT2));
     }
     dome.push(row);
@@ -241,7 +287,7 @@ function buildShell() {
  * 器具の箱と、下を向いた発光面の2つで作る——発光面だけだと
  * 光が宙に浮き、箱だけだと消えた照明になる
  */
-function buildLamps(root) {
+function buildLamps(root, plu) {
   const M = new Buf();
   const glow = new Buf();
   const LAMP_Y = DECK_Y + WALL_H + 0.55;
@@ -268,53 +314,9 @@ function buildLamps(root) {
     const g2 = gc(w * 0.82, d * 0.7), g3 = gc(-w * 0.82, d * 0.7);
     glow.quad(g3, g2, g1, g0);
   }
-  root.add(new THREE.Mesh(M.geo(), metalMaterial({}, LIT_VERT, LIT_FRAG)));
+  root.add(new THREE.Mesh(M.geo(), metalMaterial(plu, LIT_VERT, LIT_FRAG)));
   root.add(new THREE.Mesh(glow.geo(), new THREE.MeshBasicMaterial({
     color: 0xdaeeff, toneMapped: false, side: THREE.DoubleSide })));
-}
-
-/** ムーンプールの手すり。人が働く場所であることを示す設え */
-function buildRail() {
-  const M = new Buf();
-  const N = 48;
-  const R = MOON_R + 0.55, H = 1.05;
-  const top = [];
-  for (let k = 0; k < N; k++) {
-    const a = (k / N) * Math.PI * 2;
-    const c = Math.cos(a), s = Math.sin(a);
-    // 笠木。断面は小さな四角
-    const ring = [];
-    for (let j = 0; j < 4; j++) {
-      const t = (j / 4) * Math.PI * 2 + Math.PI / 4;
-      ring.push(M.v(c * (R + Math.cos(t) * 0.05), DECK_Y + H + Math.sin(t) * 0.05,
-                    s * (R + Math.cos(t) * 0.05), RAIL));
-    }
-    top.push(ring);
-  }
-  for (let k = 0; k < N; k++) {
-    const k2 = (k + 1) % N;
-    for (let j = 0; j < 4; j++) {
-      const j2 = (j + 1) % 4;
-      M.quad(top[k][j], top[k][j2], top[k2][j2], top[k2][j]);
-    }
-  }
-  // 支柱。12本
-  for (let k = 0; k < 12; k++) {
-    const a = (k / 12) * Math.PI * 2;
-    const c = Math.cos(a) * R, s = Math.sin(a) * R;
-    const lo = [], hi = [];
-    for (let j = 0; j < 4; j++) {
-      const t = (j / 4) * Math.PI * 2 + Math.PI / 4;
-      const dx = Math.cos(t) * 0.045, dz = Math.sin(t) * 0.045;
-      lo.push(M.v(c + dx, DECK_Y, s + dz, RAIL));
-      hi.push(M.v(c + dx, DECK_Y + H, s + dz, RAIL));
-    }
-    for (let j = 0; j < 4; j++) {
-      const j2 = (j + 1) % 4;
-      M.quad(lo[j], lo[j2], hi[j2], hi[j]);
-    }
-  }
-  return M.geo();
 }
 
 // ---------------------------------------------------------------- ポータル
@@ -324,18 +326,44 @@ function buildRail() {
 const PORTAL_FRAG = /* glsl */ `
   uniform vec3 uTint;
   uniform float uGlow;
+  // x:動きの速さ y:集光の強さ z:漂う粒 w:寄せ引き
+  uniform vec4 uMood;
   varying vec2 vUv;
   varying vec3 vW;
   void main() {
     vec2 q = vUv * 2.0 - 1.0;
     float r = length(q);
     if (r > 1.0) discard;
-    // 奥へ吸い込まれていく同心の波紋
-    float rip = sin(r * 16.0 - uTime * 1.6) * 0.5 + 0.5;
-    // 向こう側の水面から差す集光。ゆっくり流れる
-    float ca = fbm(vec2(q.x * 2.2 + uTime * 0.09, q.y * 2.2 - uTime * 0.06));
+    float t = uTime * uMood.x;
+
+    // 寄せ引き。磯だけが数秒周期で明滅する。
+    // 波打ち際は「一定の明るさで光っている場所」ではない
+    float surge = 1.0 + uMood.w * 0.32 * sin(uTime * 0.55);
+
+    // 奥へ吸い込まれていく同心の波紋。行き先の速さで進む
+    float rip = sin(r * 16.0 - t * 1.9) * 0.5 + 0.5;
+
+    // 向こう側の水面から差す集光。深海ではゼロ——
+    // 光の届かない層に集光模様があってはいけない
+    float ca = fbm(vec2(q.x * 2.2 + t * 0.16, q.y * 2.2 - t * 0.11)) * uMood.y;
+
+    // 漂う粒。深海のマリンスノーはこれが主役になる。
+    // 下へ向かってゆっくり流れる
+    float mo = 0.0;
+    if (uMood.z > 0.01) {
+      // 時間は必ず折り返す。uTime をそのまま足すと、数分後には
+      // 引数が大きくなりすぎて sin ハッシュの精度が飛び、
+      // 粒がある領域と無い領域の境目に直線の継ぎ目が出る。
+      // 接地影で踏んだのと同じ穴
+      vec2 pq = vec2(q.x * 7.0, q.y * 7.0 + mod(uTime * 0.35, 48.0));
+      float g = fbm(pq * 1.7);
+      mo = smoothstep(0.72, 0.94, g) * uMood.z;
+    }
+
     float core = pow(1.0 - r, 1.5);
-    vec3 col = uTint * (0.35 + 1.15 * core + 0.30 * rip * (1.0 - r) + 0.55 * ca * (1.0 - r * 0.7));
+    vec3 col = uTint * (0.35 + 1.15 * core + 0.30 * rip * (1.0 - r)
+                        + 0.55 * ca * (1.0 - r * 0.7)) * surge;
+    col += vec3(0.55, 0.62, 0.70) * mo * (1.0 - r * 0.5);
     // 縁は暗く落として、奥行きのある穴に見せる
     col *= mix(0.25, 1.0, smoothstep(1.0, 0.72, r));
     gl_FragColor = vec4(col * uGlow, 1.0);
@@ -382,7 +410,7 @@ function plaqueTexture(name, sub) {
  * ハッチを1枚立てる。
  * 枠(金属)・中身(向こう側の水)・銘板 の3つでできている。
  */
-function buildPortal(parent, def, angle, portals) {
+function buildPortal(parent, def, angle, portals, plu) {
   const grp = new THREE.Group();
   const c = Math.cos(angle), s = Math.sin(angle);
   // 壁の内側にわずかに埋め込む
@@ -401,8 +429,14 @@ function buildPortal(parent, def, angle, portals) {
   // #01070d で、正規化すると232倍しないと光らない)。
   // 行き先ごとに「その水を思い出せる色」を明示してもらう
   const tint = (def.env.portalTint || def.env.fogColor).clone();
+  const md = def.env.portalMood || { speed: 1, caustic: 1, motes: 0, surge: 0 };
   const mat = new THREE.ShaderMaterial({
-    uniforms: { ...baseUniforms(), uTint: { value: tint }, uGlow: { value: 1.0 } },
+    uniforms: {
+      ...baseUniforms(),
+      uTint: { value: tint },
+      uGlow: { value: 1.0 },
+      uMood: { value: new THREE.Vector4(md.speed, md.caustic, md.motes, md.surge) },
+    },
     vertexShader: PORTAL_VERT,
     fragmentShader: UW_FRAG_PRELUDE + PORTAL_FRAG,
   });
@@ -411,13 +445,13 @@ function buildPortal(parent, def, angle, portals) {
   grp.add(disc);
   // 当たり判定はこの円板で取る。見えているものを押させる
   disc.userData.zone = def.key;
-  portals.push({ mesh: disc, mat, key: def.key, def,
+  portals.push({ mesh: disc, mat, key: def.key, def, tint,
                  world: new THREE.Vector3(c * (ROOM_R - 0.6), PORTAL_Y, s * (ROOM_R - 0.6)) });
 
   // 枠。厚みのあるリング
   const ring = new THREE.Mesh(
     new THREE.TorusGeometry(PORTAL_R + 0.14, 0.17, 8, 40),
-    metalMaterial({}, LIT_VERT, LIT_FRAG));
+    metalMaterial(plu, LIT_VERT, LIT_FRAG));
   // TorusGeometry は頂点色を持たないので、色を1本ぶん足す
   const cnt = ring.geometry.attributes.position.count;
   const cols = new Float32Array(cnt * 3);
@@ -457,10 +491,12 @@ export const HUB = {
     swell: 0.0,
   },
   // 甲板の上に立つ。ムーンプールを正面に見て、ハッチが視界に入る位置
-  // ハッチの並びを正面に見る位置。5枚が同時に視野へ入る高さまで下がる
+  // 部屋のまんなかに立つ。ハッチは円周に等間隔で並んでいるので、
+  // 見回して選ぶ。どっちに何があるかは、各ハッチが床と壁に落とす
+  // 色の光が教える——選択肢が視野の外にあっても、光は回りこむ
   camera: {
-    pos: new THREE.Vector3(0, DECK_Y + 4.0, 10.2),
-    look: new THREE.Vector3(0, PORTAL_Y - 0.2, -12.0),
+    pos: new THREE.Vector3(0, DECK_Y + 1.85, 0),
+    look: new THREE.Vector3(0, PORTAL_Y - 0.55, -ROOM_R),
   },
   clearance: 1.5,
   // ここに生き物はいないので、餌やりのボタンは出さない。
@@ -470,11 +506,14 @@ export const HUB = {
   species: [],
 
   build(root) {
-    const shell = new THREE.Mesh(buildShell(), metalMaterial({}, LIT_VERT, LIT_FRAG,
+    // ポータルの光は部屋じゅうの金属を照らす。ユニフォームは
+    // value のオブジェクトごと共有する——材質ごとに持つと、
+    // 更新のたびに全部へ書き写すことになる
+    const plu = portalLightUniforms();
+    const shell = new THREE.Mesh(buildShell(), metalMaterial(plu, LIT_VERT, LIT_FRAG,
       { side: THREE.DoubleSide }));
     root.add(shell);
-    root.add(new THREE.Mesh(buildRail(), metalMaterial({}, LIT_VERT, LIT_FRAG)));
-    buildLamps(root);
+    buildLamps(root, plu);
 
     const portals = [];
     const world = new CollisionWorld();
@@ -498,13 +537,10 @@ export const HUB = {
         defs.forEach((def, i) => {
           // 正面(-Z)から時計回りに等間隔。手前側は空けて、
           // 入ってきた向きにハッチが並んで見えるようにする
-          // 30度おき。5枚で120度に収まる。
-          // 51度おきだと3枚しか見えず、「選ぶ場所」なのに選択肢が
-          // 画面の外にあった。36度おきでも、端の2枚は中心から41度で
-          // 視野の端(43.6度)に掛かり、ハッチの縁が切れていた。
-          // 選択肢は全部、切れずに見えていること
-          const a = -Math.PI * 0.5 + (i - (defs.length - 1) / 2) * (Math.PI * 2 / 12);
-          const g = buildPortal(root, def, a, portals);
+          // 円周に等間隔。部屋の中心に立つなら、扉は壁一面に並べるより
+          // ぐるりと囲うほうが素直で、増えても円が埋まるだけで済む
+          const a = -Math.PI * 0.5 + (i / defs.length) * Math.PI * 2;
+          const g = buildPortal(root, def, a, portals, plu);
           g.userData.portal = true;
         });
       },
@@ -525,11 +561,18 @@ export const HUB = {
       update(dt, camera) {
         // 近づいたハッチが明るくなる。どれが「いま入れるもの」かを
         // 光の強さで示す。文字より先に光のほうが目に入る
-        for (const p of portals) {
+        plu.uPortalN.value = portals.length;
+        for (let i = 0; i < portals.length; i++) {
+          const p = portals[i];
           const d = camera.position.distanceTo(p.world);
-          const want = 1.0 + 0.85 * Math.max(0, 1 - d / 7.5);
-          p.mat.uniforms.uGlow.value += (want - p.mat.uniforms.uGlow.value)
-            * Math.min(dt * 3.0, 1);
+          const want = 1.0 + 0.85 * Math.max(0, 1 - d / 6.0);
+          const g = p.mat.uniforms.uGlow;
+          g.value += (want - g.value) * Math.min(dt * 3.0, 1);
+          // 部屋を染める光。ハッチの少し手前に置く——壁と同じ面に
+          // 置くと、その壁自身がまったく照らされない
+          plu.uPortalPos.value[i].copy(p.world);
+          plu.uPortalCol.value[i].copy(p.tint);
+          plu.uPortalGlow.value[i] = g.value;
         }
       },
     };

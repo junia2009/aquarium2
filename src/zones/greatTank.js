@@ -31,6 +31,9 @@ export const GREAT_TANK = {
     // ポータルの色。霧の色をそのまま使うと、正規化した時点で
     // どれも同じ青になって行き先が見分けられない。外洋の青。いちばん広い水槽
     portalTint: new THREE.Color('#1e6fa8'),
+    // 向こう側の水の動き。色だけ変えても、5枚が同じ絵の色違いに
+    // しかならない。外洋。ゆっくり大きくうねる集光
+    portalMood: { speed: 0.55, caustic: 1.0, motes: 0.15, surge: 0.0 },
     fogDensity: 0.024,
     ambTop: new THREE.Color('#3b87a8'),
     ambBottom: new THREE.Color('#07222f'),
