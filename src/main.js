@@ -26,7 +26,25 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 const scatter = new UnderwaterScatter(renderer);
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerHeight, 0.1, 500);
+// 画角は縦で持つが、狭くなりすぎるのは横のほう。
+//
+// 縦画角58度は、横並びの画面(縦横比1.7)なら横87度ある。ところが
+// 縦長の携帯(0.58)では横36度しかない——望遠鏡を覗いているのと変わらず、
+// 目の前のものが画面いっぱいに来て、部屋のどこにいるのか分からなくなる。
+//
+// 横の画角に下限を設け、足りないぶんを縦画角で補う。ただし縦を広げ
+// すぎると今度は魚眼になるので、76度で頭打ちにする
+const FOV_V = 58, FOV_H_MIN = 62, FOV_V_MAX = 76;
+const D2R = Math.PI / 180;
+function fovFor(aspect) {
+  const h = 2 * Math.atan(Math.tan(FOV_V * D2R / 2) * aspect) / D2R;
+  if (h >= FOV_H_MIN) return FOV_V;
+  const v = 2 * Math.atan(Math.tan(FOV_H_MIN * D2R / 2) / aspect) / D2R;
+  return Math.min(v, FOV_V_MAX);
+}
+const camera = new THREE.PerspectiveCamera(
+  fovFor(window.innerWidth / window.innerHeight),
+  window.innerWidth / window.innerHeight, 0.1, 500);
 scene.fog = new THREE.FogExp2(U.uFogColor.value.clone(), U.uFogDensity.value);
 
 // ダイバー視点の自由カメラ(見回す/平行移動/前後進/上下が全て独立)
@@ -206,6 +224,7 @@ canvas.addEventListener('pointerup', (e) => {
 // ================= リサイズ =================
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
+  camera.fov = fovFor(camera.aspect);
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
   scatter.setSize(renderer);
