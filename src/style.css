@@ -138,6 +138,16 @@ body {
 #infoPop b { color: var(--accent); font-size: 13.5px; }
 .hidden { opacity: 0; visibility: hidden; }
 
+/* ---- ハッチをくぐるときの覆い ----
+   UI より前、遊び方の動画より後ろ。中身は毎フレーム JS が塗るので、
+   ここでは重ね順とクリックの素通しだけ決める。
+   transition は付けない——JS 側が時間を持っているので、
+   CSS にも補間させると二重にかかって遅れる */
+#warp {
+  position: fixed; inset: 0; z-index: 35;
+  pointer-events: none; opacity: 0;
+}
+
 /* ---- 遊び方の動画 ---- */
 #guide {
   position: absolute; inset: 0; z-index: 40;

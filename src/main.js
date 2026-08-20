@@ -15,6 +15,7 @@ import { HUB } from './zones/hub.js';
 import { setupUI } from './ui.js';
 import { UnderwaterAudio } from './audio.js';
 import { UnderwaterScatter } from './postfx.js';
+import { PortalWarp } from './transition.js';
 
 // ================= 基盤 =================
 const canvas = document.getElementById('stage');
@@ -83,7 +84,7 @@ function buildZone(def) {
 
 function enterZone(key, { moveCamera = true } = {}) {
   const zone = built.get(key) || buildZone(ZONES.find((z) => z.key === key));
-  if (active === zone) return;
+  if (active === zone) return zone;
   if (active) {
     active.root.visible = false;
     // ゾーン固有の共有ユニフォーム(流氷の被覆など)は必ず戻す。
@@ -138,6 +139,28 @@ function enterZone(key, { moveCamera = true } = {}) {
     diveCam.lookAt(zone.def.camera.look);
   }
   ui.setZone(zone.def);
+  return zone;
+}
+
+// ================= ハッチをくぐる =================
+const warp = new PortalWarp(camera, diveCam);
+// ポータルエリアへ帰るときの色。行き先の水ではなく、施設の照明の色
+const HUB_TINT = new THREE.Color('#7fa6c4');
+
+/**
+ * ゾーンへ「入る」。enterZone との違いは、切り替えを演出で包むこと。
+ *
+ * 切り替えそのものは覆いの下で一瞬に起きる。カメラを動かす仕事は
+ * 演出側が持つので、enterZone には位置を触らせない
+ */
+function warpTo(key, portal) {
+  if (warp.active) return;
+  const swap = () => {
+    const zone = enterZone(key, { moveCamera: false });
+    warp.setArrival(zone.def.camera.pos, zone.def.camera.look, zone.def.clearance);
+  };
+  if (portal) warp.enter(portal.center, portal.normal, portal.tint, swap, audio);
+  else warp.back(HUB_TINT, swap, audio);
 }
 
 // ================= UI =================
@@ -147,7 +170,7 @@ const _fwd = new THREE.Vector3();
 
 const ui = setupUI({
   zones: TANKS,
-  onHub: () => enterZone(HUB.key),
+  onHub: () => warpTo(HUB.key, null),
   onFollow: (key) => {
     const t = active.followTargets[key];
     if (!t) return;
@@ -158,7 +181,7 @@ const ui = setupUI({
     diveCam.setFollow(t.get, t.dist[0], t.dist[1]);
   },
   onFree: () => diveCam.clearFollow(),
-  onZone: (key) => enterZone(key),
+  onZone: (key) => warpTo(key, active?.portals?.find((p) => p.key === key) || null),
   // ---- 餌やり ----
   // 撒く場所は「いま見ている先」。カメラの正面に固定距離で置くと、
   // 壁や氷の向こう側へ撒けてしまうので、視線の先にある面まで
@@ -186,7 +209,13 @@ if (new URLSearchParams(location.search).has('debug')) {
   // 検証から行き先を指定する口。以前はゾーンタブを click していたが、
   // タブそのものが無くなった。UI の形に依存しない口を用意しておく
   window.__go = (key) => enterZone(key);
+  // 演出つきの入口。__go は切り替えだけなので、演出そのものを
+  // 確かめるにはこちらが要る
+  window.__warp = (key) => warpTo(key, active?.portals?.find((p) => p.key === key) || null);
+  window.__warpState = () => ({ phase: warp.phase, t: warp.t });
+  window.__zoneKey = () => (active ? active.def.key : null);
   window.__env = U;
+  window.__scene = scene;
   // 検証用。撒いた餌が減っていくかを外から数える
   window.__feedCount = () => (active && active.feedLeft ? active.feedLeft() : -1);
 }
@@ -208,6 +237,9 @@ canvas.addEventListener('pointerup', (e) => {
   downPos = null;
   // タップ判定はゆるめに(指はわずかにぶれるし、ゆっくり離すこともある)
   if (e.button > 0 || moved > 12 || held > 600) return;
+  // 吸い込まれている最中の入力は捨てる。ここで受けると、
+  // 覆いの向こうで別のゾーンへ切り替わってしまう
+  if (warp.active) return;
 
   const ndc = new THREE.Vector2(
     (e.clientX / window.innerWidth) * 2 - 1,
@@ -218,7 +250,11 @@ canvas.addEventListener('pointerup', (e) => {
   // ポータルは「タップされた行き先」を文字列で返してくる。
   // ほかのゾーンの onTap は何も返さない
   const dest = active.onTap(_raycaster.ray, _hitPoint);
-  if (dest && ZONES.some((z) => z.key === dest)) enterZone(dest);
+  if (dest && ZONES.some((z) => z.key === dest)) {
+    // 押されたハッチそのものへ吸い込む。「どれを押したか」と
+    // 「どこへ吸い込まれるか」がずれていると、演出が嘘になる
+    warpTo(dest, active.portals?.find((p) => p.key === dest) || null);
+  }
 });
 
 // ================= リサイズ =================
@@ -226,6 +262,9 @@ window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.fov = fovFor(camera.aspect);
   camera.updateProjectionMatrix();
+  // くぐっている最中に画面が回ったら、戻す先の画角も更新する。
+  // 掴んだままにすると、着いたあと古い画角へ戻ってしまう
+  warp.baseFov = camera.fov;
   renderer.setSize(window.innerWidth, window.innerHeight);
   scatter.setSize(renderer);
 });
@@ -268,7 +307,11 @@ function animate() {
   lights.sun.intensity = 1.6 * U.uSunI.value;
   lights.hemi.intensity = 0.9 * (0.6 + 0.4 * U.uSunI.value);
   active.update(dt, camera);
-  diveCam.update(dt);
+  // 吸い込まれているあいだ、カメラは演出が持つ。自由カメラを
+  // 同時に走らせると、地形クランプと押し出しが毎フレーム引き戻して
+  // ハッチをくぐれない
+  if (warp.active) warp.update(dt);
+  else diveCam.update(dt);
   // ダイバーライトは頭に付いているので、カメラを動かした「後」に追従させる。
   // 先に更新すると、振り向いたとき光が1フレーム遅れてついてくる
   if (U.uLampI.value > 0) {

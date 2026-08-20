@@ -556,6 +556,47 @@ export class UnderwaterAudio {
     this.airGain.gain.setTargetAtTime(t * 0.55, now, 0.12);
   }
 
+  /**
+   * ハッチをくぐる音。
+   *
+   * 絵だけ動かして音が変わらないと、演出が画面の中の出来事で止まる。
+   * 水を押しのけて通り抜ける音——低いほうから高いほうへ帯域が上がり、
+   * 抜けた瞬間に落ちる——を1発だけ鳴らす。
+   * 同時に環境音を沈める。前のゾーンの音が鳴りっぱなしのまま
+   * 別の水に出ると、耳のほうだけ取り残される。
+   *
+   * @param {number}深さ 0=施設へ帰る(短い) 1=水槽へ入る
+   */
+  warp(kind = 1) {
+    if (!this.ctx || !this.enabled) return;
+    const ctx = this.ctx;
+    const t0 = ctx.currentTime;
+    const dur = kind ? 1.5 : 1.0;
+    const src = ctx.createBufferSource();
+    src.buffer = this._whiteNoise();
+    src.loop = true;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.Q.value = 0.9;
+    // 吸い込まれる: 低く遠い唸り → 通り抜ける瞬間に高域まで開く → 落ちる
+    bp.frequency.setValueAtTime(120, t0);
+    bp.frequency.exponentialRampToValueAtTime(1700, t0 + dur * 0.72);
+    bp.frequency.exponentialRampToValueAtTime(220, t0 + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(0.085, t0 + dur * 0.70);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    src.connect(bp).connect(g).connect(this.master);
+    g.connect(this._reverb());
+    src.start(t0); src.stop(t0 + dur + 0.05);
+
+    // 環境音を沈めて戻す。setZone が新しい音量を上書きするので、
+    // 戻す側は「くぐり終わるころ」に効かせる
+    const m = this.master.gain;
+    m.cancelScheduledValues(t0);
+    m.setTargetAtTime(m.value * 0.25, t0 + dur * 0.45, 0.15);
+  }
+
   stop() {
     this.enabled = false;
     if (this.bubbleTimer) { clearTimeout(this.bubbleTimer); this.bubbleTimer = null; }

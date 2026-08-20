@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { baseUniforms, U } from '../env.js';
 import { UW_FRAG_PRELUDE, UW_FRAG_OUTPUT } from '../glsl.js';
 import { CollisionWorld } from '../collision.js';
+import { buildExterior } from './hubExterior.js';
 
 // ============ ポータルエリア(海中研究施設) ============
 //
@@ -53,9 +54,17 @@ const PORTAL_ARC = 0.26;
 //   sqrt(奥行き^2 + (幅/2 + 枠厚)^2) < 12.80
 // を満たす奥行きに引っ込める
 const WIN_W = 4.6, WIN_H = 3.4;
-const WIN_Y = DECK_Y + 2.9;
+// 窓の高さ。目の高さ(甲板+1.85m)に近いところへ下げてある。
+//
+// はじめ 甲板+2.9m に付けていたが、それだと敷居が目線より下がらず、
+// 窓に寄っても海底が見えなかった。外に本物の海底を建てても、
+// 敷居の陰に入っていたら意味がない
+const WIN_Y = DECK_Y + 2.35;
 const WIN_INSET = 0.55;
 const WIN_ARC = 0.28;
+// 壁に開ける穴の上下。窓枠の内周(±1.70)より少し小さく取って、
+// 差のぶんが板厚の見えるところ(開口の内側)になる
+const HOLE_BOT = WIN_Y - 1.55, HOLE_TOP = WIN_Y + 1.55;
 
 // 天井の投光器。位置は照明にも光の筋にも塵の明るさにも使う
 const LAMP_N = 8;
@@ -289,7 +298,7 @@ const DARK = [0.020, 0.024, 0.030];     // ムーンプールの奥
  * 構造材を出入口の真ん中に通す設計はないし、通してしまうと
  * リブがハッチの手前を横切って、円板を縦にすっぱり切る
  */
-function buildShell(openings = [], hatches = []) {
+function buildShell(openings = [], hatches = [], windows = []) {
   // openings: [角度, 半角] の並び。ハッチも舷窓も、開口の前には
   // 構造材を通さない
   const clearOfOpening = (a) => {
@@ -371,17 +380,34 @@ function buildShell(openings = [], hatches = []) {
 
   // ---- 壁 ----
   // 円筒。縦のリブが等間隔に立つ。リブは飾りではなく、
-  // 水圧を受ける殻の補強材で、実物にも必ずある
-  const WROWS = 4;
+  // 水圧を受ける殻の補強材で、実物にも必ずある。
+  //
+  // 段の高さは等分ではなく、舷窓の上下に境目が来るように取る。
+  // 窓のところは本当に穴を開けるので、穴の縁が段に乗っていないと
+  // 開けられない
+  const WY = [DECK_Y, DECK_Y + 0.42, HOLE_BOT, DECK_Y + 1.55, DECK_Y + 2.35,
+              DECK_Y + 3.15, HOLE_TOP, DECK_Y + 5.05, DECK_Y + WALL_H];
+  const WROWS = WY.length - 1;
+  const R0 = WY.indexOf(HOLE_BOT), R1 = WY.indexOf(HOLE_TOP);
+  // 穴の角度の半分。枠の外縁(角度 0.208rad)より内側に収めること——
+  // 大きいと、枠から穴がはみ出して壁に切れ目が見える
+  const HOLE_ARC = 0.165;
+  const inHole = (a) => {
+    for (const wa of windows) {
+      const d = Math.abs(((a - wa + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+      if (d < HOLE_ARC) return wa;
+    }
+    return null;
+  };
   const wall = [];
   for (let i = 0; i <= WROWS; i++) {
-    const y = DECK_Y + WALL_H * (i / WROWS);
+    const y = WY[i];
     const row = [];
     for (let k = 0; k < N; k++) {
       const a = ang(k);
       // リブ。12本。160分割なら1本13.3標本ぶんの周期があり、
       // 幅3割で4標本——ようやく「立っている」ように見える。
-      // ただしハッチの前は素通し
+      // ただしハッチと舷窓の前は素通し
       const rib = Math.abs(((a / (Math.PI * 2)) * 12) % 1 - 0.5) > 0.35
                   && clearOfOpening(a);
       const r = ROOM_R - (rib ? 0.20 : 0);
@@ -389,10 +415,65 @@ function buildShell(openings = [], hatches = []) {
     }
     wall.push(row);
   }
+  // 穴に当たる升目だけ張らない。「窓の絵」ではなく本当の開口にする
+  const holeCols = new Map();      // 舷窓の角度 → その穴が使う列の並び
+  for (let k = 0; k < N; k++) {
+    const wa = inHole(ang(k) + Math.PI / N);   // 升目の中央で判定する
+    if (wa === null) continue;
+    if (!holeCols.has(wa)) holeCols.set(wa, []);
+    holeCols.get(wa).push(k);
+  }
   for (let i = 0; i < WROWS; i++) {
+    const rowInHole = (i >= R0 && i < R1);
     for (let k = 0; k < N; k++) {
+      if (rowInHole && inHole(ang(k) + Math.PI / N) !== null) continue;
       const k2 = (k + 1) % N;
       M.quad(wall[i][k2], wall[i][k], wall[i + 1][k], wall[i + 1][k2]);
+    }
+  }
+  // 開口の内側(板厚の見えるところ)。
+  //
+  // ここが無いと、殻が「厚さ0の紙」に見える。穴の縁を、窓枠の内周へ
+  // 繋いで塞ぐ。繋ぐ相手は枠の実物なので、隙間が出ない
+  const Rw = ROOM_R - WIN_INSET;
+  const hw = WIN_W / 2, hh = WIN_H / 2;
+  for (const [wa, cols] of holeCols) {
+    // 列を「窓の中心からの角度」で並べ直す。角度0をまたぐ窓でも
+    // 順序が崩れない(素直に添字で並べると 159 の次が 0 になる)
+    const key = (k) => {
+      let d = ang(k) - wa;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      return d;
+    };
+    const run = cols.slice().sort((p, q) => key(p) - key(q));
+    const vc = [...run, (run[run.length - 1] + 1) % N];   // 升目の数+1 の頂点列
+    const xmax = Math.max(...vc.map((k) => Math.abs(ROOM_R * Math.sin(key(k)))));
+    const ymax = HOLE_TOP - WIN_Y;
+    // 窓の平面での軸。+X は壁に沿う向き
+    const ex = [-Math.sin(wa), 0, Math.cos(wa)];
+    const org = [Math.cos(wa) * Rw, WIN_Y, Math.sin(wa) * Rw];
+    // 奥(穴の縁)と手前(枠の内周)の対を返す
+    const pair = (ci, ri, edge) => {
+      const k = vc[ci];
+      const xb = ROOM_R * Math.sin(key(k));
+      const yb = WY[ri] - WIN_Y;
+      const xf = (edge === 'x') ? Math.sign(xb) * hw : xb * (hw / xmax);
+      const yf = (edge === 'x') ? yb * (hh / ymax) : Math.sign(yb) * hh;
+      return {
+        back: wall[ri][k],
+        front: M.v(org[0] + ex[0] * xf, org[1] + yf, org[2] + ex[2] * xf, PAINT2),
+      };
+    };
+    // 縁をぐるりと一周。下 → 右 → 上 → 左
+    const loop = [];
+    for (let j = 0; j < vc.length; j++) loop.push(pair(j, R0, 'y'));
+    for (let i = R0 + 1; i <= R1; i++) loop.push(pair(vc.length - 1, i, 'x'));
+    for (let j = vc.length - 2; j >= 0; j--) loop.push(pair(j, R1, 'y'));
+    for (let i = R1 - 1; i > R0; i--) loop.push(pair(0, i, 'x'));
+    for (let j = 0; j < loop.length; j++) {
+      const a0 = loop[j], a1 = loop[(j + 1) % loop.length];
+      M.quad(a0.back, a1.back, a1.front, a0.front);
     }
   }
   // 甲板と壁のあいだの幅木
@@ -712,16 +793,18 @@ function buildConduits(root, plu) {
 
 // ---------------------------------------------------------------- 舷窓
 //
-// 窓の中身は「絵」ではなく「方向の関数」として描く。
+// 窓の外は、はじめ板に貼ったシェーダで描いていた。視線の向きで色を
+// 決めていたので視差はついたが、そこにあるのは「水の色の関数」で、
+// 海底も、施設が自分で照らしている光も、沈んでいるものも無かった。
+// 「窓の外が適当」と言われて当然だった。
 //
-// 板に模様を貼ると、頭を動かしても模様が動かないので壁紙にしか
-// 見えない。実際に見えているのは無限遠の水なので、視線の向きだけで
-// 色を決めれば、正しく視差がつく——窓に近づけば外が広く見え、
-// 横から覗けば斜めの海が見える。
-const OUTSIDE_FRAG = /* glsl */ `
+// いまは壁に本当の穴が開いていて(buildShell)、外には本物の海底と
+// 投光器と光の筋が建っている(hubExterior.js)。ここに残るのは
+// ガラスの映り込みだけ。素通しにすると「窓」ではなく「開いた穴」に
+// 見えるので、室内の照明がうっすら乗るぶんだけを加算する。
+const GLASS_FRAG = /* glsl */ `
   varying vec3 vW;
   varying vec2 vUv;
-
   void main() {
     // 角を丸めた四角に切る
     vec2 q = abs(vUv * 2.0 - 1.0);
@@ -729,47 +812,15 @@ const OUTSIDE_FRAG = /* glsl */ `
     if (length(c / vec2(0.28, 0.34)) > 1.0) discard;
 
     vec3 rd = normalize(vW - cameraPosition);
-
-    // 上ほど明るい。深いところの水は、上を見れば僅かに青く、
-    // 下を見れば何もない。
-    //
-    // ここは「暗いかどうか」ではなく「室内より十分に暗いか」で決める。
-    // 最初は水平方向で室内の壁と同じ明るさになっていて、窓は
-    // 壁に描いた四角にしか見えなかった(壁÷窓=0.94)。外は
-    // 桁で暗くないと穴に見えない
-    float up = clamp(rd.y * 0.5 + 0.5, 0.0, 1.0);
-    vec3 col = mix(vec3(0.0008, 0.0018, 0.0034),
-                   vec3(0.011, 0.028, 0.044), pow(up, 2.1));
-
-    // 遥か上から差す光。真上ほど強い
-    col += vec3(0.05, 0.11, 0.16) * pow(max(rd.y, 0.0), 5.0) * 0.9;
-
-    // マリンスノー。視線方向で散らすと、無限遠の粒として振る舞う。
-    // 2層にして、近い層ほど速く大きく流す
-    float t = mod(uTime, 600.0);
-    for (int k = 0; k < 2; k++) {
-      float sc = (k == 0) ? 26.0 : 52.0;
-      float sp = (k == 0) ? 0.020 : 0.010;
-      vec2 pq = vec2(rd.x, rd.y + t * sp) * sc + float(k) * 31.0;
-      float g = fbm(pq);
-      float m = smoothstep(0.79, 0.95, g) * ((k == 0) ? 0.30 : 0.15);
-      col += vec3(0.42, 0.50, 0.58) * m;
-    }
-
-    // ときどき、遠くを大きな影が横切る。
-    // 何がいるのかは見せない——見せないから深海に見える
-    float ph = mod(uTime * 0.016, 1.0);
-    vec2 sc2 = vec2(rd.x - (ph * 2.6 - 1.3), rd.y + 0.05);
-    float shp = exp(-dot(sc2 * vec2(1.6, 3.4), sc2 * vec2(1.6, 3.4)) * 2.2);
-    col *= 1.0 - 0.62 * shp * smoothstep(0.0, 0.1, ph) * smoothstep(1.0, 0.9, ph);
-
-    // 窓ガラスの映りこみ。室内側がうっすら乗る。
-    // ここを強くすると、外の暗さをぜんぶ埋めてしまう——
-    // 一度 0.35 でやって、外が室内と同じ明るさになった
-    col += vec3(0.030, 0.040, 0.050) * pow(1.0 - abs(dot(rd, vec3(0.0, 1.0, 0.0))), 3.0) * 0.06;
-    // 室内の水の霧は窓面にも掛ける。ここだけ素通しにすると、
-    // 窓のガラスだけがやけに硬く、壁から浮いて見える
-    gl_FragColor = vec4(applyUnderwaterFog(col, vW), 1.0);
+    // 斜めから見るほど映り込みが強い(フレネル)。
+    // 正面から覗いたときにいちばん透けるのが、ガラスらしさ
+    float fres = pow(1.0 - abs(dot(rd, vec3(0.0, 0.0, 1.0))), 2.0);
+    // 上のほうに天井の投光器が映る。板の上端ほど明るく
+    float lamps = smoothstep(0.35, 1.0, vUv.y) * 0.55 + 0.12;
+    // ガラスの歪み。分厚い耐圧窓は完全に平らではない
+    float w = fbm(vec2(vUv.x * 5.0, vUv.y * 3.0)) * 0.5 + 0.5;
+    float a = (0.030 + 0.075 * fres) * lamps * (0.65 + 0.7 * w);
+    gl_FragColor = vec4(vec3(0.58, 0.70, 0.82) * a, a);
     ${UW_FRAG_OUTPUT}
   }
 `;
@@ -782,13 +833,19 @@ function buildWindow(root, angle, plu) {
   grp.rotation.y = -angle - Math.PI * 0.5;
   root.add(grp);
 
+  // ガラス。外は本物の景色なので、ここは映り込みだけを乗せる薄い板。
+  // 完全な素通しにすると「窓」ではなく「開いた穴」に見えてしまう
   const glass = new THREE.Mesh(
     new THREE.PlaneGeometry(WIN_W, WIN_H),
     new THREE.ShaderMaterial({
       uniforms: baseUniforms(),
       vertexShader: PORTAL_VERT,
-      fragmentShader: UW_FRAG_PRELUDE + OUTSIDE_FRAG,
+      fragmentShader: UW_FRAG_PRELUDE + GLASS_FRAG,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
     }));
+  glass.position.z = 0.01;
   grp.add(glass);
 
   // 枠。上下左右の4本と、中央の縦桟。
@@ -958,7 +1015,11 @@ function buildPortal(parent, def, angle, portals, plu) {
   // 当たり判定はこの円板で取る。見えているものを押させる
   disc.userData.zone = def.key;
   portals.push({ mesh: disc, mat, key: def.key, def, tint,
-                 world: new THREE.Vector3(c * (ROOM_R - 0.6), PORTAL_Y, s * (ROOM_R - 0.6)) });
+                 world: new THREE.Vector3(c * (ROOM_R - 0.6), PORTAL_Y, s * (ROOM_R - 0.6)),
+                 // くぐる演出に要る。円板そのものの位置と、部屋の内側を向いた法線
+                 center: new THREE.Vector3(c * (ROOM_R - PORTAL_INSET - 0.02), PORTAL_Y,
+                                           s * (ROOM_R - PORTAL_INSET - 0.02)),
+                 normal: new THREE.Vector3(-c, 0, -s) });
 
   // 枠。厚みのあるリング
   const ring = new THREE.Mesh(
@@ -1027,6 +1088,7 @@ export const HUB = {
     const plu = portalLightUniforms();
     // 殻はハッチの位置が決まってから作る(リブを避けるため)
     let shell = null;
+    let outside = null;
     buildLamps(root, plu);
     buildShafts(root);
     buildMotes(root);
@@ -1060,7 +1122,7 @@ export const HUB = {
         const wins = angles.map((a) => a + Math.PI / defs.length);
         const openings = [...angles.map((a) => [a, PORTAL_ARC]),
                           ...wins.map((a) => [a, WIN_ARC])];
-        shell = new THREE.Mesh(buildShell(openings, angles),
+        shell = new THREE.Mesh(buildShell(openings, angles, wins),
           metalMaterial(plu, LIT_VERT, LIT_FRAG, { side: THREE.DoubleSide }));
         root.add(shell);
         defs.forEach((def, i) => {
@@ -1070,6 +1132,9 @@ export const HUB = {
         for (const wa of wins) buildWindow(root, wa, plu);
         const cd = buildConduits(root, plu);
         cd.userData.portal = true;
+        // 外の海。舷窓の位置が決まってから建てる——
+        // 投光器は窓のそばに付いていないと、見ている先が暗いままになる
+        outside = buildExterior(root, wins, ROOM_R, DECK_Y);
       },
       followTargets: {},
       species: [],
@@ -1086,6 +1151,7 @@ export const HUB = {
         return best;
       },
       update(dt, camera) {
+        outside?.update(U.uTime.value);
         // 近づいたハッチが明るくなる。どれが「いま入れるもの」かを
         // 光の強さで示す。文字より先に光のほうが目に入る
         plu.uPortalN.value = portals.length;
