@@ -23,7 +23,9 @@ export const FLOOR_Y = 1.15;         // 海底の基準面
 // 海底は施設の真下まで敷く。殻の外から始めると、脚のあいだから
 // 覗いたときに床が無く、背景ドームが見えてしまう
 const FLOOR_R0 = 1.2;
-const FLOOR_R1 = 120.0;              // 霧に溶けるところまで
+// 海底は視程よりずっと遠くまで敷く。途中で切れると、そこに
+// 「地面の終わり」の線が出て、空と地平線のある陸の風景になる
+const FLOOR_R1 = 240.0;
 
 // --- 外の投光器 ---
 // 器具の位置は舷窓の数で変わるので、シェーダの文字列を組み立てる。
@@ -33,7 +35,7 @@ function floodGLSL(lights) {
   const v3 = (a) => `vec3(${a.map((x) => x.toFixed(3)).join(',')})`;
   const body = lights.map((L) => `s += flood1(wp, n, ${v3(L.p)}, ${v3(L.d)});`).join('\n      ');
   return /* glsl */ `
-    float flood1(vec3 wp, vec3 n, vec3 lp, vec3 ld) {
+    vec3 flood1(vec3 wp, vec3 n, vec3 lp, vec3 ld) {
       vec3 d = lp - wp;
       float dist = length(d);
       vec3 L = d / max(dist, 0.001);
@@ -45,16 +47,17 @@ function floodGLSL(lights) {
       //  1) 広がりによる 1/r^2 —— どんな光にもある
       //  2) 水そのものの吸収 —— 器具から面まで進むあいだに吸われる
       //
-      // 2を入れないと、30m 先の区画が手前の海底と同じ明るさで
-      // 照らされる。実際そうなって、遠くの円筒が白い紙の筒に見えた。
-      // 目までの霧(extFog)だけでは足りない——光は往路でも吸われる
-      float att = exp(-dist * 0.048) / (1.0 + 0.030 * dist + 0.0060 * dist * dist);
-      return (max(dot(n, L), 0.0) * 0.88 + 0.12) * att * cone;
+      // 2は**波長ごと**に効く。往路で赤が抜け、復路(extFog)でもう一度
+      // 抜けるので、遠くの面ほど強く青緑へ寄る。灰色の減衰にして
+      // いたときは、明るさだけが落ちて夜の陸に見えていた
+      float att = 1.0 / (1.0 + 0.030 * dist + 0.0060 * dist * dist);
+      vec3 absorb = exp(-${EXT_ABSORB} * dist);
+      return (max(dot(n, L), 0.0) * 0.88 + 0.12) * att * cone * absorb;
     }
     vec3 floodLight(vec3 wp, vec3 n) {
-      float s = 0.0;
+      vec3 s = vec3(0.0);
       ${body}
-      return vec3(8.2, 9.0, 9.8) * s;
+      return vec3(9.6, 9.2, 9.0) * s;
     }
   `;
 }
@@ -71,15 +74,43 @@ function floodGLSL(lights) {
 // 遠くの地形が「影」として読めるのはこの濁りのおかげ。
 // ただし明るくしすぎると窓が乳白色の板になるので、
 // 室内の壁(表示 0.45)よりはっきり暗いところに置く
+//
+// 水は距離に応じて**色を変える**。ここがいちばん大事なところ。
+//
+// 「海底基地なのに陸の上に見える」と言われた原因はこれだった。
+// 元の式は距離が伸びるほど暗い青へ寄せるだけで、明るさしか動いて
+// いない。明るさだけが落ちる景色は、夜の地面を投光器で照らしたのと
+// 区別がつかない——実際そう見えていた。
+//
+// 水中で起きているのは吸収と散乱の2つで、しかも**波長ごとに速さが
+// 違う**。赤は緑の3倍、青の4倍以上の速さで吸われる。だから
+//   ・近くの面は本来の色
+//   ・10m 先はもう赤が抜けて青緑
+//   ・30m 先は色が無くなり、水そのものの色に沈む
+// という並びができる。この色の勾配だけが「あいだに水がある」ことを
+// 語れる。霧の濃さをいくら調整しても代わりにはならない。
+// m^-1。赤から先に吸われる。
+//
+// 最初 (0.085, 0.030, 0.019) にしたら、往路と復路で二重に掛かるので
+// 20m 先で赤が 1/30 になり、画面ぜんたいが一色の青緑に潰れた。
+// 「水の中」には見えるが、投光器が白いことが伝わらず、明暗しか
+// 情報が無い絵になる。器具のそばに色が残る強さまで緩める
+const EXT_ABSORB = 'vec3(0.055, 0.022, 0.014)';
+
 const EXT_FOG = /* glsl */ `
+  // 遠方の水そのものの色。上を見るほどわずかに明るい
+  vec3 extWater(float y) {
+    return mix(vec3(0.0035, 0.0080, 0.0125),
+               vec3(0.0075, 0.0185, 0.0270),
+               clamp((y - ${FLOOR_Y.toFixed(2)}) * 0.055, 0.0, 1.0));
+  }
   vec3 extFog(vec3 col, vec3 wp) {
     float d = distance(cameraPosition, wp);
-    float f = 1.0 - exp(-pow(d * 0.0150, 2.0));
-    // 上を見るほどわずかに明るい。深海でも、真上には僅かに光がある
-    vec3 fogC = mix(vec3(0.0035, 0.0080, 0.0125),
-                    vec3(0.0075, 0.0185, 0.0270),
-                    clamp((wp.y - ${FLOOR_Y.toFixed(2)}) * 0.055, 0.0, 1.0));
-    return mix(col, fogC, clamp(f, 0.0, 1.0));
+    // 面から目までのあいだに吸われるぶん(波長ごと)
+    vec3 absorb = exp(-${EXT_ABSORB} * d);
+    // そのあいだの水自身が散らして届けるぶん
+    float scat = 1.0 - exp(-d * 0.021);
+    return col * absorb + extWater(wp.y) * scat;
   }
 `;
 
@@ -154,10 +185,13 @@ const BEAM_FRAG = /* glsl */ `
     float thick = pow(abs(dot(normalize(vN), v)), 0.8);
     float fall = pow(1.0 - vT, 1.15);
     float d = fbm(vec2(vW.x * 0.9 + vW.z * 0.6, vW.y * 1.3 - mod(uTime, 900.0) * 0.07));
-    float a = thick * fall * (0.55 + 0.60 * d) * 0.19;
+    float a = thick * fall * (0.55 + 0.60 * d) * 0.30;
     // 遠い筋まで同じ濃さで出すと、霧の奥行きが壊れる
     a *= exp(-distance(cameraPosition, vW) * 0.012);
-    gl_FragColor = vec4(vec3(0.55, 0.70, 0.86) * a, a);
+    // 筋そのものが「水が光を散らしている姿」なので、ここも波長で
+    // 吸わせる。白い錐のままだと、埃っぽい空気の中の投光器に見える
+    vec3 tint = vec3(0.62, 0.78, 0.92) * exp(-vec3(0.055, 0.020, 0.012) * vT * 11.0);
+    gl_FragColor = vec4(tint * a, a);
     ${UW_FRAG_OUTPUT}
   }
 `;
@@ -305,6 +339,46 @@ export function buildExterior(root, winAngles, hullR, deckY) {
     }
   }
   group.add(new THREE.Mesh(fl.geo(), mat(FLOOR_FRAG)));
+
+  // ---- 遠景の水 ----
+  //
+  // 共通の遠景ドームは「水面の下から見上げた海」を描いていて、上半分が
+  // 夜空のような紺色になる。海底がそこで途切れると、境目がそのまま
+  // **水平線**として立ち上がり、地面と空のある陸の風景になる。
+  // 施設の外から撮った絵でまさにそう見えていた。
+  //
+  // ここでは共通ドームの内側に、自分の水の色で塗った球を置いて隠す。
+  // 色は extWater() そのものなので、霧に溶けきった海底とぴったり
+  // 同じ色になり、境目が生まれない
+  {
+    const back = new THREE.Mesh(
+      new THREE.SphereGeometry(200, 32, 20),
+      new THREE.ShaderMaterial({
+        uniforms: baseUniforms(),
+        side: THREE.BackSide,
+        depthWrite: false,
+        vertexShader: /* glsl */ `
+          varying vec3 vDir;
+          void main() {
+            vDir = normalize(position);
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: UW_FRAG_PRELUDE + EXT_FOG + /* glsl */ `
+          varying vec3 vDir;
+          void main() {
+            // 水平方向は「霧に溶けた海底」と同じ色に合わせる。
+            // 斜面の頂は y≈9.6 まで持ち上がっているので、そこで評価する
+            vec3 c = mix(extWater(9.6), extWater(40.0),
+                         smoothstep(0.0, 0.65, vDir.y));
+            gl_FragColor = vec4(c, 1.0);
+            ${UW_FRAG_OUTPUT}
+          }
+        `,
+      }));
+    back.renderOrder = -9;      // 共通ドーム(-10)より手前
+    group.add(back);
+  }
 
   // ---- 殻の底 ----
   //
@@ -492,12 +566,17 @@ export function buildExterior(root, winAngles, hullR, deckY) {
   // 外の粒は室内より多く、ゆっくり落ちる。投光器の筋の中に入った
   // 粒だけが光る——だから筋が「粒で見えている」ことになる
   {
-    const N = 1600;
+    // 数を増やして、施設の近くへ寄せる。
+    //
+    // 粒がまばらだと、目と地面のあいだが「何も無い空間」に見える。
+    // 水の中にいることを画面で最初に語るのは、窓のすぐ外を漂う粒。
+    // 遠くにばらまいても霧に埋もれて効かないので、近くに厚く置く
+    const N = 3200;
     const pos = new Float32Array(N * 3), seed = new Float32Array(N * 2);
     const rnd = rng(776611);
     for (let i = 0; i < N; i++) {
       const a = rnd() * Math.PI * 2;
-      const r = hullR + 0.8 + Math.pow(rnd(), 0.55) * 34;
+      const r = hullR + 0.4 + Math.pow(rnd(), 1.5) * 26;
       const x = Math.cos(a) * r, z = Math.sin(a) * r;
       pos[i * 3] = x; pos[i * 3 + 1] = FLOOR_Y + rnd() * 22; pos[i * 3 + 2] = z;
       // いちばん近い投光器の軸までの距離。粒は縦にしか動かないので
