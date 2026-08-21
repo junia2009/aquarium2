@@ -284,7 +284,14 @@ export const ANNEX = {
   a: -Math.PI * 0.5 + Math.PI / 5 + 0.30,   // 施設から見た方角(固定)
   dist: 48,                                  // 中心までの距離
   radius: 5.2,                               // 外半径
-  wall: 7.0,                                 // 円筒の高さ
+  // 円筒の高さ。
+  //
+  // 7.0m にしていたら、屋根の頂が y=15.2 まで届いていた——
+  // **プロテウスの天蓋(13.8)より高い**。直径10mの出張所が本館より
+  // 高いのは、どの角度から見ても縮尺が壊れて見える。
+  // 中の天井高で決め直す: 床から軒まで 3.8m、戸口 2.3m。
+  // 人が立って、頭上に余裕があって、それ以上は無い高さ
+  wall: 4.35,
   // ガラスの下端。目の高さ(床+1.5m)より下に来ないと、立ったときに
   // 鋼の壁しか見えない——外を見るための建物なのに外が見えなかった
   sill: 1.15,
@@ -1402,8 +1409,13 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
   const beacon = new THREE.Mesh(
     new THREE.SphereGeometry(0.30, 10, 8),
     new THREE.MeshBasicMaterial({ color: 0xff4426, toneMapped: false }));
-  // 円筒(高さ7.0)＋笠(5.2*0.42)の上。中に埋めると外から見えない
-  beacon.position.set(mx, mBase + 7.0 + 5.2 * 0.42 + 0.45, mz);
+  // 笠の頂の上。中に埋めると外から見えない。
+  //
+  // ここは数値を直に書いていた(7.0 + 5.2*0.42)。観測棟を低くしたとき
+  // 標識だけが元の高さに取り残されて、屋根から 4.6m 浮いた赤い玉に
+  // なった。しかも「建物の一番上」の目印なので、縮尺を測るときに
+  // それが天辺として効いてしまう。寸法は必ず定数から引く
+  beacon.position.set(mx, ANNEX.base + ANNEX.wall + ANNEX.radius * 0.26 + 0.45, mz);
   group.add(beacon);
 
   // やぐらの頭の灯。色を変えて、区画の標識と区別する
@@ -1651,7 +1663,9 @@ function buildAnnex(S, neon, world, group, mat) {
   }
 
   // ---- 屋根 ----
-  const apexY = yGlass + R * 0.42;
+  // 円筒を低くしたぶん、傘も浅くする。同じ勾配のまま載せると、
+  // 建物の半分が屋根になって尖った帽子に見える
+  const apexY = yGlass + R * 0.26;
   const top = S.v(cx, apexY, cz, STEEL);
   for (let k = 0; k < N; k++) {
     const a0 = ang(k), a1 = ang(k + 1);

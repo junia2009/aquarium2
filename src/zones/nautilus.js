@@ -305,7 +305,7 @@ export function buildNautilus(M, neon, world, opt) {
     }
   };
   // 司令塔と後部構造のところは歯を抜く
-  const DECK_GAP = [[10.6, 7.4], [4.6, 1.2]];
+  const DECK_GAP = [[11.2, 6.4], [4.8, 1.0]];
   sawRidge(16.4, -12.4, 1, 0.52, 0.38, 0.15, 0.080, BRASS, DECK_GAP);
   sawRidge(15.4, -10.6, -1, 0.52, 0.30, 0.13, 0.075, COPPER2);
 
@@ -404,10 +404,15 @@ export function buildNautilus(M, neon, world, opt) {
   // ---- 司令塔 ----
   //
   // 参考にした模型では、船首寄りに小さな操舵室が1つ載っているだけ。
-  // 大きな箱を置くと、細長い輪郭が途中で折れて船に見えなくなる
+  // 大きな箱を置くと、細長い輪郭が途中で折れて船に見えなくなる。
+  //
+  // ただし「小さく」の下限は人で決まる。はじめ内法 1.55m・長さ 2.8m で
+  // 作っていて、これは人が立てない電話ボックスだった。36m の船に
+  // それが載っていると、船のほうが模型に見える。舵輪の前に人が立って、
+  // 頭上に余裕がある高さ——内法 2.5m を下限にする
   {
-    const zc = 9.0, HW = 0.98, yB = hullY(zc) - 0.10, yT = yB + 1.55;
-    const st = [[7.6, 0.70], [8.4, 0.96], [9.6, 0.98], [10.4, 0.66]];
+    const zc = 9.0, yB = hullY(zc) - 0.10, yT = yB + 2.50;
+    const st = [[6.8, 0.80], [7.9, 1.14], [9.9, 1.16], [11.0, 0.74]];
     const lo = [], hi = [];
     for (const [z, hw] of st) {
       lo.push([V(-hw, yB, z, COPPER2), V(hw, yB, z, COPPER2)]);
@@ -423,31 +428,35 @@ export function buildNautilus(M, neon, world, opt) {
     M.quad(lo[f][1], lo[f][0], hi[f][0], hi[f][1]);
     // 天蓋。真鍮の小さなドーム
     {
-      const RN = 12, DR = 0.52;
+      const RN = 14, DR = 0.72;
       const rim = [];
       for (let k = 0; k < RN; k++) {
         const t = (k / RN) * Math.PI * 2;
         rim.push(V(Math.cos(t) * DR, yT, zc + Math.sin(t) * DR, BRASS));
       }
-      const top = V(0, yT + 0.42, zc, BRASS);
+      const top = V(0, yT + 0.58, zc, BRASS);
       for (let k = 0; k < RN; k++) M.tri(top, rim[k], rim[(k + 1) % RN]);
     }
     // 操舵室の窓。前と左右
-    neon.add(W(0, yB + 0.95, 10.5), [4.4, 2.4, 0.72], 0.12, 0);
-    for (const sgn of [-1, 1]) neon.add(W(sgn * 1.0, yB + 0.95, zc), [3.6, 1.9, 0.58], 0.10, 0);
+    neon.add(W(0, yB + 1.45, 11.0), [4.4, 2.4, 0.72], 0.14, 0);
+    for (const sgn of [-1, 1]) {
+      for (const z of [8.2, 9.8]) {
+        neon.add(W(sgn * 1.20, yB + 1.45, z), [3.6, 1.9, 0.58], 0.10, 0);
+      }
+    }
     // 前照灯。舳先を照らす白い1灯
-    neon.add(W(0, yB + 0.30, 10.7), [7.0, 6.8, 6.0], 0.16, 0);
+    neon.add(W(0, yB + 0.45, 11.2), [7.0, 6.8, 6.0], 0.18, 0);
     // 空中線とてっぺんの標識灯
     if (strut) {
-      strut(M, W(0, yT + 0.35, zc), W(0, yT + 2.3, zc - 1.5), 0.045, BRASS);
-      neon.add(W(0, yT + 2.3, zc - 1.5), [4.4, 0.7, 0.35], 0.085, 1.4, 0);
+      strut(M, W(0, yT + 0.50, zc), W(0, yT + 3.2, zc - 1.9), 0.050, BRASS);
+      neon.add(W(0, yT + 3.2, zc - 1.9), [4.4, 0.7, 0.35], 0.090, 1.4, 0);
     }
   }
 
   // ---- 後部の昇降口 ----
   // 甲板に低く伏せた構造。手すりを回すと「人が歩く場所」になる
   {
-    const yB = hullY(2.9) - 0.08, yT = yB + 0.62;
+    const yB = hullY(2.9) - 0.08, yT = yB + 0.78;
     const st = [[1.4, 0.86], [2.4, 1.05], [3.8, 1.05], [4.5, 0.78]];
     const lo = [], hi = [];
     for (const [z, hw] of st) {
@@ -466,10 +475,12 @@ export function buildNautilus(M, neon, world, opt) {
       for (const sgn of [-1, 1]) {
         const posts = [1.5, 2.6, 3.7, 4.4];
         for (const z of posts) {
-          strut(M, W(sgn * 0.95, yT, z), W(sgn * 0.95, yT + 0.52, z), 0.035, BRASS);
+          strut(M, W(sgn * 0.95, yT, z), W(sgn * 0.95, yT + 1.05, z), 0.035, BRASS);
         }
-        strut(M, W(sgn * 0.95, yT + 0.52, posts[0]),
-              W(sgn * 0.95, yT + 0.52, posts[posts.length - 1]), 0.032, BRASS);
+        for (const h of [0.55, 1.05]) {
+          strut(M, W(sgn * 0.95, yT + h, posts[0]),
+                W(sgn * 0.95, yT + h, posts[posts.length - 1]), 0.032, BRASS);
+        }
       }
     }
     neon.add(W(0, yT + 0.12, 2.9), [2.8, 1.5, 0.48], 0.11, 0);
@@ -623,7 +634,7 @@ export function buildNautilus(M, neon, world, opt) {
     }
     // 司令塔と尾の扇。細長い船体の輪では覆えない。
     // 楕円体は世界軸に揃うので、船の向きに関わらず効くよう xz は真円で取る
-    for (const [z, y, rr, ry] of [[9.0, 2.6, 1.9, 1.3], [-16.0, 0.8, 3.4, 3.6]]) {
+    for (const [z, y, rr, ry] of [[9.0, 2.9, 2.3, 1.5], [-16.0, 0.8, 3.4, 3.6]]) {
       const p = T(0, y, z);
       world.addStatic(_b.set(p[0], p[1], p[2]), rr, ry, rr);
     }
