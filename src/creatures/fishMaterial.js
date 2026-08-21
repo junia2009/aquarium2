@@ -877,20 +877,30 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, inout vec3 n, vec3 V, float tint, float part,
     //  ・傷。大型のサメは体じゅうが傷だらけで、治った跡が白く残る。
     //    無傷のサメは玩具に見える
     //  ・鰓裂が5本。巨体を養うぶん、体高いっぱいに長い
-    vec3 back  = vec3(0.048, 0.058, 0.070);
+    vec3 back  = vec3(0.036, 0.044, 0.056);
     vec3 belly = vec3(0.58, 0.60, 0.585);
 
     // 背と腹の境。前後に波打たせ、さらに細かい乱れで刃こぼれにする
-    float line = 0.40 + 0.075 * sin(u * 7.5 + 1.1) + 0.05 * fbm(vec2(u * 6.0, 2.3));
-    line += 0.05 * (fbm(vec2(u * 52.0, 9.0)) - 0.5);
-    col = mix(belly, back, smoothstep(line - 0.022, line + 0.022, v));
+    float line = 0.44 + 0.085 * sin(u * 6.5 + 1.1) + 0.06 * fbm(vec2(u * 5.0, 2.3));
+    line += 0.055 * (fbm(vec2(u * 52.0, 9.0)) - 0.5);
+    col = mix(belly, back, smoothstep(line - 0.012, line + 0.012, v));
     // 背のむら。一様な灰色は生き物にならない
     col *= 0.84 + 0.30 * fbm(vec2(u * 9.0, v * 4.5));
+    // 白い斑。境目から上へ、ちぎれた雲のように食い込む。
+    // まっすぐな一本の境目より、**この不揃いさ**のほうが実物に近く、
+    // 遠くから見たときの体の見え方も変える
+    float blot = smoothstep(0.54, 0.80, fbm(vec2(u * 6.5, v * 3.0)));
+    col = mix(col, belly * 0.92,
+              blot * smoothstep(line + 0.20, line - 0.02, v) * 0.62);
 
     // 傷。治った跡は白い。長い掻き傷と、丸い咬み跡
-    float sc = fbm(vec2(u * 28.0 + v * 6.0, v * 20.0));
-    float scratch = smoothstep(0.70, 0.87, sc) * smoothstep(0.08, 0.30, u);
-    col = mix(col, vec3(0.46, 0.47, 0.46), scratch * 0.50);
+    float sc = fbm(vec2(u * 26.0 + v * 7.0, v * 24.0));
+    float scratch = smoothstep(0.64, 0.86, sc) * smoothstep(0.06, 0.26, u);
+    col = mix(col, vec3(0.50, 0.51, 0.50), scratch * 0.62);
+    // もう1本、向きの違う掻き傷。1方向だけだと布目に見える
+    float sc2 = fbm(vec2(u * 34.0 - v * 9.0, v * 15.0 + 40.0));
+    col = mix(col, vec3(0.46, 0.47, 0.47),
+              smoothstep(0.70, 0.90, sc2) * smoothstep(0.10, 0.34, u) * 0.42);
     // クッキーカッターザメの咬み跡。丸く抜けた白い跡が点々と残る
     vec2 cg = vec2(u * 13.0, v * 7.0);
     vec2 ci = floor(cg), cf = fract(cg) - 0.5;
@@ -899,35 +909,50 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, inout vec3 n, vec3 V, float tint, float part,
     col = mix(col, vec3(0.50, 0.51, 0.49), bite * 0.75);
 
     // 鰓裂。5本、後ろへ倒れた弧
-    float gill = 0.0;
+    float gill = 0.0, gillLip = 0.0;
     for (int gi = 0; gi < 5; gi++) {
-      float du = u - (0.150 + float(gi) * 0.0235 + 0.022 * (v - 0.35));
-      gill = max(gill, smoothstep(0.0075, 0.0, abs(du))
-                       * smoothstep(0.10, 0.26, v) * smoothstep(0.88, 0.68, v));
+      float du = u - (0.255 + float(gi) * 0.0295 + 0.034 * (v - 0.35));
+      float band = smoothstep(0.10, 0.26, v) * smoothstep(0.92, 0.70, v);
+      gill = max(gill, smoothstep(0.0075, 0.0, abs(du)) * band);
+      // 縁は白い皮膚。実物で鰓裂がはっきり見えるのは、切れ込みの
+      // 黒さではなく**その手前の白い縁**のおかげ
+      gillLip = max(gillLip, smoothstep(0.016, 0.008, abs(du + 0.010)) * band);
     }
-    col = mix(col, back * 0.25, gill * 0.9);
-
-    // 眼。小さく、黒く、吻の後ろの高い位置。
-    // サメの眼が怖いのは、白目が無くて表情が読めないから
-    col = mix(col, vec3(0.012, 0.012, 0.016), eyeDot(u, v, 0.090, 0.63, 0.019));
+    col = mix(col, vec3(0.52, 0.53, 0.52), gillLip * 0.55);
+    col = mix(col, back * 0.20, gill * 0.95);
 
     // ---- 口 ----
-    // 下面を横いっぱいに裂ける。**ここが無いとただの大きな魚**で、
-    // 見た人が最初に探すのもここ。
     //
-    // u の置きどころに注意。鼻先のキャップは u=0〜0.048 しか持って
-    // いない(uFront = nose.len)。そこへ帯を掛けると、吻の先を一周する
-    // 輪になる。しかも歯の刻みを断面まわり(v)で取っているので、
-    // 円錐の頂点から**放射状の扇**が出た。口はキャップより後ろへ置く
-    float ventral = smoothstep(0.34, 0.16, v);
-    float gape = smoothstep(0.052, 0.066, u) * smoothstep(0.134, 0.120, u) * ventral;
-    col = mix(col, vec3(0.026, 0.013, 0.015), gape * 0.95);
+    // **横から見て口が見えるかどうかで、怖いかどうかが決まる。**
+    // 下面にまっすぐな帯を引くと、真下から覗いたときしか口が無い
+    // 「大きな魚」になる。実物の口は三日月で、両端(口角)が眼の下まで
+    // 上がってくる。この上がりぶんが、横顔のいわゆる「サメの笑い」。
+    //
+    // u の置きどころにも注意。鼻先のキャップは u=0〜nose.len/L しか
+    // 持っていない。そこへ帯を掛けると吻の先を一周する輪になり、
+    // 歯の刻みを断面まわり(v)で取っているぶん放射状の扇が出る。
+    // 口はキャップより後ろへ置く
+    float mFront = 0.090 + 0.135 * v;     // 口の前縁。上へ行くほど後ろ
+    float mBack  = 0.185 + 0.200 * v;     // 口の後縁。口角はさらに後ろ
+    float vlim = smoothstep(0.58, 0.36, v);
+    float gape = smoothstep(mFront, mFront + 0.010, u)
+               * smoothstep(mBack, mBack - 0.010, u) * vlim;
+    col = mix(col, vec3(0.022, 0.011, 0.013), gape * 0.96);
+
     // 歯。遠くでは1本ずつは見えないので、まず「口の縁の白い線」として
     // 効かせ、刻みはそこへ乗せる。刻みだけでは近づくまで何も見えない
-    float saw = 0.55 + 0.45 * pow(abs(sin(v * 3.14159 * 26.0)), 0.6);
-    float lip = smoothstep(0.058, 0.072, u) * smoothstep(0.086, 0.072, u)    // 上顎
-              + smoothstep(0.106, 0.118, u) * smoothstep(0.132, 0.120, u);   // 下顎
-    col = mix(col, vec3(0.88, 0.87, 0.82), clamp(lip, 0.0, 1.0) * saw * ventral * 0.9);
+    float saw = 0.45 + 0.55 * pow(abs(sin(v * 3.14159 * 34.0)), 0.55);
+    float tU = smoothstep(mFront + 0.003, mFront + 0.014, u)
+             * smoothstep(mFront + 0.048, mFront + 0.024, u);
+    float tL = smoothstep(mBack - 0.048, mBack - 0.024, u)
+             * smoothstep(mBack - 0.003, mBack - 0.014, u);
+    col = mix(col, vec3(0.90, 0.89, 0.84), clamp(tU + tL, 0.0, 1.0) * saw * vlim * 0.95);
+
+    // ---- 眼 ----
+    // 口角のすぐ上。サメの眼が怖いのは白目が無くて表情が読めないから。
+    // 落ち窪んだ暗い座に置くと、玉を貼っただけには見えなくなる
+    col *= 1.0 - eyeDot(u, v, 0.175, 0.62, 0.052) * 0.45;
+    col = mix(col, vec3(0.010, 0.010, 0.014), eyeDot(u, v, 0.175, 0.62, 0.024));
 
     // ひれ。上面は背と同じ、下面はやや明るい程度で、腹の白は回らない
     if (part > 0.5) {
