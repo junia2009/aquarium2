@@ -335,7 +335,7 @@ export const NAUTILUS = {
   dist: 34,          // 中心までの距離。近すぎると窓を塞ぎ、遠いと霧に溶ける
   pitch: 0.022,      // 泥に沈んだぶんの傾き
   roll: 0.045,
-  clear: 3.15,       // 船の中心から橇の下端まで
+  clear: 3.64,       // 船の中心から橇の下端まで
 };
 NAUTILUS.x = Math.cos(NAUTILUS.a) * NAUTILUS.dist;
 NAUTILUS.z = Math.sin(NAUTILUS.a) * NAUTILUS.dist;
@@ -668,9 +668,31 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
       DOCK.push({ bx, by, bz, hy, d });
       // 明るさは控えめに。はじめ本体の投光器と同じ 8 台強で当てたら、
       // 船体が真っ白に飛んで**紙で作った模型**になった。
-      // 暗い海に浮かぶ鉄の塊として読めるのは、面の大半が沈んでいて、
+      // 暗い海に浮かぶ塊として読めるのは、面の大半が沈んでいて、
       // 光が当たった一部だけが鈍く返しているとき
-      lights.push({ p: [bx, hy, bz], d: [d.x, d.y, d.z], c: [3.6, 3.4, 3.0], k: 0.46 });
+      lights.push({ p: [bx, hy, bz], d: [d.x, d.y, d.z], c: [3.4, 2.70, 2.00], k: 0.48 });
+    }
+    // 海底からの地明かり。
+    //
+    // 銅は暖色の下でしか銅に見えない。白い投光器を上から当てるだけだと
+    // 赤銅色が灰色に寄って、せっかくの材質が伝わらない。
+    // それに、下から焚いた光は上からの光では出ない陰影を作る——
+    // 建物のライトアップで下から照らすのは、そのほうが立体が起きるから
+    const UP = [3.7, 1.42, 0.48];
+    for (const t of [-9.0, -3.0, 3.0, 9.0]) {
+      for (const side of [1, -1]) {
+        const ux = -NAUTILUS.x / NAUTILUS.dist, uz = -NAUTILUS.z / NAUTILUS.dist;
+        // 船の軸から左右へ 4.6m。手前(施設側)は明るく、奥は控えめに
+        const px = NAUTILUS.x + sh * t + ux * side * 5.8;
+        const pz = NAUTILUS.z + ch * t + uz * side * 5.8;
+        const py = FLOOR_Y + reliefAt(px, pz) + 0.30;
+        const d = new THREE.Vector3(-ux * side * 0.42, 1.0, -uz * side * 0.42).normalize();
+        DOCK.push({ up: true, bx: px, by: py, bz: pz, hy: py, d });
+        lights.push({
+          p: [px, py, pz], d: [d.x, d.y, d.z],
+          c: side > 0 ? UP : UP.map((v) => v * 0.40), k: 0.62,
+        });
+      }
     }
   }
 
@@ -872,6 +894,13 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
   // 停泊地の投光器。灯具だけ光らせても支柱が無いと宙に浮くので、
   // 海底から立てる
   for (const L of DOCK) {
+    if (L.up) {
+      // 地明かりの器具。海底に伏せた小さな筒
+      const hd = [L.bx + L.d.x * 0.55, L.by + L.d.y * 0.55, L.bz + L.d.z * 0.55];
+      strut(S, [L.bx, L.by - 0.35, L.bz], hd, 0.30, STEEL2);
+      neon.add(hd, [4.2, 2.5, 1.15], 0.16, 0);
+      continue;
+    }
     strut(S, [L.bx, L.by - 0.4, L.bz], [L.bx, L.hy, L.bz], 0.16, STEEL2);
     strut(S, [L.bx, L.by + 0.2, L.bz], [L.bx, L.by - 0.35, L.bz], 0.62, STEEL2);
     // 灯具の筐体。光る点だけだと、暗闇に浮いた玉になる
