@@ -63,9 +63,88 @@ function floodGLSL(lights) {
       // 同じ海底に別々の溜まりを作る
       return lc * ((max(dot(n, L), 0.0) * 0.88 + 0.12) * att * cone) * absorb;
     }
+    ${downGLSL()}
     vec3 floodLight(vec3 wp, vec3 n) {
-      vec3 s = vec3(0.0);
+      vec3 s = downField(wp, n);
       ${body}
+      return s;
+    }
+  `;
+}
+
+// ============ 区域照明(ダウンライト) ============
+//
+// 施設の周りだけでなく、水域そのものを照らす。
+//
+// ここは光源を1基ずつ並べてはいけないところ。floodGLSL は光源を
+// すべてシェーダに展開するので、40基足せば断片あたりの計算が
+// 倍以上になる。海底・殻・観測所・ノーチラス、全部の材質に乗る。
+//
+// なので**格子に並べて、近傍9セルだけ評価する**。灯具の位置は
+// 格子の式から出るので、シェーダは自分の足もとのセル番号を計算して
+// 周り 3x3 を見ればいい。何十基置いても定数コストになる。
+// 桁 21m に対して灯具は 9m の高さなので、隣の隣のセル(42m 先)は
+// 配光の外——3x3 で足りることは幾何で決まっている。
+//
+// 灯具の位置と「そのセルに立てるか」の判定は、JS 側の柱の生成と
+// **同じ式**を使う。別々に書くと、光っているのに柱が無い場所や、
+// 柱があるのに暗い場所ができる
+export const DOWNLIGHT = {
+  pitch: 21.0,      // 桁の間隔
+  head: 9.2,        // 海底から灯具まで
+  inner: 22.0,      // これより内側は本体の投光器の受け持ち
+  outer: 98.0,      // ここまで並べる
+  fade: 60.0,       // ここから外は落としていく。端で切ると壁になる
+  spread: 0.60,     // 配光の広がり
+  col: [3.15, 3.35, 3.55],   // わずかに冷たい白。作業灯の色
+};
+
+/** そのセルに灯具を立てるか。柱の生成とシェーダで同じ判定を使う */
+export function downCellOk(x, z) {
+  const r = Math.hypot(x, z);
+  if (r < DOWNLIGHT.inner || r > DOWNLIGHT.outer) return false;
+  // 建物の中に柱が生えないよう、2か所だけ避ける
+  if (Math.hypot(x - ANNEX.x, z - ANNEX.z) < 13.0) return false;
+  if (Math.hypot(x - NAUTILUS.x, z - NAUTILUS.z) < 21.0) return false;
+  return true;
+}
+
+/** 灯具の高さ。うねりは入れない——9m 上の灯りに ±1m の差は出ない */
+export function downLampY(x, z) {
+  return FLOOR_Y + riseAt(Math.hypot(x, z)) + DOWNLIGHT.head;
+}
+
+function downGLSL() {
+  const D = DOWNLIGHT;
+  const f = (v) => v.toFixed(3);
+  const v3 = (a) => `vec3(${a.map((x) => x.toFixed(3)).join(',')})`;
+  return /* glsl */ `
+    // 灯具の高さ。JS の downLampY と同じ式
+    float downLampY(vec2 c) {
+      float t = clamp((length(c) - 22.0) / 56.0, 0.0, 1.0);
+      return ${f(FLOOR_Y)} + t * t * (3.0 - 2.0 * t) * 8.5 + ${f(D.head)};
+    }
+    // そのセルに灯具があるか。JS の downCellOk と同じ判定
+    float downCellOk(vec2 c) {
+      float r = length(c);
+      if (r < ${f(D.inner)} || r > ${f(D.outer)}) return 0.0;
+      if (distance(c, vec2(${f(ANNEX.x)}, ${f(ANNEX.z)})) < 13.0) return 0.0;
+      if (distance(c, vec2(${f(NAUTILUS.x)}, ${f(NAUTILUS.z)})) < 21.0) return 0.0;
+      // 外へ向かって細る。端でぷつりと切ると、そこに明るさの壁が立つ
+      return 1.0 - smoothstep(${f(D.fade)}, ${f(D.outer)}, r);
+    }
+    vec3 downField(vec3 wp, vec3 n) {
+      vec2 g = floor(wp.xz / ${f(D.pitch)} + 0.5);
+      vec3 s = vec3(0.0);
+      for (int i = -1; i <= 1; i++) {
+        for (int j = -1; j <= 1; j++) {
+          vec2 c = (g + vec2(float(i), float(j))) * ${f(D.pitch)};
+          float k = downCellOk(c);
+          if (k <= 0.0) continue;
+          s += flood1(wp, n, vec3(c.x, downLampY(c), c.y),
+                      vec3(0.0, -1.0, 0.0), ${v3(D.col)} * k, ${f(D.spread)});
+        }
+      }
       return s;
     }
   `;
@@ -1092,6 +1171,54 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
     }
   }
 
+  // ---- 区域照明の柱 ----
+  //
+  // 光は downField() が格子から計算している。柱もその格子から生やす。
+  // 位置と有無は downCellOk / downLampY を共有しているので、
+  // 「光っているのに柱が無い」「柱があるのに暗い」が起きない。
+  //
+  // 等間隔に並んでいることが大事。自然の海底に等間隔の柱は無いので、
+  // それだけで「人が敷設した区域」に見える。しかも奥へ向かって
+  // 規則正しく小さくなるので、霧の中の距離が読めるようになる
+  const downMasts = [];
+  {
+    const D = DOWNLIGHT;
+    const nCell = Math.ceil(D.outer / D.pitch);
+    for (let i = -nCell; i <= nCell; i++) {
+      for (let j = -nCell; j <= nCell; j++) {
+        const px = i * D.pitch, pz = j * D.pitch;
+        if (!downCellOk(px, pz)) continue;
+        const r = Math.hypot(px, pz);
+        const gy = FLOOR_Y + reliefAt(px, pz);
+        const hy = downLampY(px, pz);
+        // 柱。遠いほど細く見えるので、太さは変えない
+        strut(S, [px, gy - 0.3, pz], [px, hy, pz], 0.17, STEEL2);
+        // 接地板。泥に沈みかけた短い裾。上を向いた平らな面は作らない
+        strut(S, [px, gy + 0.42, pz], [px, gy - 0.25, pz], 0.62, STEEL2);
+        // 灯具。下向きの短い筒
+        strut(S, [px, hy + 0.15, pz], [px, hy - 0.42, pz], 0.42, STEEL);
+        // 外周へ行くほど暗い。シェーダ側の taper と揃える
+        const k = 1 - THREE.MathUtils.smoothstep(r, D.fade, D.outer);
+        neon.add([px, hy - 0.66, pz], [4.6 * k, 4.9 * k, 5.2 * k], 0.17, 0);
+        // 光の錐。**水中の照明が照明に見えるのは、床の溜まりではなく錐**。
+        // 溜まりのほうは 30m も離れると霧に埋もれて、明暗の比が
+        // 1.2 倍しか出ない(実測)。錐は加算合成なので霧の上に乗る。
+        // 遠くのぶんまで描くと重なりで塗り潰すので、近い列だけ
+        if (r < D.fade + 4) {
+          downMasts.push({ p: [px, hy - 0.55, pz], d: new THREE.Vector3(0, -1, 0),
+                           len: hy - 0.55 - gy, r0: 0.40, r1: 4.6 });
+        }
+        // 遊べる範囲(半径60m)の中だけ当たり判定を持たせる。
+        // 全部に付けると、行けない場所の柱のために毎フレーム
+        // 判定を回すことになる
+        if (world && r < 58) {
+          world.addStatic(new THREE.Vector3(px, gy + (hy - gy) * 0.5, pz),
+                          0.55, (hy - gy) * 0.5 + 0.4, 0.55);
+        }
+      }
+    }
+  }
+
   // 観測やぐら。舷窓1枚につき1本、目の高さに立つ目印を置く。
   //
   // 施設が1棟きりだと、窓の正面はいつまでも「暗い水」のままになる。
@@ -1382,12 +1509,18 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
   {
     // 筋の長さは海底に届くところで止める。突き抜けさせると、
     // 加算合成なので泥の中にも光の錐が描かれる
-    const SEGB = 16, LEN = 11.0, R0 = 0.34, R1 = 3.2;
+    const SEGB = 16;
     const pos = [], nrm = [], tt = [], idx = [];
     const up = new THREE.Vector3(0, 1, 0);
+    const side = new THREE.Vector3(1, 0, 0);
     const e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
-    for (const f of fixtures) {
-      e1.copy(up).cross(f.d).normalize();
+    // 舷窓の投光器と、区域照明の柱。寸法が違うので器具ごとに持たせる
+    const beamSrc = fixtures.map((f) => ({ p: f.p, d: f.d, len: 11.0, r0: 0.34, r1: 3.2 }))
+      .concat(downMasts);
+    for (const f of beamSrc) {
+      const LEN = f.len, R0 = f.r0, R1 = f.r1;
+      // 軸が真下のときは up との外積が 0 になる。基準を横に取り替える
+      e1.copy(Math.abs(f.d.y) > 0.95 ? side : up).cross(f.d).normalize();
       e2.copy(f.d).cross(e1).normalize();
       const base = pos.length / 3;
       const slope = (R1 - R0) / LEN;
