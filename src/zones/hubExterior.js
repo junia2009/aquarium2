@@ -5,6 +5,7 @@ import { FISH_SHAPES } from '../creatures/fishGeometry.js';
 import { createFishMaterial } from '../creatures/fishMaterial.js';
 import { School, makeSchoolInstanceAttr } from '../creatures/school.js';
 import { buildNautilus } from './nautilus.js';
+import { Megalodon } from '../creatures/megalodon.js';
 
 // ============ プロテウスの外 ============
 //
@@ -1474,6 +1475,47 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
   // ボイドには施設の形が見えていないので、最後に効かせる安全弁
   const FISH_KEEP = hullR + 1.3;
 
+  // ---- メガロドン ----
+  //
+  // 光の受け方はマイワシと分ける。あちらは体側が反射率 0.8 の銀なので
+  // 投光器を 0.22 倍まで落としてあるが、サメの背は 0.05——同じ倍率を
+  // 掛けたら**ただの黒い影**になる。腹の白と背の黒の差が
+  // 見えないサメは、大きいだけの塊にしか見えない
+  const SHARK_ENV = EXT_FOG + FLOOD + /* glsl */ `
+    vec3 fishLight(vec3 a, vec3 n, vec3 wp, vec3 V, float sp, float si) {
+      vec3 col = a * (vec3(0.034, 0.052, 0.070) + floodLight(wp, n) * 0.95);
+      // 海底からの照り返し。区域照明で床は明るいので、下を向いた面には
+      // 必ず光が回る。これが無いと、灯りより高いところを泳ぐあいだ
+      // **真っ黒な影**にしかならず、腹の白と背の黒の対比が消える
+      col += a * vec3(0.10, 0.15, 0.17) * max(-n.y, 0.0);
+      // 濡れた肌の照り。楯鱗はざらついているので、鏡ではなく鈍く広く
+      col += floodLight(wp, normalize(n + V * 0.5)) * si * 0.06;
+      return col;
+    }
+    vec3 fishCaustics(vec3 wp, vec3 n) { return vec3(0.0); }
+    vec3 fishFog(vec3 c, vec3 wp) { return extFog(c, wp); }
+    vec3 fishRim() { return vec3(0.055, 0.100, 0.130); }
+  `;
+  const megalodon = new Megalodon(group, {
+    env: SHARK_ENV,
+    speed: 3.2,
+    rNear: 17.5,
+    rFar: 34.0,
+    // 内側を回るときは舷窓の正面。ここが合っていないと、
+    // 部屋にいるあいだ一度も姿を見ないまま終わる
+    yNear: deckY + 2.9,
+    yFar: 17.5,
+    // いちばん内側では天蓋の上を越える。ガラスの天井にした甲斐が
+    // いちばん出るのがこの瞬間
+    yOver: domeTop + 4.2,
+    floorAt: (r) => FLOOR_Y + riseAt(r),
+    // 越えるべき高さ。区域照明の柱と同じ式から引く——
+    // 目分量で決めると、いつか柱を突き抜ける
+    clearAt: (r) => (r > DOWNLIGHT.inner - 1.0
+      ? FLOOR_Y + riseAt(r) + DOWNLIGHT.head + 2.6
+      : -Infinity),
+  });
+
   // ---- 投光器の器具と発光面 ----
   const F = new Buf();
   const glow = new Buf();
@@ -1698,6 +1740,7 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
 
   return {
     update(dt, t) {
+      megalodon.update(dt);
       // 2.6秒周期でひと呼吸。ずっと点いていると人工物に見えない
       const ph = (t % 2.6) / 2.6;
       const on = Math.exp(-Math.pow((ph - 0.12) * 9.0, 2));

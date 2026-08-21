@@ -321,6 +321,12 @@ void main() {
 // ---- 模様関数(種ごと) ----
 // uPattern: 0=マイワシ 1=カクレクマノミ 2=ナンヨウハギ 3=ジンベエザメ 4=ザトウクジラ
 //           5=バンドウイルカ 6=シロイルカ 7=カマイルカ 8=ハダカイワシ
+//           9=ペンギン4種(uSpecies で分岐) 10=メガロドン
+//
+// 枝の順番に注意。ペンギンの枝を `uPattern < 9.5` と書いていたため、
+// 8(ハダカイワシ)がペンギンの枝に落ち、発光器を描く枝には**一度も
+// 到達していなかった**。数字が飛び飛びに増える分岐は、上限だけでなく
+// 下限も書く
 const PATTERN_GLSL = /* glsl */ `
 uniform float uPattern;
 uniform float uSpecies;   // ペンギンの種(0..3)
@@ -635,7 +641,7 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, inout vec3 n, vec3 V, float tint, float part,
     // 目
     col = mix(col, vec3(0.02, 0.02, 0.03), eyeDot(u, v, 0.185, 0.50, 0.028));
     glossMul = 1.6;
-  } else if (uPattern < 9.5) {
+  } else if (uPattern > 8.5 && uPattern < 9.5) {
     // ---- ペンギン4種 ----
     // 体はどれも同じ「黒い背・白い腹」の対比色(counter-shading)。
     // 上から見れば海の暗さに、下から見れば水面の明るさに紛れる。
@@ -861,6 +867,75 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, inout vec3 n, vec3 V, float tint, float part,
     // 鋭い煌めきはむしろ体表に付いた気泡の役目なので、ここは抑える。
     // 濡れているあいだだけ、水膜のぶん少し戻す
     glossMul *= 0.10 + 0.32 * vWet;
+  } else if (uPattern > 9.5) {
+    // ---- メガロドン ----
+    //
+    // ネズミザメ類(ホホジロザメの仲間)の体色。決め手は3つ。
+    //
+    //  ・背と腹の境目が**ぎざぎざの一本の線**であること。イルカのような
+    //    なだらかな濃淡ではない。ここをぼかすと、たちまち鯨に見える
+    //  ・傷。大型のサメは体じゅうが傷だらけで、治った跡が白く残る。
+    //    無傷のサメは玩具に見える
+    //  ・鰓裂が5本。巨体を養うぶん、体高いっぱいに長い
+    vec3 back  = vec3(0.048, 0.058, 0.070);
+    vec3 belly = vec3(0.58, 0.60, 0.585);
+
+    // 背と腹の境。前後に波打たせ、さらに細かい乱れで刃こぼれにする
+    float line = 0.40 + 0.075 * sin(u * 7.5 + 1.1) + 0.05 * fbm(vec2(u * 6.0, 2.3));
+    line += 0.05 * (fbm(vec2(u * 52.0, 9.0)) - 0.5);
+    col = mix(belly, back, smoothstep(line - 0.022, line + 0.022, v));
+    // 背のむら。一様な灰色は生き物にならない
+    col *= 0.84 + 0.30 * fbm(vec2(u * 9.0, v * 4.5));
+
+    // 傷。治った跡は白い。長い掻き傷と、丸い咬み跡
+    float sc = fbm(vec2(u * 28.0 + v * 6.0, v * 20.0));
+    float scratch = smoothstep(0.70, 0.87, sc) * smoothstep(0.08, 0.30, u);
+    col = mix(col, vec3(0.46, 0.47, 0.46), scratch * 0.50);
+    // クッキーカッターザメの咬み跡。丸く抜けた白い跡が点々と残る
+    vec2 cg = vec2(u * 13.0, v * 7.0);
+    vec2 ci = floor(cg), cf = fract(cg) - 0.5;
+    vec2 jit = vec2(hash12(ci + 3.7), hash12(ci + 9.1)) - 0.5;
+    float bite = smoothstep(0.17, 0.06, length(cf + jit * 0.6)) * step(0.84, hash12(ci));
+    col = mix(col, vec3(0.50, 0.51, 0.49), bite * 0.75);
+
+    // 鰓裂。5本、後ろへ倒れた弧
+    float gill = 0.0;
+    for (int gi = 0; gi < 5; gi++) {
+      float du = u - (0.150 + float(gi) * 0.0235 + 0.022 * (v - 0.35));
+      gill = max(gill, smoothstep(0.0075, 0.0, abs(du))
+                       * smoothstep(0.10, 0.26, v) * smoothstep(0.88, 0.68, v));
+    }
+    col = mix(col, back * 0.25, gill * 0.9);
+
+    // 眼。小さく、黒く、吻の後ろの高い位置。
+    // サメの眼が怖いのは、白目が無くて表情が読めないから
+    col = mix(col, vec3(0.012, 0.012, 0.016), eyeDot(u, v, 0.090, 0.63, 0.019));
+
+    // ---- 口 ----
+    // 下面を横いっぱいに裂ける。**ここが無いとただの大きな魚**で、
+    // 見た人が最初に探すのもここ。
+    //
+    // u の置きどころに注意。鼻先のキャップは u=0〜0.048 しか持って
+    // いない(uFront = nose.len)。そこへ帯を掛けると、吻の先を一周する
+    // 輪になる。しかも歯の刻みを断面まわり(v)で取っているので、
+    // 円錐の頂点から**放射状の扇**が出た。口はキャップより後ろへ置く
+    float ventral = smoothstep(0.34, 0.16, v);
+    float gape = smoothstep(0.052, 0.066, u) * smoothstep(0.134, 0.120, u) * ventral;
+    col = mix(col, vec3(0.026, 0.013, 0.015), gape * 0.95);
+    // 歯。遠くでは1本ずつは見えないので、まず「口の縁の白い線」として
+    // 効かせ、刻みはそこへ乗せる。刻みだけでは近づくまで何も見えない
+    float saw = 0.55 + 0.45 * pow(abs(sin(v * 3.14159 * 26.0)), 0.6);
+    float lip = smoothstep(0.058, 0.072, u) * smoothstep(0.086, 0.072, u)    // 上顎
+              + smoothstep(0.106, 0.118, u) * smoothstep(0.132, 0.120, u);   // 下顎
+    col = mix(col, vec3(0.88, 0.87, 0.82), clamp(lip, 0.0, 1.0) * saw * ventral * 0.9);
+
+    // ひれ。上面は背と同じ、下面はやや明るい程度で、腹の白は回らない
+    if (part > 0.5) {
+      col = mix(back * 1.5, back, smoothstep(0.42, 0.58, v));
+      col *= 0.82 + 0.30 * fbm(vec2(u * 14.0, v * 9.0));
+    }
+    // 楯鱗(じゅんりん)。サメの肌はやすりで、光をほとんど返さない
+    glossMul = 0.55;
   } else {
     // ---- ハダカイワシ: 黒褐色の体に、腹面の発光器が青緑に灯る ----
     // 鱗が剥がれやすく、生きた個体は体側が銀色に光る。
