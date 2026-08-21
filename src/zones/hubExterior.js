@@ -296,10 +296,21 @@ export const ANNEX = {
   // 鋼の壁しか見えない——外を見るための建物なのに外が見えなかった
   sill: 1.15,
   door: 2.30,                                // 出入口の高さ
-  doorArc: 0.30,                             // 出入口の半角(ラジアン)
-  // 出入口の向き。連絡通路の真正面に開けると、通路そのものが
-  // 戸口を塞いでしまう。通路の脇へずらす
-  doorOff: 0.85,
+  // 出入口の半角(ラジアン)。0.30 だと弧長 3.1m——人の出入口ではなく
+  // 車庫の扉で、壁に空いた大穴にしか見えなかった。
+  // 潜水具を着けた人がすれ違える幅(2.2m)まで絞る
+  doorArc: 0.212,
+  // 出入口の向き。連絡通路の取付点から何ラジアンずらすか。
+  //
+  // 0.85(48.7°) にしていたら、通路が壁に突き当たって終わり、
+  // 戸口はそこから真横に離れた場所に開いていた。「入口が何故か
+  // あそこにある」と読める配置で、実際そう指摘された。
+  // 通路の脇に寄せて、取付部と戸口をひと続きの「玄関まわり」に見せる。
+  //
+  // 下限は通路の太さで決まる。半径 1.3m の管は壁の上で
+  // asin(1.3/5.2)=0.253rad を占めるので、戸口の手前の縁
+  // (doorOff - doorArc)がそれを超えていないと管が戸口を塞ぐ
+  doorOff: 0.56,
 };
 ANNEX.x = Math.cos(ANNEX.a) * ANNEX.dist;
 ANNEX.z = Math.sin(ANNEX.a) * ANNEX.dist;
@@ -641,6 +652,25 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
       d: [0, -1, 0], c: ROOM, k: 1.0,
     });
   }
+  // 観測棟の外灯。
+  //
+  // 本体の投光器は舷窓の下を照らす向きに絞ってあるので、48m 先の
+  // 観測棟には届かない。棟のまわりだけ真っ暗で、玄関も踏み段も
+  // 形が読めていなかった。軒下に3基まわし、うち1基は戸口の真上に置く
+  const ANX_FIX = [];
+  {
+    const dA = ANNEX.a + Math.PI + ANNEX.doorOff;
+    for (let i = 0; i < 3; i++) {
+      const a = dA + (i - 1) * 2.0;
+      const px = ANNEX.x + Math.cos(a) * (ANNEX.radius + 0.30);
+      const pz = ANNEX.z + Math.sin(a) * (ANNEX.radius + 0.30);
+      const py = ANNEX.base + ANNEX.wall - 0.28;
+      const d = new THREE.Vector3(Math.cos(a) * 0.64, -0.77, Math.sin(a) * 0.64).normalize();
+      ANX_FIX.push({ px, py, pz, d });
+      lights.push({ p: [px, py, pz], d: [d.x, d.y, d.z], c: [2.3, 2.2, 2.05], k: 0.52 });
+    }
+  }
+
   // 停泊中のノーチラス号を照らす投光器。
   //
   // 施設本体の投光器は舷窓の真下を照らす向きに絞ってあるので、
@@ -877,6 +907,13 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
   const mBase = ANNEX.base;
   const mx = ANNEX.x, mz = ANNEX.z;
   buildAnnex(S, neon, world, group, mat);
+  // 観測棟の外灯の器具。光る点だけだと暗闇に浮いた玉になる
+  for (const f of ANX_FIX) {
+    strut(S, [f.px, f.py, f.pz],
+          [f.px + f.d.x * 0.42, f.py + f.d.y * 0.42, f.pz + f.d.z * 0.42], 0.26, STEEL);
+    neon.add([f.px + f.d.x * 0.55, f.py + f.d.y * 0.55, f.pz + f.d.z * 0.55],
+             [4.2, 4.1, 3.8], 0.12, 0);
+  }
 
   // ---- ノーチラス号 ----
   //
@@ -996,6 +1033,48 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
         neon.add([px, py + rad + 0.12, pz], [3.4, 1.5, 0.28], 0.065, 0);
       }
     });
+
+    // ---- 取付部 ----
+    //
+    // 通路は壁に突き当たったところで**ただ途切れて**いた。
+    // 管が壁に刺さっているだけなので、そこが接続部だと読めない。
+    // 実物の水中構造物なら必ずフランジ(鍔)で留めるし、
+    // 鍔があると「継いである」ことがひと目で分かる
+    const [ex, ey, ez] = link[link.length - 1];
+    const SIDES2 = 12;
+    const ring2 = (r, off) => {
+      const o = [];
+      for (let k = 0; k < SIDES2; k++) {
+        const th = (k / SIDES2) * Math.PI * 2;
+        o.push(S.v(ex + Math.cos(ma) * off - Math.sin(ma) * Math.cos(th) * r,
+                   ey + Math.sin(th) * r,
+                   ez + Math.sin(ma) * off + Math.cos(ma) * Math.cos(th) * r, STEEL2));
+      }
+      return o;
+    };
+    // 鍔を2枚。管の端と、壁に当たる面
+    const fa = ring2(1.32, -0.05), fb = ring2(1.92, -0.05);
+    const fc = ring2(1.92, 0.30), fd = ring2(1.34, 0.30);
+    for (let k = 0; k < SIDES2; k++) {
+      const k2 = (k + 1) % SIDES2;
+      S.quad(fa[k], fa[k2], fb[k2], fb[k]);
+      S.quad(fb[k], fb[k2], fc[k2], fc[k]);
+      S.quad(fc[k], fc[k2], fd[k2], fd[k]);
+    }
+    // 締めボルト。鍔に等間隔で並ぶ
+    for (let k = 0; k < SIDES2; k++) {
+      const th = (k / SIDES2) * Math.PI * 2;
+      const bx = ex - Math.sin(ma) * Math.cos(th) * 1.62;
+      const by = ey + Math.sin(th) * 1.62;
+      const bz = ez + Math.cos(ma) * Math.cos(th) * 1.62;
+      strut(S, [bx - Math.cos(ma) * 0.10, by, bz - Math.sin(ma) * 0.10],
+            [bx + Math.cos(ma) * 0.12, by, bz + Math.sin(ma) * 0.12], 0.075, STEEL);
+    }
+    // 接続部の標識灯。玄関まわりであることを灯りで言う
+    for (const th of [Math.PI * 0.5, Math.PI * 1.5]) {
+      neon.add([ex - Math.sin(ma) * Math.cos(th) * 1.9, ey + Math.sin(th) * 1.9,
+                ez + Math.cos(ma) * Math.cos(th) * 1.9], [0.5, 2.6, 3.4], 0.08, 0);
+    }
   }
 
   // 観測やぐら。舷窓1枚につき1本、目の高さに立つ目印を置く。
@@ -1601,6 +1680,55 @@ function buildAnnex(S, neon, world, group, mat) {
     S.quad(P(a0, R, yDoor), P(a0, R - th, yDoor), P(a1, R - th, yDoor), P(a1, R, yDoor));
     S.quad(P(a1, R, floorY), P(a1, R - th, floorY), P(a0, R - th, floorY), P(a0, R, floorY));
   }
+  // ---- 戸口の踏み段 ----
+  //
+  // 床は海底より 0.95m 高い。そこに穴だけ開いていると、壁に四角い
+  // 明かりが浮いているようにしか見えない。踏み段と手すりが付いて
+  // 初めて「ここから入る」と読める
+  {
+    const D = 2.2;                                   // 外へ張り出す長さ
+    const px = -Math.sin(dA), pz = Math.cos(dA);     // 戸口に沿う横方向
+    const hw = R * Math.sin(doorArc) + 0.35;         // 踏み段の半幅
+    const ox = cx + Math.cos(dA) * R, oz = cz + Math.sin(dA) * R;
+    // 足もとの海底。地形と同じ式で取らないと、斜路の先が
+    // 砂に埋まるか宙に浮く(riseAt は同心の持ち上がりだけで、うねりが無い)
+    const gy = FLOOR_Y + reliefAt(ox + Math.cos(dA) * 2.2, oz + Math.sin(dA) * 2.2);
+    const pt = (u, out, y) => S.v(ox + px * u + Math.cos(dA) * out, y,
+                                  oz + pz * u + Math.sin(dA) * out, DECKC);
+    // 踊り場。床とつらいち
+    const y0 = floorY - 0.06;
+    S.quad(pt(-hw, 0, y0), pt(hw, 0, y0), pt(hw, D * 0.55, y0), pt(-hw, D * 0.55, y0));
+    // 斜路。海底まで下ろす。段にすると隙間から下が見える
+    S.quad(pt(-hw, D * 0.55, y0), pt(hw, D * 0.55, y0),
+           pt(hw, D, gy + 0.06), pt(-hw, D, gy + 0.06));
+    // 側面。板厚が見えないと紙に見える
+    for (const sgn of [-1, 1]) {
+      S.quad(pt(sgn * hw, 0, y0), pt(sgn * hw, D * 0.55, y0),
+             pt(sgn * hw, D * 0.55, y0 - 0.22), pt(sgn * hw, 0, y0 - 0.22));
+      S.quad(pt(sgn * hw, D * 0.55, y0), pt(sgn * hw, D, gy + 0.06),
+             pt(sgn * hw, D, gy - 0.16), pt(sgn * hw, D * 0.55, y0 - 0.22));
+    }
+    // 手すり。高さは腰(1.05m)——人がいる場所の寸法はここで伝わる
+    for (const sgn of [-1, 1]) {
+      const posts = [[0.15, y0], [D * 0.55, y0], [D * 0.95, gy + 0.06]];
+      posts.forEach(([u, yy]) => {
+        const a = pt(sgn * hw, u, yy), b = pt(sgn * hw, u, yy + 1.05);
+        strut(S, [S.p[a * 3], S.p[a * 3 + 1], S.p[a * 3 + 2]],
+              [S.p[b * 3], S.p[b * 3 + 1], S.p[b * 3 + 2]], 0.045, STEEL2);
+      });
+      for (let i = 0; i < posts.length - 1; i++) {
+        const a = pt(sgn * hw, posts[i][0], posts[i][1] + 1.05);
+        const b = pt(sgn * hw, posts[i + 1][0], posts[i + 1][1] + 1.05);
+        strut(S, [S.p[a * 3], S.p[a * 3 + 1], S.p[a * 3 + 2]],
+              [S.p[b * 3], S.p[b * 3 + 1], S.p[b * 3 + 2]], 0.040, STEEL2);
+      }
+    }
+    // 踏み段を照らす灯り。斜路の縁に沿って
+    for (const sgn of [-1, 1]) {
+      const a = pt(sgn * (hw - 0.12), D * 0.80, (y0 + gy) * 0.5 + 0.2);
+      neon.add([S.p[a * 3], S.p[a * 3 + 1] + 0.1, S.p[a * 3 + 2]], [3.4, 1.9, 0.5], 0.065, 0);
+    }
+  }
   // 戸口の縁の標識灯。暗い海で入口が分かるのは灯りだけ
   for (const sgn of [-1, 1]) {
     const a = dA + (doorArc + 0.06) * sgn;
@@ -1718,13 +1846,24 @@ function buildAnnex(S, neon, world, group, mat) {
     // 箱は軸に沿った直方体なので、円い壁は細かく並べて近似する。
     // 大きな箱を疎に置くと、内側へ食い込んだぶんが部屋の中に張り出して、
     // 立っている人を壁の外へ押し出してしまう
+    // 刻みは**戸口を基準に**並べる。角度0から等間隔に置くと、
+    // 戸口が刻みのどこに落ちるかで通れる幅が変わり、戸を少し
+    // 動かしただけで入れたり入れなくなったりする。
+    //
+    // 幅の見積り: 楕円体は通行半径(0.55)ぶん膨らむので、
+    // 残した最寄りの体が rx+0.55 だけ内側まで塞ぐ。
+    // rx=0.50・40分割(弧 0.90m)・GAP=0.30rad なら、最寄りは
+    // 弧 2.26m の位置で 1.21m まで塞ぐ——戸口の縁(1.10m)と
+    // ほぼ一致するので、見た目の戸幅がそのまま通れる幅になる
     const _b = new THREE.Vector3();
-    for (let k = 0; k < 26; k++) {
-      const a = (k / 26) * Math.PI * 2;
-      if (inDoor(a)) continue;
+    const NW = 40, GAP = 0.30;
+    for (let k = 0; k < NW; k++) {
+      const s = -Math.PI + (k + 0.5) * (Math.PI * 2 / NW);   // 戸口中心からの角度
+      if (Math.abs(s) < GAP) continue;
+      const a = dA + s;
       world.addStatic(_b.set(cx + Math.cos(a) * (R + 0.55), base + H * 0.5,
                              cz + Math.sin(a) * (R + 0.55)),
-                      0.82, H * 0.6, 0.82);
+                      0.50, H * 0.6, 0.50);
     }
     // 屋根の蓋。壁だけ塞いでも、上から降りて屋根を抜けられてしまう
     // (実際そうなっていて、出入口を使わずに天井から入れた)。
