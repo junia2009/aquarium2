@@ -3,6 +3,7 @@ import { baseUniforms, U } from '../env.js';
 import { UW_FRAG_PRELUDE, UW_FRAG_OUTPUT } from '../glsl.js';
 import { CollisionWorld } from '../collision.js';
 import { buildExterior, ANNEX, FLOOR_Y, riseAt } from './hubExterior.js';
+import { PROTEUS_SPECIES } from '../species.js';
 
 // ============ ポータルエリア(海中研究施設) ============
 //
@@ -1480,6 +1481,19 @@ function buildPortal(parent, def, angle, portals, plu) {
 
 // タップ判定用。毎回作ると GC が走る
 const _ray = new THREE.Raycaster();
+// 施設を「見る」ときの視点の先。天蓋の頂点の少し下。
+// 部屋の中から押されるので、外へ連れ出すのではなく見上げさせる
+const _stationView = new THREE.Vector3(0, DOME_TOP - 0.8, 0);
+
+// ---- ソナー ----
+// 波面の進む速さ。海中の音速は 1500m/s だが、そのまま撃つと
+// 半径 110m を 0.07 秒で通り過ぎて、何も見えない。
+// 「見えるように遅くしてある」のは嘘だが、見えないものは無いのと同じ。
+// 45m/s なら端まで 2.4 秒——目で追える速さの下限がこのあたり
+const PING_SPEED = 45.0;
+// 届く距離。区域照明の外縁(98m)より少し先まで。
+// 灯りの届かないところに何があるかが分かるのが、ソナーの見せ場
+const PING_REACH = 112.0;
 
 // ================================================================ ゾーン定義
 export const HUB = {
@@ -1517,10 +1531,15 @@ export const HUB = {
   // ここに生き物はいないので、餌やりのボタンは出さない。
   // 押せるのに何も起きないボタンは、壊れているのと区別がつかない
   feed: false,
-  tap: 'ハッチをタップすると、その水槽へ行けます',
-  species: [],
+  tap: 'ハッチをタップ: その水槽へ / 外の海をタップ: ソナーを撃つ',
+  // 図鑑の見出し。ここには潜水艦も観測塔も並ぶので「展示生物」ではない
+  guide: 'この水域について',
+  // 明るさのつまみの行き先。水深200mに太陽は届かないので、
+  // ここでは施設の照明につなぐ
+  light: 'station',
+  species: PROTEUS_SPECIES,
 
-  build(root) {
+  build(root, audio) {
     // ポータルの光は部屋じゅうの金属を照らす。ユニフォームは
     // value のオブジェクトごと共有する——材質ごとに持つと、
     // 更新のたびに全部へ書き写すことになる
@@ -1528,6 +1547,14 @@ export const HUB = {
     // 殻はハッチの位置が決まってから作る(リブを避けるため)
     let shell = null;
     let outside = null;
+    // ソナーの経過秒。負なら飛んでいない。
+    //
+    // 共有ユニフォームなので、建て直すたびに消しておく——
+    // 波面が飛んでいる最中に水槽へ移ると、こちらの ping は
+    // -1 に戻るのに uPingI は残ったままで、戻ってきたとき外の海が
+    // ずっと光りっぱなしになる
+    let ping = -1;
+    U.uPingI.value = 0;
     buildDome(root, plu);
     buildLock(root, plu);
     buildLamps(root, plu);
@@ -1608,8 +1635,22 @@ export const HUB = {
         // 投光器は窓のそばに付いていないと、見ている先が暗いままになる
         outside = buildExterior(root, wins, ROOM_R, DECK_Y, DOME_TOP, world);
       },
-      followTargets: {},
-      species: [],
+      // 図鑑から「見に行く」対象。外の海のものは buildExterior が持って
+      // いるので、そこから受け取って、施設そのものを1つ足す。
+      //
+      // 追跡先を持たない札を並べてはいけない。押しても何も起きない札は、
+      // 壊れているのと区別がつかない——餌やりボタンをゾーンごとに
+      // 消しているのと同じ理由
+      followTargets: {
+        // 天蓋の頂点。部屋の中から押されるので、離すのではなく
+        // 見上げさせる。minD を小さく取っておかないと、壁へ押し付けられる
+        station: { get: () => _stationView, dist: [4, 40] },
+        get megalodon() { return outside?.followTargets.megalodon; },
+        get sardine() { return outside?.followTargets.sardine; },
+        get nautilus() { return outside?.followTargets.nautilus; },
+        get tower() { return outside?.followTargets.tower; },
+        get downlight() { return outside?.followTargets.downlight; },
+      },
       onTap(ray) {
         // 見えている円板をそのまま撃つ。当たったらその行き先を返す——
         // main 側がゾーン切替として解釈する。
@@ -1620,10 +1661,35 @@ export const HUB = {
           const r = _ray.intersectObject(p.mesh, false);
           if (r.length && r[0].distance < bd) { bd = r[0].distance; best = p.key; }
         }
-        return best;
+        if (best) return best;
+        // ---- ハッチ以外を押したら、ソナーを撃つ ----
+        //
+        // 6ゾーンのうち、押しても何も返ってこないのはここだけだった。
+        // 水槽なら「魚が驚く」で済むが、ここは施設なので、
+        // 施設にできることを返す。水深200mで遠くを知る手段は音しかない。
+        //
+        // 連打で波面が上書きされないよう、飛んでいるあいだは受け付けない
+        if (ping < 0) { ping = 0; audio?.sonar(); }
+        return null;
       },
       update(dt, camera) {
-        outside?.update(dt, U.uTime.value);
+        outside?.update(dt, U.uTime.value, camera.position);
+        // ---- ソナーの波面を進める ----
+        if (ping >= 0) {
+          ping += dt;
+          const r = ping * PING_SPEED;
+          if (r > PING_REACH) {
+            ping = -1;
+            U.uPingI.value = 0;
+          } else {
+            U.uPing.value.set(0, DECK_Y + 2.0, 0, r);
+            // 遠ざかるほど弱る。ただし k^2 で引くと、外縁に着くころには
+            // 何も見えない。区域照明の届かないところを照らすのが
+            // ソナーの見せ場なので、k^0.75 でゆっくり落とす
+            const k = 1 - r / PING_REACH;
+            U.uPingI.value = Math.pow(k, 0.75) * 5.0;
+          }
+        }
         // 近づいたハッチが明るくなる。どれが「いま入れるもの」かを
         // 光の強さで示す。文字より先に光のほうが目に入る
         plu.uPortalN.value = portals.length;

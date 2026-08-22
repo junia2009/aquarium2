@@ -51,6 +51,21 @@ export const U = {
   uIceTex:     { value: emptyCover() },                // R = 氷の被覆(0..1)
   uIceOn:      { value: 0.0 },
   uIceExtent:  { value: 160.0 },                      // テクスチャが覆うXZの一辺(m)
+
+  // ---- 施設の照明の強さ(プロテウス用) ----
+  // 水深200mには太陽が届かないので、あちらの uSunI をいじっても
+  // 画面は1ピクセルも変わらない。動かないつまみは、壊れたつまみと
+  // 区別がつかない——同じ理由で餌やりボタンもゾーンごとに消している。
+  // なので、プロテウスではスライダーの行き先をこちらに差し替える。
+  // 投光器・区域照明・光の筋、外の灯り全部に掛かる
+  uStationI:   { value: 1.0 },
+
+  // ---- ソナーの波面(プロテウス用) ----
+  // xyz = 発信点、w = いまの半径(m)。uPingI が 0 のあいだは誰も読まない。
+  // 球殻なので、通り過ぎた面だけが一瞬明るくなる——
+  // 水中で「遠くに何があるか」を知る手段は、光ではなく音のほうです
+  uPing:       { value: new THREE.Vector4(0, 0, 0, -1) },
+  uPingI:      { value: 0.0 },
 };
 
 // 氷のないゾーン用の既定テクスチャ(被覆0)。sampler2D は未バインドだと
@@ -83,5 +98,8 @@ export function baseUniforms() {
     uIceTex: U.uIceTex,
     uIceOn: U.uIceOn,
     uIceExtent: U.uIceExtent,
+    uStationI: U.uStationI,
+    uPing: U.uPing,
+    uPingI: U.uPingI,
   };
 }

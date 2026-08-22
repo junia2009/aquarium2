@@ -22,6 +22,12 @@ uniform float uLampReach;
 uniform sampler2D uIceTex;
 uniform float uIceOn;
 uniform float uIceExtent;
+// 施設の照明の強さ。プロテウス以外では誰も読まないが、宣言は共通に
+// 置く——読む材質(殻・海底・観測所・潜水艦・魚)が多すぎて、
+// そこだけ別の前置きにすると必ずどれか1つ書き忘れる
+uniform float uStationI;
+uniform vec4  uPing;    // xyz=発信点 w=いまの半径
+uniform float uPingI;   // 0 なら消えている
 
 // 流氷の覆いを抜けて届く光の割合。
 // 海面が氷で蓋をされていると、太陽光は割れ目(リード)からしか入らない。

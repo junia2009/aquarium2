@@ -13,9 +13,13 @@ export function setupUI({ zones, onFollow, onFree, onZone, onHub, onFeed, audio 
   const hubBtn = document.getElementById('hubBtn');
   const titleEl = document.querySelector('#hud-title h1');
   const tapHintEl = document.getElementById('tapHint');
+  const panelTitle = document.getElementById('panelTitle');
   const subEl = document.querySelector('#hud-title h1 span');
 
   let activeCard = null;
+  // 明るさのつまみが動かす先。'sun' か 'station'
+  let sunTarget = 'sun';
+  const sunLabel = document.querySelector('label[for="sunSlider"]');
 
   toggle.addEventListener('click', () => panel.classList.toggle('open'));
 
@@ -32,20 +36,34 @@ export function setupUI({ zones, onFollow, onFree, onZone, onHub, onFeed, audio 
 
   // ---- ゾーンに合わせて図鑑を差し替える ----
   function setZone(def) {
-    // ポータルエリアにいるあいだは「戻る」も図鑑も要らない。
-    // 施設そのものに載っている生き物はいないので、図鑑は空になる
+    // ポータルエリアにいるあいだは「戻る」が要らない(もう居る)。
+    //
+    // 図鑑のほうは出す。以前は「施設に生き物はいない」として閉じて
+    // いたが、実際には外を 24m のサメが回遊し、窓の外に潜水艦が
+    // 係留され、海底に照明が並んでいて、そのどれも説明が無かった。
+    // 札が1枚も無いゾーンだけ、これまでどおり畳む
     const atHub = def.key === 'hub';
     hubBtn.hidden = atHub;
-    toggle.hidden = atHub;
+    toggle.hidden = def.species.length === 0;
     // 餌やりを持たないゾーンではボタンごと消す。
     // 押せるのに何も起きないボタンは、壊れているのと区別がつかない
     if (feedBtn) feedBtn.hidden = (def.feed === false);
-    if (atHub) panel.classList.remove('open');
+    if (def.species.length === 0) panel.classList.remove('open');
     titleEl.childNodes[0].nodeValue = def.name + ' ';
     subEl.textContent = def.sub;
     // タップで何が起きるかはゾーンごとに違う。
     // 「魚が驚く」のまま深海や流氷へ行くと、書いてあることが起きない
     if (tapHintEl) tapHintEl.textContent = def.tap || '';
+    // 見出しはゾーンごと。プロテウスには潜水艦も観測塔も並ぶので、
+    // 「展示生物」のままだと札の半分が見出しと合わない
+    if (panelTitle) panelTitle.textContent = def.guide || '展示生物';
+    // つまみの行き先を差し替える。名札も一緒に変える——
+    // 「太陽光」と書いてあるのに海底の投光器が暗くなるのは、
+    // 効かないのと同じくらい分かりにくい
+    sunTarget = def.light === 'station' ? 'station' : 'sun';
+    if (sunLabel) sunLabel.textContent = sunTarget === 'station' ? '区域照明' : '太陽光';
+    sunSlider.value = Math.round(
+      (sunTarget === 'station' ? U.uStationI.value : U.uSunI.value) * 100);
     clearActive();
     cards.replaceChildren();
     for (const sp of def.species) {
@@ -101,8 +119,16 @@ export function setupUI({ zones, onFollow, onFree, onZone, onHub, onFeed, audio 
     soundBtn.classList.toggle('on', on);
   });
 
+  // ---- 明るさのつまみ ----
+  //
+  // 行き先はゾーンで変わる。プロテウスは水深200mで太陽が1光子も
+  // 届かないので、uSunI を動かしても画面は変わらない。
+  // 動かないつまみは壊れたつまみと区別がつかないので、あちらでは
+  // 施設の照明(uStationI)につなぎ替える
   sunSlider.addEventListener('input', () => {
-    U.uSunI.value = sunSlider.value / 100;
+    const v = sunSlider.value / 100;
+    if (sunTarget === 'station') U.uStationI.value = v;
+    else U.uSunI.value = v;
   });
 
   // ---- 遊び方の動画 ----

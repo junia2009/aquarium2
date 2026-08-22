@@ -567,6 +567,70 @@ export class UnderwaterAudio {
    *
    * @param {number}深さ 0=施設へ帰る(短い) 1=水槽へ入る
    */
+  // ============ アクティブソナー(プロテウス) ============
+  //
+  // 「ピーン」の正体は3つの重なり:
+  //
+  //  1) 送信パルス。1.05kHz の正弦を 0.13 秒。ここだけだと電子音
+  //  2) 立ち上がりのカチッ。実物は圧電素子を叩いているので、
+  //     正弦の頭に必ず打撃音が乗る。これが無いと合成音に聞こえる
+  //  3) 反響の尾。海底や施設から返る成分。畳み込み残響へ送って、
+  //     元の音より**長く**残す——遠い壁ほど遅れて返るので、
+  //     ソナーは「短く鳴らして長く聴く」音になる
+  //
+  // 音程を下げながら鳴らすのも大事。ドップラーではなく、送信器の
+  // リンギングが落ちていく音。一定の高さで鳴らすと目覚まし時計になる
+  sonar() {
+    if (!this.ctx || !this.enabled) return;
+    const ctx = this.ctx;
+    const t0 = ctx.currentTime + 0.02;
+    const rev = this._reverb();
+
+    // --- 送信パルス ---
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(1080, t0);
+    osc.frequency.exponentialRampToValueAtTime(880, t0 + 0.30);
+    const og = ctx.createGain();
+    og.gain.setValueAtTime(0.0001, t0);
+    og.gain.exponentialRampToValueAtTime(0.10, t0 + 0.008);
+    og.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.34);
+    osc.connect(og).connect(this.master);
+    og.connect(rev);
+    osc.start(t0); osc.stop(t0 + 0.40);
+
+    // --- 打撃 ---
+    const cl = ctx.createBufferSource();
+    cl.buffer = this._whiteNoise();
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 2400;
+    bp.Q.value = 1.6;
+    const cg = ctx.createGain();
+    cg.gain.setValueAtTime(0.045, t0);
+    cg.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.045);
+    cl.connect(bp).connect(cg).connect(this.master);
+    cg.connect(rev);
+    cl.start(t0); cl.stop(t0 + 0.08);
+
+    // --- 反響 ---
+    // 波面が届いて返ってくるまでの遅れ。100m 先の海底なら往復 0.13 秒。
+    // 3つに散らすと、距離のちがう反射面から返ってきたように聞こえる
+    for (const [delay, gain, freq] of [[0.14, 0.030, 820], [0.31, 0.019, 700],
+                                       [0.58, 0.011, 620]]) {
+      const e = ctx.createOscillator();
+      e.type = 'sine';
+      e.frequency.value = freq;
+      const eg = ctx.createGain();
+      eg.gain.setValueAtTime(0.0001, t0 + delay);
+      eg.gain.exponentialRampToValueAtTime(gain, t0 + delay + 0.02);
+      eg.gain.exponentialRampToValueAtTime(0.0001, t0 + delay + 0.45);
+      e.connect(eg).connect(this.master);
+      eg.connect(rev);
+      e.start(t0 + delay); e.stop(t0 + delay + 0.50);
+    }
+  }
+
   warp(kind = 1) {
     if (!this.ctx || !this.enabled) return;
     const ctx = this.ctx;

@@ -43,6 +43,51 @@ import { wander1 } from '../noise.js';
 // 胴の長さ。尾と吻がこれに足されて、全長はおよそ 23.5m になる
 const LEN = 20.0;
 
+// 体高・体幅の半値。断面は yc ± H*profile / ±W*profile に広がる
+const H = LEN * 0.096;
+const W = LEN * 0.064;
+
+// 尾の付け根が体軸方向に占める割合。当たり判定の節を体軸に置くとき、
+// 形状側と同じ式を使わないと、節が体からずれる
+const TAIL_LEN = 0.145;
+
+// 腹を平らに、背を弓なりに。
+//
+// 輪郭が上下対称だと、太さが正しくても「レンズ」に見える。
+// 実物は腹の線がほぼまっすぐで、深さは背が反ることで出ている。
+// 細いところ(頭と尾)ほど体軸を上げると、下端が揃って腹が平らになる。
+//
+// 当たり判定の節もこの軸に乗せるので、モジュール定数に出してある
+const Y_OFFSET = [0.21, 0.144, 0.090, 0.045, 0.015, 0.0, 0.0, 0.012,
+                  0.033, 0.060, 0.090, 0.123, 0.159, 0.195, 0.231, 0.261];
+
+// ---- 当たり判定に使う体の節 ----
+//
+// 24m の体を1個の楕円体で包むと、頭と尾のあいだの何もない空間まで
+// 硬くなる(体の外を泳いでいるのに弾かれる)。逆に節が粗いと、
+// 節と節の隙間を通り抜けられてしまう。
+//
+// t は体軸(0=吻・1=尾)。r は球の半径で、その位置の体幅(=細いほう)と
+// 体高(=太いほう)の中間を採る。楕円体を向きに合わせて回すこともできるが
+// (addDynamic の oriented)、それは heading しか見ないので、
+// 傾いたり潜ったりしているあいだ判定が体からずれる。球なら向きに
+// よらないので、姿勢がどうであれ体の中に収まる。
+//
+// 間隔は 0.12(=2.35m)。中央の球は半径 1.5 前後あるので隣と重なり、
+// 隙間はできない。細い両端だけは重なりが切れるが、そこは実際に
+// 体も細いので、多少すり抜けても不自然ではない
+const SEGMENTS = [
+  [0.05, 0.75], [0.17, 1.28], [0.29, 1.55], [0.41, 1.60],
+  [0.53, 1.42], [0.66, 1.10], [0.79, 0.72], [0.91, 0.70],
+];
+
+/** 折れ線として輪郭表を読む(体軸 0..1 → 表の値) */
+function sampleLinear(arr, t) {
+  const f = THREE.MathUtils.clamp(t, 0, 1) * (arr.length - 1);
+  const i = Math.min(Math.floor(f), arr.length - 2);
+  return THREE.MathUtils.lerp(arr[i], arr[i + 1], f - i);
+}
+
 /**
  * 断面の変形。楕円だけでは出せない3つを足す。
  *   ・頭は幅広で丸い([2])
@@ -187,13 +232,7 @@ export class Megalodon {
       // 尾柄で「横に薄い板」になる
       wProfile: [0.26, 0.50, 0.70, 0.86, 0.96, 1.00, 1.00, 0.95,
                  0.87, 0.77, 0.65, 0.53, 0.40, 0.27, 0.16, 0.09],
-      // 腹を平らに、背を弓なりに。
-      //
-      // 輪郭が上下対称だと、太さが正しくても「レンズ」に見える。
-      // 実物は腹の線がほぼまっすぐで、深さは背が反ることで出ている。
-      // 細いところ(頭と尾)ほど体軸を上げると、下端が揃って腹が平らになる
-      yOffset: [0.21, 0.144, 0.090, 0.045, 0.015, 0.0, 0.0, 0.012,
-                0.033, 0.060, 0.090, 0.123, 0.159, 0.195, 0.231, 0.261],
+      yOffset: Y_OFFSET,   // 腹を平らに、背を弓なりに(定義は上)
       rings: 42, radial: 30,
       sectionMod: megalodonSection,
       // 短く丸い吻。flat が**大きいほど鈍る**(e = 2/flat で
@@ -244,14 +283,48 @@ export class Megalodon {
       yNear: opt.yNear, yFar: opt.yFar, yOver: opt.yOver,
       rNear: opt.rNear, rFar: opt.rFar,
     });
+
+    // ---- 当たり判定 ----
+    //
+    // 節ごとに { pos } を持つ小さな入れ物を作って、CollisionWorld に
+    // 動く球として登録する。あとは毎フレーム pos を書き換えるだけで、
+    // 押し出しは向こうがやってくれる。
+    //
+    // 節の局所座標は、形状を組むときと同じ式から出す——
+    // z は zNose - tt*(L - tail.len*L*0.15)、y は yOffset*H。
+    // ここを目分量で書くと、体型を直すたびに判定だけ取り残される
+    this.segments = [];
+    if (opt.world) {
+      const zNose = LEN / 2;
+      const span = LEN - TAIL_LEN * LEN * 0.15;
+      for (const [tt, r] of SEGMENTS) {
+        const seg = {
+          pos: new THREE.Vector3(),
+          local: new THREE.Vector3(0, sampleLinear(Y_OFFSET, tt) * H, zNose - tt * span),
+        };
+        this.segments.push(seg);
+        opt.world.addDynamic(seg, r, r, r);
+      }
+      this._syncSegments();
+    }
   }
 
   get pos() { return this.patrol.pos; }
+
+  /** 節の世界座標を、いまの姿勢から作り直す */
+  _syncSegments() {
+    if (!this.segments.length) return;
+    this.mesh.updateMatrixWorld(true);
+    for (const seg of this.segments) {
+      seg.pos.copy(seg.local).applyMatrix4(this.mesh.matrixWorld);
+    }
+  }
 
   update(dt) {
     this.patrol.update(dt);
     this.mesh.position.copy(this.patrol.pos);
     this.mesh.rotation.set(this.patrol.pitch, this.patrol.heading, this.patrol.bank, 'YXZ');
+    this._syncSegments();
   }
 
   dispose() {

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { baseUniforms } from '../env.js';
+import { baseUniforms, U } from '../env.js';
 import { UW_FRAG_PRELUDE, UW_FRAG_OUTPUT } from '../glsl.js';
 import { FISH_SHAPES } from '../creatures/fishGeometry.js';
 import { createFishMaterial } from '../creatures/fishMaterial.js';
@@ -68,6 +68,30 @@ function floodGLSL(lights) {
     vec3 floodLight(vec3 wp, vec3 n) {
       vec3 s = downField(wp, n);
       ${body}
+      // 施設の灯りはまとめて絞れる。ここ1か所に掛けておけば、
+      // 殻も海底も観測所もノーチラスも魚も、同じ倍率で暗くなる
+      s *= uStationI;
+      // ソナーの波面。半径 uPing.w の球殻が通り過ぎた面だけが光る。
+      //
+      // つまみと別系統にしたいので、uStationI を掛けたあとに足す——
+      // 区域照明を落として真っ暗にしたときこそ、ソナーがいちばん
+      // 分かりやすい。「見えないから音で探る」がそのまま絵になる
+      if (uPingI > 0.001) {
+        vec3 pd = wp - uPing.xyz;
+        float dist = length(pd);
+        // 殻の厚み 4.2m。薄くすると波面が線になって、
+        // 起伏の急なところで途切れる
+        float shell = exp(-pow((dist - uPing.w) / 4.2, 2.0));
+        // 波面のほうを向いている面ほど強く返る——のだが、下限を
+        // 低く取ってはいけない。海底はほぼ真上を向いていて、発信点も
+        // 海底の近くにあるので、内積はどこでもほぼ 0 になる。
+        // 0.30 を下限にしていたら**海底が光らず**、輪が見えなかった
+        // (実測 1.15 倍。目では気づけない)
+        float face = 0.55 + 0.45 * max(dot(n, -pd / max(dist, 1e-4)), 0.0);
+        // 距離の減衰はごく浅く。灯りの届かない外縁まで届くのが
+        // ソナーの見せ場なので、そこで消えてしまっては意味がない
+        s += vec3(0.42, 1.30, 1.55) * (shell * face * uPingI * exp(-dist * 0.006));
+      }
       return s;
     }
   `;
@@ -274,7 +298,7 @@ const BEAM_FRAG = /* glsl */ `
     float thick = pow(abs(dot(normalize(vN), v)), 0.8);
     float fall = pow(1.0 - vT, 1.15);
     float d = fbm(vec2(vW.x * 0.9 + vW.z * 0.6, vW.y * 1.3 - mod(uTime, 900.0) * 0.07));
-    float a = thick * fall * (0.55 + 0.60 * d) * 0.30;
+    float a = thick * fall * (0.55 + 0.60 * d) * 0.30 * uStationI;
     // 遠い筋まで同じ濃さで出すと、霧の奥行きが壊れる
     a *= exp(-distance(cameraPosition, vW) * 0.012);
     // 筋そのものが「水が光を散らしている姿」なので、ここも波長で
@@ -614,12 +638,13 @@ const BLINK_GLSL = /* glsl */ `
 
 const NEON_VERT = /* glsl */ `
   uniform float uTime;
+  uniform float uStationI;   // 頂点シェーダには共通の前置きが付かない。自分で宣言する
   attribute vec3 aCol;
   attribute vec2 aBlink;
   varying vec3 vC;
   ${BLINK_GLSL}
   void main() {
-    vC = aCol * blink(aBlink.x, aBlink.y);
+    vC = aCol * blink(aBlink.x, aBlink.y) * uStationI;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }
 `;
@@ -634,13 +659,14 @@ const NEON_FRAG = /* glsl */ `
 
 const HALO_VERT = /* glsl */ `
   uniform float uTime;
+  uniform float uStationI;
   attribute vec3 aCol;
   attribute vec3 aBlink;
   varying vec3 vC;
   varying float vD;
   ${BLINK_GLSL}
   void main() {
-    vC = aCol * blink(aBlink.x, aBlink.y);
+    vC = aCol * blink(aBlink.x, aBlink.y) * uStationI;
     vec4 mv = viewMatrix * modelMatrix * vec4(position, 1.0);
     vD = -mv.z;
     // 暈は器具の10倍ほどに広がる。遠くても最低限の大きさは残す
@@ -1498,6 +1524,9 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
   `;
   const megalodon = new Megalodon(group, {
     env: SHARK_ENV,
+    // 当たり判定。体に沿って動く球をいくつか置く。
+    // ここを渡し忘れていたので、24m の体を素通りできていた
+    world,
     // Shimada et al. (2025) の推定巡航速度は 2.1〜3.5 km/h
     // (≒0.6〜1.0 m/s)で、ホホジロザメと同程度。3.2 m/s はその3倍で、
     // 24m の体がすっ飛んでいた。少しだけ上乗せして 1.5 m/s——
@@ -1547,8 +1576,15 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
     glow.quad(g0, g1, g2, g3);
   }
   group.add(new THREE.Mesh(F.geo(), mat(HULL_FRAG, { side: THREE.DoubleSide })));
-  group.add(new THREE.Mesh(glow.geo(), new THREE.MeshBasicMaterial({
-    color: 0xcfe6ff, toneMapped: false, side: THREE.DoubleSide })));
+  {
+    // 発光面は MeshBasicMaterial なので uStationI を読めない。
+    // 区域照明を絞ったときに**ここだけ点いたまま**になるので、
+    // 印を付けておいて JS 側から色を落とす
+    const m = new THREE.Mesh(glow.geo(), new THREE.MeshBasicMaterial({
+      color: 0xcfe6ff, toneMapped: false, side: THREE.DoubleSide }));
+    m.userData.stationLit = true;
+    group.add(m);
+  }
 
   // ---- 光の筋 ----
   const beams = new THREE.BufferGeometry();
@@ -1742,12 +1778,105 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
   }
   neon.build(group);
 
+  // ---- 区域照明の明るさで一緒に絞るもの ----
+  //
+  // シェーダを持つ材質は uStationI を直接読めるが、MeshBasicMaterial は
+  // 読めない。印を付けた分だけ、素の色を控えておいて毎フレーム掛ける
+  const stationLit = [];
+  group.traverse((o) => {
+    if (o.isMesh && o.userData.stationLit) {
+      stationLit.push({ mat: o.material, base: o.material.color.clone() });
+    }
+  });
+
+  // ---- 図鑑から「見に行く」ための対象 ----
+  //
+  // 動くものは毎回いまの位置を返し、建物は固定点を返す。
+  const _camAt = new THREE.Vector3();
+  let followSchool = null;
+  const nearestSchool = () => {
+    let best = schools[0], bd = Infinity;
+    for (const sc of schools) {
+      const d = sc.schoolCenter.distanceToSquared(_camAt);
+      if (d < bd) { bd = d; best = sc; }
+    }
+    return best;
+  };
+
+  // 建物の固定点。
+  //
+  // 中心を渡してはいけない——追跡は視線をその点へ向けるので、
+  // 船体の中心を渡すと**壁の内側**を見つめることになる。少し上、
+  // 外殻より高いところを狙う
+  const _followNaut = new THREE.Vector3(NAUTILUS.x, NAUTILUS.y + 3.0, NAUTILUS.z);
+  const _followTower = new THREE.Vector3(
+    ANNEX.x, ANNEX.base + ANNEX.wall * 0.55, ANNEX.z);
+  // 区域照明は、柱そのものではなく柱の並びを見せたい。
+  // 施設と観測塔を結ぶ線から外して、柱がいちばん詰まって見える方角に取る
+  const _followDown = (() => {
+    const a = Math.PI * 0.42, r = DOWNLIGHT.inner + DOWNLIGHT.pitch * 0.7;
+    const x = Math.cos(a) * r, z = Math.sin(a) * r;
+    return new THREE.Vector3(x, FLOOR_Y + reliefAt(x, z) + 3.2, z);
+  })();
+
+  // ---- 見にいく立ち位置 ----
+  //
+  // 追跡は「距離を詰めて、視線を向ける」だけで、壁を抜けてはくれない。
+  // ここは水槽と違って、対象と観客のあいだに**耐圧殻がある**。
+  // 部屋の中から潜水艦の札を押しても、壁を見つめるだけでした。
+  //
+  // なので外の札には立ち位置を持たせて、押されたときにそこへ移る。
+  // 対象と施設を結ぶ線の上、対象の手前に置く——真横や真後ろから
+  // 寄ると、振り返ったときに施設が画面の外にいて、自分がどこに
+  // いるのか分からなくなる
+  const _from = new THREE.Vector3();
+  const viewFrom = (target, back, lift) => {
+    const d = _from.set(target.x, 0, target.z);
+    const L = d.length() || 1;
+    const k = Math.max(L - back, hullR + 4.0) / L;   // 殻の中まで下がらない
+    const x = target.x * k, z = target.z * k;
+    return new THREE.Vector3(x, Math.max(target.y + lift, FLOOR_Y + reliefAt(x, z) + 3.0), z);
+  };
+
+  const followTargets = {
+    megalodon: {
+      // 回遊しているので、対象ではなく回遊路の内側に立つ。
+      // 天蓋の上なら、内周(17.5m)も外周(34m)も同じ場所から見える
+      from: () => _fromMeg,
+      get: () => megalodon.pos,
+      dist: [15, 36],
+    },
+    sardine: {
+      // 群れは舷窓ごとに散らしてある。いちばん近い1群を**選んだ瞬間に
+      // 決めて**、そこから離さない。毎フレーム選び直すと、寄っていく
+      // 途中で別の群れが近くなり、そのたび向きが飛ぶ
+      start: () => { followSchool = nearestSchool(); },
+      from: () => viewFrom(followSchool.schoolCenter, 9.0, 1.5),
+      get: () => {
+        if (!followSchool) followSchool = nearestSchool();
+        return followSchool.schoolCenter;
+      },
+      dist: [5, 14],
+    },
+    nautilus: { from: () => _fromNaut, get: () => _followNaut, dist: [18, 38] },
+    tower: { from: () => _fromTower, get: () => _followTower, dist: [22, 46] },
+    downlight: { from: () => _fromDown, get: () => _followDown, dist: [14, 32] },
+  };
+  const _fromMeg = new THREE.Vector3(0, domeTop + 6.0, 0);
+  const _fromNaut = viewFrom(_followNaut, 22.0, 4.0);
+  const _fromTower = viewFrom(_followTower, 30.0, 2.0);
+  const _fromDown = viewFrom(_followDown, 16.0, 7.0);
+
   return {
-    update(dt, t) {
+    followTargets,
+    update(dt, t, camAt) {
+      if (camAt) _camAt.copy(camAt);
       megalodon.update(dt);
+      const si = U.uStationI.value;
+      for (const e of stationLit) e.mat.color.copy(e.base).multiplyScalar(si);
       // 2.6秒周期でひと呼吸。ずっと点いていると人工物に見えない
       const ph = (t % 2.6) / 2.6;
-      const on = Math.exp(-Math.pow((ph - 0.12) * 9.0, 2));
+      const on = Math.exp(-Math.pow((ph - 0.12) * 9.0, 2)) * si;
       beacon.material.color.setRGB(1.0 * (0.10 + on), 0.16 * (0.10 + on), 0.10 * (0.10 + on));
       beacon.scale.setScalar(0.6 + on * 0.7);
 
@@ -2164,10 +2293,14 @@ function buildAnnex(S, neon, world, group, mat) {
   {
     const ng = NEONB.geo();
     ng.setAttribute('color', ng.getAttribute('aCol'));
-    group.add(new THREE.Mesh(ng, new THREE.MeshBasicMaterial({
+    const nm = new THREE.Mesh(ng, new THREE.MeshBasicMaterial({
       vertexColors: true, toneMapped: false, side: THREE.DoubleSide,
       transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
-    })));
+    }));
+    // こちらも uStationI を読めない口。material.color は頂点色に
+    // 掛かるので、白のままにしておけば JS から一括で絞れる
+    nm.userData.stationLit = true;
+    group.add(nm);
   }
 
   // ---- 当たり判定 ----
