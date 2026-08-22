@@ -1674,6 +1674,11 @@ export const HUB = {
       },
       update(dt, camera) {
         outside?.update(dt, U.uTime.value, camera.position);
+        // サメが近づくと水が鳴る。鳴いているのではなく、
+        // 24m の体が押しのけた水がこちらに届いている
+        if (outside && audio) {
+          audio.setShark(camera.position.distanceTo(outside.sharkPos));
+        }
         // ---- ソナーの波面を進める ----
         if (ping >= 0) {
           ping += dt;

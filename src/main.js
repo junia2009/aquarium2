@@ -226,6 +226,8 @@ if (new URLSearchParams(location.search).has('debug')) {
   window.__warpState = () => ({ phase: warp.phase, t: warp.t });
   window.__zoneKey = () => (active ? active.def.key : null);
   window.__env = U;
+  // 音は絵と違って撮れない。解析器を挿して帯域と音量を測るために開ける
+  window.__audio = audio;
   window.__scene = scene;
   // 検証用。撒いた餌が減っていくかを外から数える
   window.__feedCount = () => (active && active.feedLeft ? active.feedLeft() : -1);

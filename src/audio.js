@@ -318,6 +318,12 @@ export class UnderwaterAudio {
     // 音が主張しないほうがいい
     this.master.gain.setTargetAtTime(
       abyss ? 0.13 : shore ? 0.10 : hub ? 0.085 : 0.16, now, 1.5);
+    // サメの音はプロテウスにしかいない。ゾーンを移ったら黙らせる——
+    // setShark() を呼ぶ側が消えるだけでは、最後の音量のまま残る
+    if (this.sharkGain && !hub) {
+      this.sharkGain.gain.setTargetAtTime(0, now, 0.4);
+      this._sharkFar = true;
+    }
     clearTimeout(this.bubbleTimer); this.bubbleTimer = null;
     clearTimeout(this.rumbleTimer); this.rumbleTimer = null;
     clearTimeout(this.creakTimer); this.creakTimer = null;
@@ -567,6 +573,124 @@ export class UnderwaterAudio {
    *
    * @param {number}深さ 0=施設へ帰る(短い) 1=水槽へ入る
    */
+  // ============ メガロドンが通る音 ============
+  //
+  // 先に押さえておくべきこと: **サメは鳴かない**。
+  // 発声器官が無く、鰾(うきぶくろ)も無いので、音を出す仕組みが体に
+  // ひとつもありません。魚の「声」の大半は鰾を鳴らしたものなので、
+  // 鰾を持たない軟骨魚は原理的に黙っています。
+  //
+  // なので鳴き声は付けません。付けるのは**水のほう**の音:
+  //
+  //  1) 流れの音。24m の体が押しのけた水が、こちらへ届く。
+  //     ほぼ 40〜120Hz の帯だけ。高い成分は水がすぐ吸う
+  //  2) 尾の一打ち。推進はほぼ尾だけなので、ひと振りごとに
+  //     圧力の山が来る。周期は絵と同じ数字から引く——
+  //     uSwimFreq = 1.45 rad/s なので 4.3 秒に1回。
+  //     大きい動物ほど尾は遅い。この遅さがそのまま体の大きさになる
+  //  3) すれ違いざまの殻の呻り。圧力の変化が鋼を鳴らす。
+  //     これは施設の音であってサメの音ではない
+  //
+  // 距離で音量を決める連続音なので、毎フレーム setShark() を呼ぶ。
+  // 呼ばれなくなったら勝手に消える(_applyZone がゼロにする)
+
+  _sharkInit() {
+    if (this.sharkGain) return;
+    const ctx = this.ctx;
+
+    // ブラウンノイズ。低いほうへ寄せた雑音でないと、
+    // 「水が動いている」ではなく「砂嵐」になる
+    const len = ctx.sampleRate * 5;
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    let last = 0;
+    for (let i = 0; i < len; i++) {
+      const w = Math.random() * 2 - 1;
+      last = (last + 0.014 * w) / 1.014;
+      d[i] = last * 4.2;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;
+
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 60;
+    lp.Q.value = 1.1;
+    this.sharkLP = lp;
+
+    // 尾の一打ち。0.231Hz(=1.45/2π)。sin をそのまま使うと
+    // 「うねり」になってしまうので、山を尖らせて「打ち」にする——
+    // 波形テーブルで倍音を足すのがいちばん安い
+    const beat = ctx.createGain();
+    beat.gain.value = 0.55;
+    this.sharkBeat = beat;
+    const lfo = ctx.createOscillator();
+    // 山を前に倒した非対称な波。実際の尾の一打ちも、
+    // 押す側が速く戻す側が遅い
+    lfo.setPeriodicWave(ctx.createPeriodicWave(
+      new Float32Array([0, 1.0, 0.42, 0.16, 0.06]),
+      new Float32Array([0, 0.0, 0.28, 0.18, 0.08])));
+    lfo.frequency.value = 1.45 / (Math.PI * 2);
+    const depth = ctx.createGain();
+    depth.gain.value = 0.45;
+    lfo.connect(depth).connect(beat.gain);
+    lfo.start();
+
+    this.sharkGain = ctx.createGain();
+    this.sharkGain.gain.value = 0;
+    src.connect(lp).connect(beat).connect(this.sharkGain).connect(this.master);
+    src.start();
+  }
+
+  /**
+   * サメとの距離を渡す。毎フレーム呼ぶ。
+   * @param {number} dist  カメラからサメまでの距離(m)
+   */
+  setShark(dist) {
+    if (!this.ctx || !this.enabled) return;
+    this._sharkInit();
+    const now = this.ctx.currentTime;
+    // 5m 以内で最大、37m で無音。二乗にするのは、
+    // 線形だと「遠くでずっと鳴っている」に聞こえるため
+    const near = Math.min(Math.max(1 - (dist - 5) / 32, 0), 1);
+    this.sharkGain.gain.setTargetAtTime(near * near * 0.30, now, 0.25);
+    // 近いほど高い成分まで届く。遠くの低音だけが聞こえるのは、
+    // 水が高いほうから先に吸うから
+    this.sharkLP.frequency.setTargetAtTime(42 + 78 * near, now, 0.30);
+
+    // すれ違いざまの殻の呻り。1回の接近につき1度だけ。
+    // 判定を1つの閾値でやると、境目で行ったり来たりして連打になる
+    if (this._sharkFar === undefined) this._sharkFar = true;
+    if (this._sharkFar && dist < 13) { this._sharkFar = false; this._hullGroan(); }
+    else if (!this._sharkFar && dist > 22) this._sharkFar = true;
+  }
+
+  /** 鋼の呻り。圧力が変わって殻がわずかに歪む音 */
+  _hullGroan() {
+    const ctx = this.ctx;
+    const t0 = ctx.currentTime + 0.05;
+    const dur = 1.9;
+    // のこぎり波を2枚、わずかにずらす。うなりが「軋み」になる
+    for (const [f, det, gv] of [[54, 0, 0.055], [81, 1.7, 0.030]]) {
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(f + det, t0);
+      o.frequency.exponentialRampToValueAtTime((f + det) * 0.86, t0 + dur);
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 340;
+      lp.Q.value = 3.0;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(gv, t0 + 0.45);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      o.connect(lp).connect(g).connect(this.master);
+      g.connect(this._reverb());
+      o.start(t0); o.stop(t0 + dur + 0.05);
+    }
+  }
+
   // ============ アクティブソナー(プロテウス) ============
   //
   // 「ピーン」の正体は3つの重なり:
@@ -670,6 +794,10 @@ export class UnderwaterAudio {
     if (this.creakTimer) { clearTimeout(this.creakTimer); this.creakTimer = null; }
     if (this.waveTimer) { clearTimeout(this.waveTimer); this.waveTimer = null; }
     if (this.hullTimer) { clearTimeout(this.hullTimer); this.hullTimer = null; }
+    if (this.sharkGain && this.ctx) {
+      this.sharkGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.3);
+      this._sharkFar = true;
+    }
     if (this.master && this.ctx) {
       this.master.gain.setTargetAtTime(0, this.ctx.currentTime, 0.4);
     }

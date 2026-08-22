@@ -1869,6 +1869,8 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
 
   return {
     followTargets,
+    // サメの居場所。音を鳴らすのに要る——距離で音量を決めるので
+    get sharkPos() { return megalodon.pos; },
     update(dt, t, camAt) {
       if (camAt) _camAt.copy(camAt);
       megalodon.update(dt);
