@@ -1498,7 +1498,11 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
   `;
   const megalodon = new Megalodon(group, {
     env: SHARK_ENV,
-    speed: 3.2,
+    // Shimada et al. (2025) の推定巡航速度は 2.1〜3.5 km/h
+    // (≒0.6〜1.0 m/s)で、ホホジロザメと同程度。3.2 m/s はその3倍で、
+    // 24m の体がすっ飛んでいた。少しだけ上乗せして 1.5 m/s——
+    // 体長ぶん進むのに 16 秒かかる速さで、これがいちばん大きく見える
+    speed: 1.5,
     rNear: 17.5,
     rFar: 34.0,
     // 内側を回るときは舷窓の正面。ここが合っていないと、

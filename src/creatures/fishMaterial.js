@@ -911,7 +911,7 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, inout vec3 n, vec3 V, float tint, float part,
     // 鰓裂。5本、後ろへ倒れた弧
     float gill = 0.0, gillLip = 0.0;
     for (int gi = 0; gi < 5; gi++) {
-      float du = u - (0.255 + float(gi) * 0.0295 + 0.034 * (v - 0.35));
+      float du = u - (0.195 + float(gi) * 0.0235 + 0.030 * (v - 0.35));
       float band = smoothstep(0.10, 0.26, v) * smoothstep(0.92, 0.70, v);
       gill = max(gill, smoothstep(0.0075, 0.0, abs(du)) * band);
       // 縁は白い皮膚。実物で鰓裂がはっきり見えるのは、切れ込みの
@@ -932,8 +932,9 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, inout vec3 n, vec3 V, float tint, float part,
     // 持っていない。そこへ帯を掛けると吻の先を一周する輪になり、
     // 歯の刻みを断面まわり(v)で取っているぶん放射状の扇が出る。
     // 口はキャップより後ろへ置く
-    float mFront = 0.090 + 0.135 * v;     // 口の前縁。上へ行くほど後ろ
-    float mBack  = 0.185 + 0.200 * v;     // 口の後縁。口角はさらに後ろ
+    // 口は全長の 8〜15% あたり。頭(全長の 29%)の前半分に収まる
+    float mFront = 0.055 + 0.115 * v;     // 口の前縁。上へ行くほど後ろ
+    float mBack  = 0.135 + 0.170 * v;     // 口の後縁。口角はさらに後ろ
     float vlim = smoothstep(0.58, 0.36, v);
     float gape = smoothstep(mFront, mFront + 0.010, u)
                * smoothstep(mBack, mBack - 0.010, u) * vlim;
@@ -951,8 +952,8 @@ vec3 fishAlbedo(vec2 buv, vec3 wp, inout vec3 n, vec3 V, float tint, float part,
     // ---- 眼 ----
     // 口角のすぐ上。サメの眼が怖いのは白目が無くて表情が読めないから。
     // 落ち窪んだ暗い座に置くと、玉を貼っただけには見えなくなる
-    col *= 1.0 - eyeDot(u, v, 0.175, 0.62, 0.052) * 0.45;
-    col = mix(col, vec3(0.010, 0.010, 0.014), eyeDot(u, v, 0.175, 0.62, 0.024));
+    col *= 1.0 - eyeDot(u, v, 0.130, 0.63, 0.050) * 0.45;
+    col = mix(col, vec3(0.010, 0.010, 0.014), eyeDot(u, v, 0.130, 0.63, 0.023));
 
     // ひれ。上面は背と同じ、下面はやや明るい程度で、腹の白は回らない
     if (part > 0.5) {
