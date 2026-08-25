@@ -1648,6 +1648,7 @@ export const HUB = {
         get megalodon() { return outside?.followTargets.megalodon; },
         get sardine() { return outside?.followTargets.sardine; },
         get nautilus() { return outside?.followTargets.nautilus; },
+        get saloon() { return outside?.followTargets.saloon; },
         get tower() { return outside?.followTargets.tower; },
         get downlight() { return outside?.followTargets.downlight; },
       },

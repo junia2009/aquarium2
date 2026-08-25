@@ -4,7 +4,7 @@ import { UW_FRAG_PRELUDE, UW_FRAG_OUTPUT } from '../glsl.js';
 import { FISH_SHAPES } from '../creatures/fishGeometry.js';
 import { createFishMaterial } from '../creatures/fishMaterial.js';
 import { School, makeSchoolInstanceAttr } from '../creatures/school.js';
-import { buildNautilus } from './nautilus.js';
+import { buildNautilus, NAUT_IN } from './nautilus.js';
 import { Megalodon } from '../creatures/megalodon.js';
 
 // ============ プロテウスの外 ============
@@ -1036,6 +1036,7 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
              [4.2, 4.1, 3.8], 0.12, 0);
   }
 
+  let naut = null;   // 船体ローカル→世界の変換。図鑑から船内へ運ぶのに要る
   // ---- ノーチラス号 ----
   //
   // 停泊している船を1隻置くと、施設の意味が変わる。建物だけなら
@@ -1046,15 +1047,28 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
   // 船体は施設の外殻とは別の材質で描く。鉄板の割付と鋲は船の
   // ローカル座標が要るので、共用のシェーダには載せられない
   {
-    const N = new Buf();
-    const naut = buildNautilus(N, neon, world, {
+    // 3枚に分ける。分ける理由はそれぞれ違う:
+    //
+    //  外板 …… **片面**。裏を描かないので、船内から海が見える
+    //  内装 …… 材質が別(船の灯りだけで照らす。投光器は中まで届かない)
+    //  ガラス … 透明。奥のものより後に描かないと、抜けて見えない
+    const N = new Buf(), NH = new Buf(), NI = new Buf(), NG = new Buf();
+    naut = buildNautilus(N, neon, world, {
       origin: [NAUTILUS.x, NAUTILUS.y, NAUTILUS.z],
       heading: NAUTILUS.heading,
       pitch: NAUTILUS.pitch,
       roll: NAUTILUS.roll,
       strut,
+      hullM: NH, inM: NI, glassM: NG,
     });
     group.add(new THREE.Mesh(N.geo(), mat(naut.frag, { side: THREE.DoubleSide })));
+    group.add(new THREE.Mesh(NH.geo(), mat(naut.frag, { side: THREE.FrontSide })));
+    group.add(new THREE.Mesh(NI.geo(), mat(naut.innerFrag, { side: THREE.DoubleSide })));
+    const gl = new THREE.Mesh(NG.geo(), mat(naut.glassFrag, {
+      side: THREE.DoubleSide, transparent: true, depthWrite: false,
+    }));
+    gl.renderOrder = 5;
+    group.add(gl);
   }
   // 停泊地の投光器。灯具だけ光らせても支柱が無いと宙に浮くので、
   // 海底から立てる
@@ -1646,6 +1660,28 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
   // 2群に分ける。施設のまわりを取り巻くぶんと、天蓋の上を降りるぶん。
   // 天井がガラスになった以上、真上にも粒がいなければならない——
   // 見上げたときに何も落ちてこない水は、水に見えない
+  // ノーチラス号の中には雪を降らせない。
+  //
+  // 粒は縦にしか動かないので、置く場所を船の footprint から外せば
+  // 済みそうに見えるが、それだと**船の真上と真下にも雪の無い筋**が
+  // できる。落ちてくる途中で消すのが正しい——頂点シェーダで
+  // 船体ローカルに移して、中にいる粒だけ明るさを 0 にする
+  const nb = (() => {
+    const o = naut.xform(0, 0, 0);
+    const ax = (x, y, z) => {
+      const a = naut.xform(x, y, z);
+      return [a[0] - o[0], a[1] - o[1], a[2] - o[2]];
+    };
+    const v3 = (a) => `vec3(${a.map((x) => x.toFixed(5)).join(',')})`;
+    return `
+      {
+        vec3 D = p - ${v3(o)};
+        vec3 L = vec3(dot(D, ${v3(ax(1, 0, 0))}), dot(D, ${v3(ax(0, 1, 0))}),
+                      dot(D, ${v3(ax(0, 0, 1))}));
+        if (abs(L.z) < 17.0 && L.x * L.x / 8.12 + L.y * L.y / 5.52 < 1.0) vB = 0.0;
+      }`;
+  })();
+
   const snow = (count, seedNum, floorY, range, place) => {
     const pos = new Float32Array(count * 3), seed = new Float32Array(count * 2);
     const rnd = rng(seedNum);
@@ -1679,6 +1715,7 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
           p.x += sin(uTime * 0.13 + p.z * 0.9) * 0.22;
           p.z += cos(uTime * 0.11 + p.x * 1.1) * 0.22;
           vB = aSeed.y;
+          ${nb}
           vec4 mv = viewMatrix * modelMatrix * vec4(p, 1.0);
           vD = -mv.z;
           gl_PointSize = 2.4 * (22.0 / max(-mv.z, 1.0));
@@ -1859,6 +1896,11 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
       dist: [5, 14],
     },
     nautilus: { from: () => _fromNaut, get: () => _followNaut, dist: [18, 38] },
+    // 船内。図鑑から直に運ぶ。
+    //
+    // 昇降口から泳いで入ることもできるが、「入れる」と知らなければ
+    // 誰も甲板の囲いを覗かない。札を1枚置くのがいちばん短い説明
+    saloon: { from: () => _fromSaloon, get: () => _saloonLook, dist: [1.2, 9.0] },
     tower: { from: () => _fromTower, get: () => _followTower, dist: [22, 46] },
     downlight: { from: () => _fromDown, get: () => _followDown, dist: [14, 32] },
   };
@@ -1866,6 +1908,17 @@ export function buildExterior(root, winAngles, hullR, deckY, domeTop, world) {
   const _fromNaut = viewFrom(_followNaut, 22.0, 4.0);
   const _fromTower = viewFrom(_followTower, 30.0, 2.0);
   const _fromDown = viewFrom(_followDown, 16.0, 7.0);
+  // 船内。船体ローカルで置いて世界へ移す——世界座標で書くと、
+  // 船の位置か向きを直したとたんに船の外へ出てしまう
+  const shipPt = (x, y, z) => {
+    const p = naut.xform(x, y, z);
+    return new THREE.Vector3(p[0], p[1], p[2]);
+  };
+  // 昇降筒の少し前。降りてきたのと同じ場所に立たせる
+  const _fromSaloon = shipPt(0, NAUT_IN.deck + 1.60, 1.2);
+  // 見る先はオルガン。部屋の中心を見せるより、
+  // 「誰かがここで暮らしている」がいちばん早く伝わるものを正面に置く
+  const _saloonLook = shipPt(0, NAUT_IN.deck + 1.25, -5.0);
 
   return {
     followTargets,

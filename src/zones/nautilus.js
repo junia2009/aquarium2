@@ -22,6 +22,9 @@
 
 import * as THREE from 'three';
 import { UW_FRAG_OUTPUT } from '../glsl.js';
+import { IN, buildInterior, nautInFrag, nautGlassFrag } from './nautilusInterior.js';
+
+export { IN as NAUT_IN } from './nautilusInterior.js';
 
 // 銅。線形の反射率で持つ。
 //
@@ -55,8 +58,22 @@ const HULL = [
   [-3.0, 2.58], [-6.2, 2.26], [-9.0, 1.82], [-11.4, 1.32],
   [-13.4, 0.86], [-15.4, 0.46], [-17.0, 0.22],
 ];
-const SIDES = 20;
+// 周方向の分割。20 から 32 へ上げてある。
+//
+// 理由は滑らかさではなく**穴**。昇降口を開けるには外板の四角形を
+// いくつか抜くしかなく、20 分割だと1枚が 0.83m もあって、
+// 「穴」ではなく「胴切り」になる。32 なら 1枚 0.52m で、
+// 6枚抜いて幅 2.6m の口が開く
+const SIDES = 32;
 const SQUASH = 0.82;
+
+// 船首尾方向の刻み。もとは輪郭表の点(最大 3.2m 間隔)を
+// そのまま使っていた。これも穴を開けるには粗すぎる
+const ZSTEP = 0.62;
+
+// 昇降口で抜く四角形。k は周方向の番号で、8 が真上。
+// 5..10 を抜くと、頂点 5(x=+1.30) から 11(x=-1.30) までが開く
+const HATCH_K0 = 5, HATCH_K1 = 10;
 
 /** 断面の形。縦につぶし、上下をすぼめる(魚の断面) */
 function section(k, r) {
@@ -196,8 +213,17 @@ function nautFrag(origin, ex, ey, ez) {
  */
 export function buildNautilus(M, neon, world, opt) {
   const { origin, heading = 0, pitch = 0, roll = 0, strut } = opt;
+  // 外板は別の Buf に積む。**片面**で描くため——
+  // 裏面を描かなければ、船内から外板が透けて海が見える。
+  // 与えられなければ本体と同じところへ積む(外だけ作る場合)
+  const HM = opt.hullM ?? M;
+  const IM = opt.inM ?? null;      // 内装
+  const GM = opt.glassM ?? null;   // 透明なガラス
   const T = makeXform(origin, heading, pitch, roll);
-  const V = (x, y, z, col) => { const p = T(x, y, z); return M.v(p[0], p[1], p[2], col); };
+  const put = (B) => (x, y, z, col) => { const p = T(x, y, z); return B.v(p[0], p[1], p[2], col); };
+  const V = put(M);
+  const VH = put(HM);
+  const VG = GM ? put(GM) : V;
   const W = (x, y, z) => { const p = T(x, y, z); return [p[0], p[1], p[2]]; };
   // 船体の半径をその z で引く
   const radAt = (z) => {
@@ -232,28 +258,43 @@ export function buildNautilus(M, neon, world, opt) {
   const frag = nautFrag(T(0, 0, 0), axis(1, 0, 0), axis(0, 1, 0), axis(0, 0, 1));
 
   // ---- 船体 ----
-  const rings = HULL.map(([z, r], i) => {
-    const col = (i % 2 === 0) ? COPPER : COPPER2;   // 銅板の列
+  //
+  // 巻きの向きに注意。もとの順で張ると法線が**内向き**になっていた。
+  // 両面描きのあいだは gl_FrontFacing が符号を直していたので誰も
+  // 困らなかったが、片面にした途端に船が消える。
+  // 外から見て裏返らないよう、四角形の順を逆に取る
+  const zs = [];
+  for (let z = HULL[0][0]; z > HULL[HULL.length - 1][0]; z -= ZSTEP) zs.push(z);
+  zs.push(HULL[HULL.length - 1][0]);
+  const rings = zs.map((z) => {
+    // 銅板の列。継ぎ目はシェーダが L.z/1.32 で描くので、
+    // 色の切り替わりもそこに合わせる。合っていないと、
+    // 溝と色の境が半枚ずれて見える
+    const col = (Math.floor(z / 1.32) % 2 === 0) ? COPPER : COPPER2;
+    const r = radAt(z);
     const ring = [];
     for (let k = 0; k < SIDES; k++) {
       const [dx, dy] = section(k, r);
-      ring.push(V(dx, dy, z, col));
+      ring.push(VH(dx, dy, z, col));
     }
     return ring;
   });
   for (let i = 0; i < rings.length - 1; i++) {
+    const zm = (zs[i] + zs[i + 1]) * 0.5;
+    const hole = zm > IN.hatchZ0 && zm < IN.hatchZ1;
     for (let k = 0; k < SIDES; k++) {
+      if (hole && k >= HATCH_K0 && k <= HATCH_K1) continue;
       const k2 = (k + 1) % SIDES;
-      M.quad(rings[i][k], rings[i][k2], rings[i + 1][k2], rings[i + 1][k]);
+      HM.quad(rings[i][k], rings[i + 1][k], rings[i + 1][k2], rings[i][k2]);
     }
   }
   // 衝角(ラム)。長く尖った嘴
-  const ram = V(0, 0.05, 17.6, BRASS);
-  for (let k = 0; k < SIDES; k++) M.tri(ram, rings[0][(k + 1) % SIDES], rings[0][k]);
+  const ram = VH(0, 0.05, 17.6, BRASS);
+  for (let k = 0; k < SIDES; k++) HM.tri(ram, rings[0][k], rings[0][(k + 1) % SIDES]);
   // 艫の蓋
-  const stern = V(0, 0, -17.5, COPPER2);
+  const stern = VH(0, 0, -17.5, COPPER2);
   const last = rings[rings.length - 1];
-  for (let k = 0; k < SIDES; k++) M.tri(stern, last[k], last[(k + 1) % SIDES]);
+  for (let k = 0; k < SIDES; k++) HM.tri(stern, last[(k + 1) % SIDES], last[k]);
 
   // ---- 鋸歯の稜 ----
   //
@@ -305,7 +346,7 @@ export function buildNautilus(M, neon, world, opt) {
     }
   };
   // 司令塔と後部構造のところは歯を抜く
-  const DECK_GAP = [[11.2, 6.4], [4.8, 1.0]];
+  const DECK_GAP = [[11.2, 6.4], [5.2, 0.9]];
   sawRidge(16.4, -12.4, 1, 0.52, 0.38, 0.15, 0.080, BRASS, DECK_GAP);
   sawRidge(15.4, -10.6, -1, 0.52, 0.30, 0.13, 0.075, COPPER2);
 
@@ -349,7 +390,7 @@ export function buildNautilus(M, neon, world, opt) {
   // 平らな円を貼るだけだと、船体に描いたシールになる。
   // 実物の耐圧窓は分厚い座の上に載っていて、その座の側面が
   // 影を作るから窓に見える
-  const bossWindow = (sgn, cz, cy, R, proj, spokes, glowSize, glowCol) => {
+  const bossWindow = (sgn, cz, cy, R, proj, spokes, glowSize, glowCol, clear = false) => {
     const RN = 18;
     const base = surfX(cy, cz);
     const root = [], lipO = [], lipI = [], gl = [];
@@ -360,18 +401,27 @@ export function buildNautilus(M, neon, world, opt) {
       root.push(V(sgn * (surfX(y, z) + 0.02), y, z, COPPER2));
       lipO.push(V(sgn * (base + proj), y, z, BRASS));
       lipI.push(V(sgn * (base + proj), cy + uy * R * 0.80, cz + uz * R * 0.80, BRASS));
-      gl.push(V(sgn * (base + proj - 0.07), cy + uy * R * 0.78, cz + uz * R * 0.78, GLASS_LIT));
+      // 透かす窓のガラスだけは別の Buf に積む。加算でも発光でもない、
+      // ほんとうに透明な材質で描かないと、船内から海が見えない
+      const gv = clear ? VG : V;
+      gl.push(gv(sgn * (base + proj - 0.07), cy + uy * R * 0.78, cz + uz * R * 0.78,
+                 clear ? [0.5, 0.5, 0.5] : GLASS_LIT));
     }
     for (let k = 0; k < RN; k++) {
       const k2 = (k + 1) % RN;
       M.quad(root[k], root[k2], lipO[k2], lipO[k]);   // 座の側面
       M.quad(lipO[k], lipO[k2], lipI[k2], lipI[k]);   // 縁の面
-      M.quad(lipI[k], lipI[k2], gl[k2], gl[k]);       // 縁の内側
     }
-    const hub = V(sgn * (base + proj - 0.09), cy, cz, GLASS_LIT);
+    const GB = clear && GM ? GM : M;
     for (let k = 0; k < RN; k++) {
       const k2 = (k + 1) % RN;
-      if (sgn > 0) M.tri(hub, gl[k], gl[k2]); else M.tri(hub, gl[k2], gl[k]);
+      if (!clear) M.quad(lipI[k], lipI[k2], gl[k2], gl[k]);   // 縁の内側
+    }
+    const hub = (clear ? VG : V)(sgn * (base + proj - 0.09), cy, cz,
+                                 clear ? [0.5, 0.5, 0.5] : GLASS_LIT);
+    for (let k = 0; k < RN; k++) {
+      const k2 = (k + 1) % RN;
+      if (sgn > 0) GB.tri(hub, gl[k], gl[k2]); else GB.tri(hub, gl[k2], gl[k]);
     }
     // 放射状の桟。ガラスの手前を横切る細い真鍮
     if (spokes && strut) {
@@ -392,7 +442,10 @@ export function buildNautilus(M, neon, world, opt) {
   // サロンの大窓。原作でネモが海を眺める部屋。船体で一番大きな窓で、
   // ここが光っていると「中に人がいる船」になる
   for (const sgn of [-1, 1]) {
-    bossWindow(sgn, -0.4, 0.10, 1.16, 0.34, 3, 0.26, [3.2, 1.70, 0.55]);
+    // 透かす。ここを塞ぐと、船内の意味が半分なくなる。
+    // 暈(halo)も小さくする——大きいと、外から見たとき光が
+    // ガラスの手前に立って、中が見えなくなる
+    bossWindow(sgn, IN.win.z, IN.win.y, IN.win.r, 0.34, 3, 0.13, [1.5, 0.95, 0.42], true);
   }
   // 小さい舷窓の列
   for (const sgn of [-1, 1]) {
@@ -454,36 +507,45 @@ export function buildNautilus(M, neon, world, opt) {
   }
 
   // ---- 後部の昇降口 ----
-  // 甲板に低く伏せた構造。手すりを回すと「人が歩く場所」になる
+  //
+  // ここが船内への入口。飾りではなく通り道なので、寸法は
+  // 「通れるか」で決まる。
+  //
+  //  ・**天を閉じない**。閉じたら入れない
+  //  ・裾は外板の穴(x ±1.30)より広く取る。狭いと、囲いの外側に
+  //    穴の縁が覗いて、船体に隙間が空いて見える
+  //  ・裾を外板の**下**まで下ろす。外板の背は丸いので、平らな裾を
+  //    背の高さに合わせると、穴の縁のところで 0.3m の口が開く
   {
-    const yB = hullY(2.9) - 0.08, yT = yB + 0.78;
-    const st = [[1.4, 0.86], [2.4, 1.05], [3.8, 1.05], [4.5, 0.78]];
+    const yB = 1.55, yT = 2.72;
+    const st = [[1.30, 1.06], [2.10, 1.52], [4.10, 1.52], [4.90, 1.06]];
     const lo = [], hi = [];
     for (const [z, hw] of st) {
       lo.push([V(-hw, yB, z, COPPER2), V(hw, yB, z, COPPER2)]);
-      hi.push([V(-hw * 0.82, yT, z, COPPER), V(hw * 0.82, yT, z, COPPER)]);
+      hi.push([V(-hw * 0.92, yT, z, COPPER), V(hw * 0.92, yT, z, COPPER)]);
     }
     for (let i = 0; i < st.length - 1; i++) {
       M.quad(lo[i][1], lo[i + 1][1], hi[i + 1][1], hi[i][1]);
       M.quad(lo[i + 1][0], lo[i][0], hi[i][0], hi[i + 1][0]);
-      M.quad(hi[i][0], hi[i][1], hi[i + 1][1], hi[i + 1][0]);
     }
     M.quad(lo[0][0], lo[0][1], hi[0][1], hi[0][0]);
     M.quad(lo[3][1], lo[3][0], hi[3][0], hi[3][1]);
-    // 手すり
+    // 手すり。囲いの外側に回す。内側に立てると入口を塞ぐ
     if (strut) {
       for (const sgn of [-1, 1]) {
-        const posts = [1.5, 2.6, 3.7, 4.4];
+        const posts = [1.5, 2.7, 3.9, 4.8];
         for (const z of posts) {
-          strut(M, W(sgn * 0.95, yT, z), W(sgn * 0.95, yT + 1.05, z), 0.035, BRASS);
+          strut(M, W(sgn * 1.68, yT - 0.55, z), W(sgn * 1.68, yT + 0.35, z), 0.035, BRASS);
         }
-        for (const h of [0.55, 1.05]) {
-          strut(M, W(sgn * 0.95, yT + h, posts[0]),
-                W(sgn * 0.95, yT + h, posts[posts.length - 1]), 0.032, BRASS);
+        for (const h of [-0.10, 0.35]) {
+          strut(M, W(sgn * 1.68, yT + h, posts[0]),
+                W(sgn * 1.68, yT + h, posts[posts.length - 1]), 0.032, BRASS);
         }
       }
     }
-    neon.add(W(0, yT + 0.12, 2.9), [2.8, 1.5, 0.48], 0.11, 0);
+    // 入口の標識。ここだけ点滅させる——点いたままの灯りは
+    // 船じゅうに並んでいるので、その中では見つけてもらえない
+    neon.add(W(0, yT + 0.30, 3.1), [3.6, 2.0, 0.62], 0.15, 0.8);
   }
 
   // ---- 甲板の航行灯 ----
@@ -618,20 +680,87 @@ export function buildNautilus(M, neon, world, opt) {
     }
   }
 
+  // ---- 船内 ----
+  let innerFrag = null;
+  if (IM) {
+    const lamps = buildInterior({
+      M: IM, V: put(IM), W, radAt, hullY, surfX, strut, SQUASH,
+    });
+    innerFrag = nautInFrag(T(0, 0, 0), axis(1, 0, 0), axis(0, 1, 0), axis(0, 0, 1), lamps);
+  }
+
   // ---- 当たり判定 ----
   //
-  // 船体をすり抜けられては、そこに在ることにならない。
-  // 当たり判定は楕円体の列なので、細長い船体を輪切りにして並べる。
-  // 半径は「その z の船体の太さ」そのままではなく、隣との隙間を
-  // 埋めるぶんだけ膨らませる——ぴったりで置くと、輪と輪の谷間に
-  // 体がはまり込む
+  // 中に入れるようにした時点で、判定の作りが変わる。
+  // それまでは「詰まった塊」を輪切りにして並べていればよかったが、
+  // 入れる船は**殻**でなければならない。
+  //
+  // 世界軸に揃った楕円体では船の軸に沿った棒が作れないので、
+  // addDynamic の oriented を使う。動かないものに「動く障害物」を
+  // 使うのは妙に見えるが、あれが見ているのは ref.pos と ref.heading
+  // だけなので、固定の ref を渡せば**向きを持った静的な楕円体**になる。
+  // 船の姿勢(pitch 0.022 / roll 0.045)は無視できる大きさ
   if (world && world.addStatic) {
     const _b = new THREE.Vector3();
-    for (let z = -16; z <= 16; z += 2.2) {
+    const ref = (x, y, z) => {
+      const p = T(x, y, z);
+      return { pos: new THREE.Vector3(p[0], p[1], p[2]), heading };
+    };
+
+    // --- 船内より前と後ろ。ここは詰まっている(機関室・気蓄器) ---
+    //
+    // 手前の端は部屋に食い込むが、それでよい。判定はカメラの
+    // 半径 0.6 ぶん膨らむので、隔壁の 0.9m 手前で止まる。
+    // オルガンの中に立てないのはむしろ正しい
+    const slice = (z) => {
       const r = Math.max(radAt(z), 0.7);
-      const p = T(0, 0, z);
-      world.addStatic(_b.set(p[0], p[1], p[2]), r + 0.35, r * SQUASH + 0.45, r + 0.35);
+      world.addDynamic(ref(0, 0, z), r + 0.35, r * SQUASH + 0.45, 1.1, { oriented: true });
+    };
+    for (let z = 7.8; z <= 15.4; z += 1.5) slice(z);
+    for (let z = -7.0; z >= -16.1; z -= 1.5) slice(z);
+
+    // --- 船内の殻 ---
+    //
+    // 甲板の高さから上を、船の軸に沿った棒で囲う。棒なら
+    // 14 本で足りる——球を並べると 150 個要る。
+    //
+    // 半径は区間の平均で取る。船体は 2.28〜2.70 と細るが、
+    // 棒の太さ 0.58 とカメラの 0.6 に対して ±0.22 のずれは見えない
+    const R_ST = 2.52, ST_R = 0.58;
+    const tD = Math.asin(IN.deck / (R_ST * SQUASH));   // 甲板ぎわの角(負)
+    const NST = 13;
+    for (let j = 0; j <= NST; j++) {
+      const t = tD + ((Math.PI - tD) - tD) * (j / NST);
+      const cs = Math.cos(t), sn = Math.sin(t);
+      const rr = R_ST + 0.55;
+      const x = cs * rr * (1 - 0.16 * sn * sn), y = sn * rr * SQUASH;
+      // 昇降口の真上を通る棒は、そこで切る。
+      // 切れ目の広さはカメラの半径で決まる: 端が z=1.30 と 4.90 なら、
+      // 0.6 ずつ食い込んで通れるのは 1.90〜4.30。外板の穴とちょうど同じ
+      if (j >= 5 && j <= 8) {
+        world.addDynamic(ref(x, y, -2.35), ST_R, ST_R, 3.65, { oriented: true });
+        world.addDynamic(ref(x, y, 5.95), ST_R, ST_R, 1.05, { oriented: true });
+      } else {
+        world.addDynamic(ref(x, y, 0.5), ST_R, ST_R, 6.5, { oriented: true });
+      }
     }
+
+    // --- 甲板の床 ---
+    //
+    // ここだけは棒が使えない。棒(=長い楕円体)の上面は必ず丸いので、
+    // 床にすると真ん中が盛り上がって両脇が落ちる。幅を大きく取れば
+    // 平らになるが、そのぶん船の外の水まで塞いでしまう。
+    // 小さい球を敷き詰めるのが、結局いちばん平らで、はみ出さない
+    const FR = 0.55;
+    for (let z = IN.zAft + 0.4; z <= IN.zFwd - 0.4; z += 1.0) {
+      const w = surfX(IN.deck, z);
+      for (let x = -2.1; x <= 2.11; x += 0.7) {
+        if (Math.abs(x) > w + 0.35) continue;
+        const p = T(x, IN.deck - FR, z);
+        world.addStatic(_b.set(p[0], p[1], p[2]), FR, FR, FR);
+      }
+    }
+
     // 司令塔と尾の扇。細長い船体の輪では覆えない。
     // 楕円体は世界軸に揃うので、船の向きに関わらず効くよう xz は真円で取る
     for (const [z, y, rr, ry] of [[9.0, 2.9, 2.3, 1.5], [-16.0, 0.8, 3.4, 3.6]]) {
@@ -639,5 +768,5 @@ export function buildNautilus(M, neon, world, opt) {
       world.addStatic(_b.set(p[0], p[1], p[2]), rr, ry, rr);
     }
   }
-  return { frag, xform: T };
+  return { frag, innerFrag, glassFrag: nautGlassFrag(), xform: T };
 }
