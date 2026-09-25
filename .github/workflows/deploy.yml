@@ -1,8 +1,32 @@
+# ============ GitHub Pages への配信(いまは待機) ============
+#
+# この repo には配信の経路が2つある。
+#
+#  A. ブランチ直配信 … Settings > Pages > Source = Deploy from a branch
+#                      (main / root)。ビルドを通さず素のファイルを配る。
+#                      index.html の import map が three.js を同梱の
+#                      vendor/ から解決するので、これで動く。
+#                      転送量 524KB / 50 リクエスト
+#
+#  B. このワークフロー … Source = GitHub Actions。vite でバンドルして
+#                      dist/ を配る。転送量 351KB / 3 リクエスト
+#
+# **いまは A で配信している。** B のほうが軽いが、Actions の実行が
+# 作られない・startup_failure で落ちるという状態が続いたので、
+# 外部に依存しない A に寄せた。
+#
+# なので push では動かさない。push で走らせたままにしてはいけない
+# 理由があって、下の configure-pages が enablement: true を持っている
+# ——これは Pages の build_type を workflow に**書き換える**ので、
+# 走るたびに A の設定を裏で B に戻してしまう。
+#
+# B に戻すとき:
+#   1. Settings > Pages > Source を GitHub Actions にする
+#   2. 下の on: に push: branches: [main] を戻す
+#   3. Actions タブから一度 Run workflow
 name: Deploy to GitHub Pages
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
